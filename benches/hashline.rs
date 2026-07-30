@@ -581,6 +581,35 @@ fn normalize_segments(line: &str, scratch: &mut Vec<u8>) {
     }
 }
 
+/// Variant (c) made exact for every possible input.
+///
+/// `u8::is_ascii_whitespace` matches five bytes; `memchr3` searches three. This
+/// adds the missing two (`\n`, form feed) as a cheap up-front rejection: if
+/// either occurs, the branchy path — which is exact by construction — takes
+/// over. Real source lines contain neither, so the guard's whole cost is one
+/// extra `memchr2` pass over the line, which is precisely what this cell
+/// measures against the unguarded `c_segments` cells.
+fn normalize_segments_guarded(line: &str, scratch: &mut Vec<u8>) {
+    if memchr::memchr2(b'\n', 0x0C, line.trim().as_bytes()).is_some() {
+        normalize_branchy(line, scratch);
+        return;
+    }
+    normalize_segments(line, scratch);
+}
+
+/// Variant (c) guarded against form feed only.
+///
+/// Lines produced by `split_lines` cannot contain `\n`, so a `FileIndex` only
+/// has to rule out form feed. Measures whether halving the guard's byte
+/// alphabet buys anything over [`normalize_segments_guarded`].
+fn normalize_segments_ff_guarded(line: &str, scratch: &mut Vec<u8>) {
+    if memchr::memchr(0x0C, line.trim().as_bytes()).is_some() {
+        normalize_branchy(line, scratch);
+        return;
+    }
+    normalize_segments(line, scratch);
+}
+
 /// Prove every normalization variant feeds the hash the same bytes.
 ///
 /// Run once per corpus (not per iteration): variants (b) and (c) must produce
@@ -598,8 +627,10 @@ fn assert_normalization_agrees(lines: &[&str], label: &str) {
             fused_fnv(line),
             "{label} line {idx}: normalized bytes vs fused loop"
         );
-        assert_eq!(fused_fnv(line), line_hash(line), "{label} line {idx}");
     }
+    // The crate's own `line_hash` is no longer FNV on AES-enabled targets, so
+    // it is not comparable cell-for-cell here; `src/hash.rs` owns the tests
+    // proving the shipped hasher consumes exactly these normalized bytes.
 }
 
 /// Phase 6 hash bench-off: normalization strategy × hash function.
@@ -639,6 +670,8 @@ fn bench_hash_matrix(c: &mut Criterion) {
         for (norm_label, normalize) in [
             ("b_branchy", normalize_branchy as fn(&str, &mut Vec<u8>)),
             ("c_segments", normalize_segments),
+            ("c_guarded", normalize_segments_guarded),
+            ("c_ff_guarded", normalize_segments_ff_guarded),
         ] {
             group.bench_function(format!("{norm_label}+fnv"), |b| {
                 let mut scratch = Vec::with_capacity(8_192);

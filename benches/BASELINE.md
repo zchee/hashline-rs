@@ -334,3 +334,85 @@ long-line corpus is where these hashes show what they can do.
 intervals do not overlap, so the ordering is real) and by 15% on long lines.
 Against that, `rapidhash` needs no `+aes`, no committed `.cargo/config.toml`, no
 SIGILL startup guard, and no per-architecture `cfg` fallback.
+
+---
+
+# Post-Phase-6 (gxhash32 line hash) — hashline-rs
+
+The Phase 6 swap landed: normalized lines are hashed with `gxhash32` on targets
+with AES intrinsics, via the `memchr3` segment-scan normalizer. Deltas below are
+against the original Phase 0 section; the "post-P5" column is the section above,
+so the swap's own effect is the difference between the last two columns.
+
+**Anchor letters change with this commit.** The golden reference is now SHA-256
+`63fc336ddba8730ec67adb576c3b89e5c8a1f47d3ffea7fa90a60756924d1327`
+(was `f2a730ab…`). gxhash guarantees identical output across supported platforms
+within a major version, so an x86_64 build with `+aes` must reproduce that same
+SHA; a build without AES uses the fused FNV-1a path and will not.
+
+## Driver benchmarks
+
+| Benchmark | Phase 0 | Post-P5 | Post-swap | vs Phase 0 |
+|---|---|---|---|---|
+| `line_hash/short_line_40b` | 50.993 ns | 52.009 ns | 45.664 ns | 1.12x |
+| `line_hash/long_line_2kb` | 3.2246 µs | 3.3351 µs | 1.6753 µs | 1.92x |
+| `generate_anchors/Chunk/1000` | 118.31 µs | 54.890 µs | 49.417 µs | 2.39x |
+| `generate_anchors/Chunk/10000` | 1.4059 ms | 648.53 µs | 580.82 µs | **2.42x** |
+| `generate_anchors/Chunk/100000` | 14.990 ms | 6.9947 ms | 6.2496 ms | 2.40x |
+| `format_hashline_content/full_read_10k` | 2.4406 ms | 952.70 µs | 864.88 µs | **2.82x** |
+| `format_hashline_content/window_2k_of_100k` | 16.872 ms | 294.38 µs | 269.56 µs | 62.6x |
+| `apply_edits/single_op_50k` | 11.642 ms | 964.58 µs | 947.75 µs | 12.28x |
+| `apply_edits/batch_8ops_50k` | 70.652 ms | 1.0073 ms | 966.65 µs | 73.1x |
+| `apply_edits/stale_anchor_error_path_50k` | 8.2990 ms | 447.22 µs | 433.19 µs | 19.16x |
+| `grep_large_file/rare_literal` | — | 246.91 µs | 248.06 µs | (flat) |
+| `index/new_partial_one_span_50k` | — | 57.864 µs | 54.447 µs | — |
+| `dispatch/read_300_lines` | 102.07 µs | 44.948 µs | 39.372 µs | 2.59x |
+| `dispatch/edit_single_op_300_lines` | 74.981 µs | 24.415 µs | 21.387 µs | 3.51x |
+
+The swap buys 9-10% on every hash-bound path (`generate_anchors` -10.1%, full
+10k read -9.0%, windowed read -9.1%, end-to-end dispatch -13% to -16%) and
+essentially nothing on grep, which hashes only the handful of lines it renders.
+Long lines gain most: `line_hash/long_line_2kb` halves.
+
+**Acceptance criterion 2 remains unmet**: 2.42x against a >= 5x target
+(<= 281.2 µs). Criterion 1's full-10k-read clause is 2.82x against >= 3x — closer
+than before the swap, still short. Criteria 1 (window), 3, and 4 stay met.
+
+## What the exactness requirement cost
+
+The brief required the normalized hash input to match the old
+`is_ascii_whitespace` definition for **all** inputs, including form feed.
+`u8::is_ascii_whitespace` matches five bytes and `memchr3` searches three, so
+the two it cannot see (`\n`, form feed) must be excluded some other way.
+Measured on the realistic corpus:
+
+| Cell | Median | vs fused-FNV baseline (577.62 µs) |
+|---|---|---|
+| `c_segments+gxhash32` (no guard — inexact) | 481.10 µs | 1.20x |
+| `c_guarded+gxhash32` (per-line `memchr2` guard) | 625.97 µs | **0.92x** |
+| `c_ff_guarded+gxhash32` (per-line form-feed guard) | 623.46 µs | 0.93x |
+
+A guard **per line** costs ~14.5 ns/line and turns the swap into an 8%
+regression. The shipped design therefore establishes the same fact **per
+buffer**: `FileIndex::new` and the full-coverage `new_partial` scan the content
+once for form feed (`\n` cannot occur inside lines split on `\n`), and partial
+indexes scan only the lines they are about to hash. That keeps exactness and
+most of the win — the delivered 10% rather than the unguarded 20%.
+
+## Anchor quality is unchanged
+
+Anchors expose only `hash_len` letters of `mod 26` entropy, so what matters is
+the low-byte distribution, not the 32-bit avalanche. Measured over 400 seeds of
+40-line files (16,000 line samples), share of lines whose local anchor is unique
+within its file:
+
+| `hash_len` | FNV-1a | gxhash32 |
+|---|---|---|
+| 1 | 21.5% | 21.5% |
+| 2 | 94.6% | 94.1% |
+| 3 | 99.8% | 99.6% |
+
+Distinct-anchor counts over 20/100/1,000/10,000-line corpora are likewise within
+noise of each other (both saturate the 676-value space at `hash_len` 2). The
+swap does not make ambiguous suffix recovery or false anchor validation more
+likely.

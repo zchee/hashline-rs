@@ -23,6 +23,10 @@ clap = { version = "4", features = ["derive", "env"] }
 grep-matcher = "0.1"
 grep-regex = "0.1"
 grep-searcher = "0.1"
+# Line hash on targets with AES intrinsics; see src/hash.rs and
+# .cargo/config.toml. Other targets fall back to the fused FNV-1a pass and
+# never link it in.
+gxhash = "3.5.0"
 ignore = "0.4"
 itoa = "1"
 memchr = "2"
@@ -39,10 +43,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
 criterion = { version = "0.8.2", features = ["async_tokio", "html_reports"] }
-# Candidate line-hash replacements, measured by the `hash_matrix` benchmark
-# group only. Neither is wired into the crate; see the Phase 6 section of
-# benches/BASELINE.md for the numbers that decide whether either ever is.
-gxhash = "3.5.0"
+# Runner-up of the Phase 6 bench-off, kept so the `hash_matrix` group can keep
+# measuring the shipped choice against it. Not used by the crate itself.
 rapidhash = "4.5.1"
 # Independent engine for the grep differential test's per-line reference
 # implementation; the production path matches via grep-regex/grep-searcher.

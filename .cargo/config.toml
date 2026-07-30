@@ -1,0 +1,49 @@
+# AES intrinsics for the gxhash line hash (src/hash.rs).
+#
+# `gxhash` refuses to compile without AES, and only one common target enables
+# it by default:
+#
+#   aarch64-apple-darwin      aes + neon baseline -> no entry needed
+#   aarch64-unknown-linux-gnu neon only           -> needs +aes
+#   aarch64-linux-android     neon only           -> needs +aes
+#   aarch64-pc-windows-msvc   neon only           -> needs +aes
+#   x86_64-*                  sse2 only           -> needs +aes
+#
+# These flags are part of the product's build configuration, applied identically
+# to release builds and to `cargo bench`, so benchmark configuration matches ship
+# configuration and comparisons stay apples-to-apples. That is also why this is a
+# committed file rather than ambient `RUSTFLAGS`.
+#
+# Any target without an entry here simply builds the portable fused FNV-1a line
+# hash instead — `src/hash.rs` selects on `target_feature = "aes"`, so a missing
+# entry costs speed, never correctness.
+#
+# Enabling `+aes` means the resulting binary uses AES instructions
+# unconditionally, which faults on a CPU that lacks them (pre-2010 x86_64
+# without AES-NI; aarch64 without the optional crypto extension). `main()`
+# checks for the extension at startup and exits with a clear message rather
+# than taking SIGILL mid-request.
+
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "target-feature=+aes"]
+
+[target.x86_64-unknown-linux-musl]
+rustflags = ["-C", "target-feature=+aes"]
+
+[target.x86_64-apple-darwin]
+rustflags = ["-C", "target-feature=+aes"]
+
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+aes"]
+
+[target.aarch64-unknown-linux-gnu]
+rustflags = ["-C", "target-feature=+aes"]
+
+[target.aarch64-unknown-linux-musl]
+rustflags = ["-C", "target-feature=+aes"]
+
+[target.aarch64-linux-android]
+rustflags = ["-C", "target-feature=+aes"]
+
+[target.aarch64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+aes"]

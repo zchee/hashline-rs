@@ -26,7 +26,7 @@ use std::ops::Range;
 
 use memchr::memchr_iter;
 
-use crate::hash::{self, fold_line_hash};
+use crate::hash::{self, LineHasher, fold_line_hash};
 
 /// Seed for chunk fingerprints — the pre-image `"chunk"` domain-separates them
 /// from checkpoint chains.
@@ -337,9 +337,12 @@ impl<'a> FileIndex<'a> {
         let capacity = content.len() / AVG_LINE_BYTES + 2;
         let mut lines = Vec::with_capacity(capacity);
         let mut hashes = Vec::with_capacity(capacity);
+        // One hasher for the whole buffer: its scratch is reused across lines,
+        // and the normalizer choice is settled once here rather than per line.
+        let mut hasher = LineHasher::for_content(content);
         for_each_line(content, |line| {
             lines.push(line);
-            hashes.push(hash::line_hash(line));
+            hashes.push(hasher.hash(line));
         });
         Self {
             len: lines.len(),
@@ -392,7 +395,9 @@ impl<'a> FileIndex<'a> {
             && only.start == 0
             && only.end == len
         {
-            return Self::from_lines_partial(packed, &spans);
+            // The whole buffer is available, so the normalizer choice costs one
+            // pass over it rather than one `memchr` per line.
+            return Self::build(packed, spans, LineHasher::for_content(content));
         }
 
         // `vec![0; n]` lowers to a zeroed allocation, so the untouched slots
@@ -400,12 +405,15 @@ impl<'a> FileIndex<'a> {
         let mut hashes = vec![0u32; len];
         let mut starts = Vec::with_capacity(spans.len());
         let mut offset = 0usize;
+        // `packed` is exactly the set of lines about to be hashed, so it is
+        // also exactly what decides the normalizer.
+        let mut hasher = LineHasher::for_lines(&packed);
         for span in &spans {
             starts.push(offset);
             let count = span.end - span.start;
             let hashed = &packed[offset..offset + count];
             for (slot, line) in hashes[span.clone()].iter_mut().zip(hashed) {
-                *slot = hash::line_hash(line);
+                *slot = hasher.hash(line);
             }
             offset += count;
         }
@@ -452,13 +460,33 @@ impl<'a> FileIndex<'a> {
         }
 
         let spans = normalize_spans(hash_spans, lines.len());
+        // Only the spans are hashed, so only they decide the normalizer. There
+        // is no content buffer to scan in one pass here, but a partial index
+        // hashes few enough lines that scanning them individually is cheap —
+        // and full coverage arrives via `build` from `new_partial`, which does
+        // have the buffer.
+        let scannable = spans
+            .iter()
+            .all(|span| hash::lines_segment_scannable(&lines[span.clone()]));
+        Self::build(lines, spans, LineHasher::with_segment_scan(scannable))
+    }
+
+    /// Hash the lines in `spans` with `hasher` and assemble the index.
+    ///
+    /// `spans` must already be normalized against `lines`, and `hasher` must
+    /// have been built from exactly the lines those spans select.
+    fn build(mut lines: Vec<&'a str>, spans: Vec<Range<usize>>, mut hasher: LineHasher) -> Self {
+        if lines.is_empty() {
+            lines.push("");
+        }
+
         // `vec![0; n]` lowers to a zeroed allocation, so the untouched slots
         // cost pages, not a hash per line.
         let mut hashes = vec![0u32; lines.len()];
         for span in &spans {
             let range = span.clone();
             for (slot, line) in hashes[range.clone()].iter_mut().zip(&lines[range]) {
-                *slot = hash::line_hash(line);
+                *slot = hasher.hash(line);
             }
         }
 
