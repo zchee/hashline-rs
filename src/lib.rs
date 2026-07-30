@@ -16,10 +16,16 @@ pub mod config;
 pub mod edit;
 pub mod grep;
 pub mod hash;
+pub mod index;
 pub mod read;
 pub mod scheme;
 pub mod server;
 pub mod util;
 
+#[cfg(test)]
+mod testutil;
+
 pub use config::{SchemeConfig, SchemeKind};
+pub use index::FileIndex;
+pub use scheme::Scheme;
 pub use server::HashlineServer;

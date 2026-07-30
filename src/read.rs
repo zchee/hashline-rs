@@ -5,7 +5,8 @@
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use crate::scheme::{AnchorScheme, split_lines};
+use crate::index::{FileIndex, split_lines};
+use crate::scheme::Scheme;
 use crate::util::{ToolOutcome, Workspace};
 
 /// Maximum number of lines returned by a single read.
@@ -36,12 +37,9 @@ pub fn format_hashline_content(
     file_content: &str,
     offset: Option<usize>,
     limit: Option<usize>,
-    scheme: &dyn AnchorScheme,
+    scheme: Scheme,
 ) -> String {
-    use std::fmt::Write as _;
-
-    let all_lines = split_lines(file_content);
-    let anchors = scheme.generate_anchors(&all_lines);
+    let index = FileIndex::new(file_content);
 
     let skip = offset.unwrap_or(1).saturating_sub(1);
     let take = limit.unwrap_or(usize::MAX);
@@ -49,19 +47,20 @@ pub fn format_hashline_content(
     let mut output = String::new();
     let mut first = true;
 
-    for (i, line) in all_lines.iter().enumerate().skip(skip).take(take) {
+    for anchor in scheme
+        .anchors_for_range(&index, 0..index.len())
+        .skip(skip)
+        .take(take)
+    {
         if first {
             first = false;
         } else {
             output.push('\n');
         }
 
-        let line_num = i + 1;
-        let anchor_suffix = match &anchors[i].context {
-            Some(ctx) => format!("{}:{ctx}", anchors[i].local),
-            None => anchors[i].local.clone(),
-        };
-        _ = write!(&mut output, "{line_num}:{anchor_suffix}→{line}");
+        anchor.render_into(&mut output);
+        output.push('→');
+        output.push_str(index.line(anchor.line - 1).unwrap_or_default());
     }
 
     output
@@ -71,7 +70,7 @@ pub fn format_hashline_content(
 pub async fn run_read(
     workspace: &Workspace,
     input: &HashlineReadInput,
-    scheme: &dyn AnchorScheme,
+    scheme: Scheme,
 ) -> ToolOutcome {
     if input.offset == Some(0) {
         return ToolOutcome::error(
@@ -139,7 +138,7 @@ mod tests {
     use super::*;
     use crate::config::SchemeConfig;
 
-    fn scheme() -> Box<dyn AnchorScheme> {
+    fn scheme() -> Scheme {
         SchemeConfig::default().build_scheme().unwrap()
     }
 
@@ -150,7 +149,7 @@ mod tests {
     #[test]
     fn format_basic_file() {
         let content = "line one\nline two\nline three\n";
-        let output = format_hashline_content(content, None, None, &*scheme());
+        let output = format_hashline_content(content, None, None, scheme());
 
         for line in output.lines() {
             assert!(line.contains(':'), "missing anchor separator: {line}");
@@ -161,7 +160,7 @@ mod tests {
     #[test]
     fn format_includes_anchor_with_context() {
         let content = "fn main() {\n    let x = 1;\n}\n";
-        let output = format_hashline_content(content, None, None, &*scheme());
+        let output = format_hashline_content(content, None, None, scheme());
 
         // Chunk scheme produces LINE:LOCAL:CONTEXT→CONTENT.
         let first_content_line = output.lines().next().unwrap();
@@ -176,7 +175,7 @@ mod tests {
     #[test]
     fn format_with_offset_and_limit() {
         let content = "a\nb\nc\nd\ne\n";
-        let output = format_hashline_content(content, Some(2), Some(2), &*scheme());
+        let output = format_hashline_content(content, Some(2), Some(2), scheme());
 
         let content_lines: Vec<&str> = output.lines().collect();
         assert_eq!(content_lines.len(), 2);
@@ -186,7 +185,7 @@ mod tests {
 
     #[test]
     fn format_empty_file() {
-        let output = format_hashline_content("", None, None, &*scheme());
+        let output = format_hashline_content("", None, None, scheme());
         assert!(output.starts_with("1:"), "should contain line 1: {output}");
         assert!(output.contains('→'), "should contain arrow separator");
     }
@@ -195,7 +194,7 @@ mod tests {
     fn format_keeps_long_lines_whole() {
         let long_line = "x".repeat(5000);
         let content = format!("{long_line}\n");
-        let output = format_hashline_content(&content, None, None, &*scheme());
+        let output = format_hashline_content(&content, None, None, scheme());
 
         let first_line = output.lines().next().unwrap();
         let after_arrow = first_line.split('→').nth(1).unwrap();
@@ -210,8 +209,8 @@ mod tests {
         let content = "hello\nworld\n";
         let s = scheme();
         assert_eq!(
-            format_hashline_content(content, None, None, &*s),
-            format_hashline_content(content, None, None, &*s)
+            format_hashline_content(content, None, None, s),
+            format_hashline_content(content, None, None, s)
         );
     }
 
@@ -229,7 +228,7 @@ mod tests {
             offset: None,
             limit: None,
         };
-        let outcome = run_read(&ws(tmp.path()), &input, &*scheme()).await;
+        let outcome = run_read(&ws(tmp.path()), &input, scheme()).await;
         assert!(!outcome.is_error);
         assert!(outcome.text.contains('→'));
         assert!(outcome.text.contains("fn main()"));
@@ -243,7 +242,7 @@ mod tests {
             offset: None,
             limit: None,
         };
-        let outcome = run_read(&ws(tmp.path()), &input, &*scheme()).await;
+        let outcome = run_read(&ws(tmp.path()), &input, scheme()).await;
         assert!(outcome.is_error);
         assert!(outcome.text.contains("File not found"));
     }
@@ -257,7 +256,7 @@ mod tests {
             offset: None,
             limit: None,
         };
-        let outcome = run_read(&ws(tmp.path()), &input, &*scheme()).await;
+        let outcome = run_read(&ws(tmp.path()), &input, scheme()).await;
         assert!(!outcome.is_error);
         assert!(outcome.text.contains("exists but is empty"));
     }
@@ -271,7 +270,7 @@ mod tests {
             offset: None,
             limit: None,
         };
-        let outcome = run_read(&ws(tmp.path()), &input, &*scheme()).await;
+        let outcome = run_read(&ws(tmp.path()), &input, scheme()).await;
         assert!(outcome.is_error);
         assert!(outcome.text.contains("binary"));
     }
@@ -287,7 +286,7 @@ mod tests {
             offset: Some(10),
             limit: Some(5),
         };
-        let outcome = run_read(&ws(tmp.path()), &input, &*scheme()).await;
+        let outcome = run_read(&ws(tmp.path()), &input, scheme()).await;
         assert!(!outcome.is_error);
         assert!(
             outcome.text.contains("Showing lines 10-14 of 51"),
@@ -306,7 +305,7 @@ mod tests {
             offset: Some(100),
             limit: None,
         };
-        let outcome = run_read(&ws(tmp.path()), &input, &*scheme()).await;
+        let outcome = run_read(&ws(tmp.path()), &input, scheme()).await;
         assert!(outcome.is_error);
         assert!(outcome.text.contains("beyond the end"));
     }

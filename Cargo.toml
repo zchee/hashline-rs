@@ -21,6 +21,8 @@ path = "src/lib.rs"
 anyhow = "1"
 clap = { version = "4", features = ["derive", "env"] }
 ignore = "0.4"
+itoa = "1"
+memchr = "2"
 percent-encoding = "2"
 regex = "1"
 rmcp = { version = "3.0.1", features = ["server", "macros", "transport-io"] }

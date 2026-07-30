@@ -19,8 +19,9 @@ use hashline::edit::HashlineOp;
 use hashline::edit::apply::apply_edits;
 use hashline::grep::{HashlineGrepInput, run_grep};
 use hashline::hash::{encode_hash, fnv1a_32, line_hash};
+use hashline::index::FileIndex;
 use hashline::read::format_hashline_content;
-use hashline::scheme::{AnchorScheme, split_lines};
+use hashline::scheme::{Anchor, Scheme};
 use hashline::util::Workspace;
 
 /// Deterministic xorshift32 PRNG for reproducible synthetic corpora.
@@ -104,8 +105,11 @@ fn generate_corpus(num_lines: usize, seed: u32) -> String {
 }
 
 /// Render the anchor string for a specific 1-based line under `scheme`.
-fn anchor_at(lines: &[&str], scheme: &dyn AnchorScheme, line_1based: usize) -> String {
-    scheme.generate_anchors(lines)[line_1based - 1].render()
+fn anchor_at(index: &FileIndex<'_>, scheme: Scheme, line_1based: usize) -> String {
+    scheme
+        .anchor_at(index, line_1based - 1)
+        .expect("line within file")
+        .render()
 }
 
 /// Nearest non-blank 1-based line index to `target`, scanning outward.
@@ -152,15 +156,20 @@ fn bench_line_hash(c: &mut Criterion) {
     group.finish();
 }
 
-/// `generate_anchors` over 1k / 10k / 100k-line synthetic files, for each of
-/// the three anchor schemes.
+/// Anchor generation over 1k / 10k / 100k-line synthetic files, for each of the
+/// three anchor schemes.
+///
+/// Measures the same logical operation as the Phase 0 baseline: build the
+/// per-request line/hash index and render every line's anchor. The index build
+/// (line splitting plus line hashing) is inside the timed region — the Phase 0
+/// `generate_anchors` baseline hashed every line too, so the comparison stays
+/// apples-to-apples (this version additionally pays for the line splitting).
 fn bench_generate_anchors(c: &mut Criterion) {
     let mut group = c.benchmark_group("generate_anchors");
     group.sample_size(30);
 
     for &size in &[1_000usize, 10_000, 100_000] {
         let content = generate_corpus(size, 0x5EED_0000_u32.wrapping_add(size as u32));
-        let lines = split_lines(&content);
 
         for kind in [
             SchemeKind::ContentOnly,
@@ -175,7 +184,12 @@ fn bench_generate_anchors(c: &mut Criterion) {
             .expect("build scheme");
             let label = format!("{kind:?}/{size}_lines");
             group.bench_function(label, |b| {
-                b.iter(|| black_box(scheme.generate_anchors(black_box(&lines))));
+                b.iter(|| {
+                    let index = FileIndex::new(black_box(&content));
+                    let anchors: Vec<Anchor> =
+                        scheme.anchors_for_range(&index, 0..index.len()).collect();
+                    black_box(anchors)
+                });
             });
         }
     }
@@ -195,7 +209,7 @@ fn bench_format_hashline_content(c: &mut Criterion) {
     group.sample_size(30);
 
     group.bench_function("full_read_10k_lines", |b| {
-        b.iter(|| black_box(format_hashline_content(&content_10k, None, None, &*scheme)));
+        b.iter(|| black_box(format_hashline_content(&content_10k, None, None, scheme)));
     });
 
     group.bench_function("window_2k_of_100k_lines", |b| {
@@ -204,7 +218,7 @@ fn bench_format_hashline_content(c: &mut Criterion) {
                 &content_100k,
                 Some(50_000),
                 Some(2_000),
-                &*scheme,
+                scheme,
             ))
         });
     });
@@ -220,28 +234,29 @@ fn bench_apply_edits(c: &mut Criterion) {
         .build_scheme()
         .expect("build scheme");
     let content = generate_corpus(50_000, 0xED17_0001);
-    let lines = split_lines(&content);
+    let index = FileIndex::new(&content);
+    let lines = index.lines();
 
-    let single_target = nearest_nonblank(&lines, 25_000);
+    let single_target = nearest_nonblank(lines, 25_000);
     let single_ops = vec![HashlineOp::Replace {
-        anchor: anchor_at(&lines, &*scheme, single_target),
+        anchor: anchor_at(&index, scheme, single_target),
         end_anchor: None,
         content: "REPLACED SINGLE LINE".to_owned(),
     }];
 
     let batch_ops: Vec<HashlineOp> = (1..=8u32)
         .map(|i| {
-            let target = nearest_nonblank(&lines, i as usize * 6_000);
+            let target = nearest_nonblank(lines, i as usize * 6_000);
             HashlineOp::Replace {
-                anchor: anchor_at(&lines, &*scheme, target),
+                anchor: anchor_at(&index, scheme, target),
                 end_anchor: None,
                 content: format!("REPLACED BATCH LINE {i}"),
             }
         })
         .collect();
 
-    let stale_target = nearest_nonblank(&lines, 25_000);
-    let stale_anchor = anchor_at(&lines, &*scheme, stale_target);
+    let stale_target = nearest_nonblank(lines, 25_000);
+    let stale_anchor = anchor_at(&index, scheme, stale_target);
     // Prepend one line so the anchor's target content shifts down by exactly
     // one line — validate_anchor sees Stale, then find_shifted + full-file
     // context rendering run (F3's repeated-pass path).
@@ -256,21 +271,15 @@ fn bench_apply_edits(c: &mut Criterion) {
     group.sample_size(30);
 
     group.bench_function("single_op_50k_lines", |b| {
-        b.iter(|| black_box(apply_edits(black_box(&content), &single_ops, &*scheme)));
+        b.iter(|| black_box(apply_edits(black_box(&content), &single_ops, scheme)));
     });
 
     group.bench_function("batch_8ops_50k_lines", |b| {
-        b.iter(|| black_box(apply_edits(black_box(&content), &batch_ops, &*scheme)));
+        b.iter(|| black_box(apply_edits(black_box(&content), &batch_ops, scheme)));
     });
 
     group.bench_function("stale_anchor_error_path_50k_lines", |b| {
-        b.iter(|| {
-            black_box(apply_edits(
-                black_box(&shifted_content),
-                &stale_ops,
-                &*scheme,
-            ))
-        });
+        b.iter(|| black_box(apply_edits(black_box(&shifted_content), &stale_ops, scheme)));
     });
 
     group.finish();
@@ -348,7 +357,7 @@ fn bench_grep(c: &mut Criterion) {
         ("anchored_regex", "^fn "),
     ] {
         group.bench_function(label, |b| {
-            b.iter(|| black_box(run_grep(&ws, &grep_input(pattern), &*scheme)));
+            b.iter(|| black_box(run_grep(&ws, &grep_input(pattern), scheme)));
         });
     }
     group.finish();
@@ -372,9 +381,9 @@ fn bench_dispatch(c: &mut Criterion) {
     let scheme = SchemeConfig::default()
         .build_scheme()
         .expect("build scheme");
-    let lines = split_lines(&content);
-    let edit_target = nearest_nonblank(&lines, 150);
-    let edit_anchor = anchor_at(&lines, &*scheme, edit_target);
+    let index = FileIndex::new(&content);
+    let edit_target = nearest_nonblank(index.lines(), 150);
+    let edit_anchor = anchor_at(&index, scheme, edit_target);
 
     let mut group = c.benchmark_group("dispatch");
     group.sample_size(30);

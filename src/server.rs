@@ -16,7 +16,7 @@
 //!    adopted, and `notifications/roots/list_changed` re-queries it.
 
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 
 use rmcp::ErrorData as McpError;
 use rmcp::ServerHandler;
@@ -31,6 +31,7 @@ use crate::config::{ConfigError, SchemeConfig};
 use crate::edit::{HashlineEditInput, run_edit};
 use crate::grep::{HashlineGrepInput, run_grep};
 use crate::read::{HashlineReadInput, MAX_LINES_READ, run_read};
+use crate::scheme::Scheme;
 use crate::util::{ToolOutcome, Workspace};
 
 const READ_TEMPLATE: &str = r#"Read a file with line-anchored output for use with hashline_edit.
@@ -153,10 +154,15 @@ pub struct HashlineServer {
     root_pinned: bool,
     /// When `true`, tool paths are confined to the workspace root.
     restrict: bool,
-    config: SchemeConfig,
+    /// The anchor scheme, built once from `config` at construction.
+    scheme: Scheme,
     read_description: Arc<str>,
     edit_description: Arc<str>,
     grep_description: Arc<str>,
+    /// Tool listing, rendered on first use and shared across clones — schema
+    /// generation and JSON serialization are far too costly to repeat per
+    /// `tools/list` request.
+    tools: Arc<OnceLock<Vec<Tool>>>,
 }
 
 impl HashlineServer {
@@ -166,7 +172,7 @@ impl HashlineServer {
     /// a client advertising the MCP `roots` capability replaces it after
     /// initialization; use [`Self::with_root_pinned`] for explicit roots.
     pub fn new(root: PathBuf, config: SchemeConfig) -> Result<Self, ConfigError> {
-        config.validate()?;
+        let scheme = config.build_scheme()?;
         let root = root.canonicalize().unwrap_or(root);
         let read_description = config
             .render_description(READ_TEMPLATE)
@@ -175,10 +181,11 @@ impl HashlineServer {
             root: Arc::new(RwLock::new(root)),
             root_pinned: false,
             restrict: false,
-            config,
+            scheme,
             read_description: read_description.into(),
             edit_description: config.render_description(EDIT_TEMPLATE).into(),
             grep_description: config.render_description(GREP_TEMPLATE).into(),
+            tools: Arc::new(OnceLock::new()),
         })
     }
 
@@ -292,12 +299,17 @@ impl HashlineServer {
     }
 
     /// The tool listing, with scheme-aware descriptions.
-    pub fn tools(&self) -> Vec<Tool> {
-        vec![
-            Self::tool::<HashlineReadInput>("hashline_read", &self.read_description),
-            Self::tool::<HashlineEditInput>("hashline_edit", &self.edit_description),
-            Self::tool::<HashlineGrepInput>("hashline_grep", &self.grep_description),
-        ]
+    ///
+    /// Rendered once per server and cached: the input schemas are static, so
+    /// repeated `tools/list` requests reuse the same listing.
+    pub fn tools(&self) -> &[Tool] {
+        self.tools.get_or_init(|| {
+            vec![
+                Self::tool::<HashlineReadInput>("hashline_read", &self.read_description),
+                Self::tool::<HashlineEditInput>("hashline_edit", &self.edit_description),
+                Self::tool::<HashlineGrepInput>("hashline_grep", &self.grep_description),
+            ]
+        })
     }
 
     /// Dispatch one tool call. Tool-level failures (bad anchors, missing
@@ -307,33 +319,25 @@ impl HashlineServer {
     pub async fn dispatch(&self, name: &str, arguments: Value) -> Result<CallToolResult, McpError> {
         let outcome = match name {
             "hashline_read" => match serde_json::from_value::<HashlineReadInput>(arguments) {
-                Ok(input) => {
-                    let scheme = self.build_scheme()?;
-                    run_read(&self.workspace(), &input, &*scheme).await
-                }
+                Ok(input) => run_read(&self.workspace(), &input, self.scheme).await,
                 Err(e) => ToolOutcome::error(format!("Invalid arguments for hashline_read: {e}")),
             },
             "hashline_edit" => match serde_json::from_value::<HashlineEditInput>(arguments) {
-                Ok(input) => {
-                    let scheme = self.build_scheme()?;
-                    run_edit(&self.workspace(), &input, &*scheme).await
-                }
+                Ok(input) => run_edit(&self.workspace(), &input, self.scheme).await,
                 Err(e) => ToolOutcome::error(format!("Invalid arguments for hashline_edit: {e}")),
             },
             "hashline_grep" => match serde_json::from_value::<HashlineGrepInput>(arguments) {
                 Ok(input) => {
                     let workspace = self.workspace();
-                    let config = self.config;
-                    tokio::task::spawn_blocking(move || {
-                        let scheme = config
-                            .build_scheme()
-                            .expect("config validated at construction");
-                        run_grep(&workspace, &input, &*scheme)
-                    })
-                    .await
-                    .map_err(|e| {
-                        McpError::internal_error(format!("hashline_grep task failed: {e}"), None)
-                    })?
+                    let scheme = self.scheme;
+                    tokio::task::spawn_blocking(move || run_grep(&workspace, &input, scheme))
+                        .await
+                        .map_err(|e| {
+                            McpError::internal_error(
+                                format!("hashline_grep task failed: {e}"),
+                                None,
+                            )
+                        })?
                 }
                 Err(e) => ToolOutcome::error(format!("Invalid arguments for hashline_grep: {e}")),
             },
@@ -350,12 +354,6 @@ impl HashlineServer {
             CallToolResult::error(content)
         } else {
             CallToolResult::success(content)
-        })
-    }
-
-    fn build_scheme(&self) -> Result<Box<dyn crate::scheme::AnchorScheme>, McpError> {
-        self.config.build_scheme().map_err(|e| {
-            McpError::internal_error(format!("invalid scheme configuration: {e}"), None)
         })
     }
 }
@@ -390,7 +388,7 @@ impl ServerHandler for HashlineServer {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, McpError> {
-        Ok(ListToolsResult::with_all_items(self.tools()))
+        Ok(ListToolsResult::with_all_items(self.tools().to_vec()))
     }
 
     async fn call_tool(
@@ -418,11 +416,12 @@ mod tests {
     #[test]
     fn tools_listed_with_rendered_descriptions() {
         let tmp = tempfile::TempDir::new().unwrap();
-        let tools = server(tmp.path()).tools();
+        let server = server(tmp.path());
+        let tools = server.tools();
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
         assert_eq!(names, ["hashline_read", "hashline_edit", "hashline_grep"]);
 
-        for tool in &tools {
+        for tool in tools {
             let desc = tool.description.as_deref().unwrap();
             assert!(!desc.contains("{example_anchor}"), "unrendered: {desc}");
             assert!(!desc.contains("{max_lines_read}"), "unrendered: {desc}");
@@ -450,7 +449,8 @@ mod tests {
     #[test]
     fn tool_schemas_include_required_fields() {
         let tmp = tempfile::TempDir::new().unwrap();
-        let tools = server(tmp.path()).tools();
+        let server = server(tmp.path());
+        let tools = server.tools();
         let read_schema = serde_json::to_value(tools[0].input_schema.as_ref()).unwrap();
         assert_eq!(read_schema["type"], "object");
         assert!(read_schema["properties"].get("path").is_some());

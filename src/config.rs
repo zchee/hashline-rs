@@ -3,7 +3,7 @@
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
-use crate::scheme::{AnchorScheme, CheckpointChain, ChunkFingerprint, ContentOnly};
+use crate::scheme::Scheme;
 
 /// Selectable anchor scheme kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
@@ -90,18 +90,12 @@ impl SchemeConfig {
     }
 
     /// Validate and build the anchor scheme.
-    pub fn build_scheme(&self) -> Result<Box<dyn AnchorScheme>, ConfigError> {
+    pub fn build_scheme(&self) -> Result<Scheme, ConfigError> {
         self.validate()?;
         Ok(match self.kind {
-            SchemeKind::ContentOnly => Box::new(ContentOnly::with_hash_len(self.hash_len)),
-            SchemeKind::Chunk => Box::new(ChunkFingerprint::with_params(
-                self.hash_len,
-                self.chunk_size,
-            )),
-            SchemeKind::Checkpoint => Box::new(CheckpointChain::with_params(
-                self.hash_len,
-                self.checkpoint_interval,
-            )),
+            SchemeKind::ContentOnly => Scheme::content_only(self.hash_len),
+            SchemeKind::Chunk => Scheme::chunk(self.hash_len, self.chunk_size),
+            SchemeKind::Checkpoint => Scheme::checkpoint(self.hash_len, self.checkpoint_interval),
         })
     }
 

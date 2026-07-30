@@ -13,7 +13,7 @@ use std::path::Path;
 
 pub use types::{HashlineEditInput, HashlineEditOutput, HashlineOp};
 
-use crate::scheme::AnchorScheme;
+use crate::scheme::Scheme;
 use crate::util::{ToolOutcome, Workspace};
 use types::{HashlineEditError, HashlineEditErrorKind, HashlineEditsApplied};
 
@@ -61,7 +61,7 @@ fn render_error(err: &HashlineEditError) -> String {
 pub async fn run_edit(
     workspace: &Workspace,
     input: &HashlineEditInput,
-    scheme: &dyn AnchorScheme,
+    scheme: Scheme,
 ) -> ToolOutcome {
     if input.edits.is_empty() {
         return ToolOutcome::error("No edit operations provided.".to_owned());
@@ -110,7 +110,7 @@ async fn write_and_render(
     old_content: &str,
     input: &HashlineEditInput,
     path: &Path,
-    scheme: &dyn AnchorScheme,
+    scheme: Scheme,
 ) -> ToolOutcome {
     let result = apply::apply_edits(old_content, &input.edits, scheme);
 
@@ -136,15 +136,18 @@ async fn write_and_render(
 mod tests {
     use super::*;
     use crate::config::SchemeConfig;
-    use crate::scheme::split_lines;
+    use crate::index::FileIndex;
 
-    fn scheme() -> Box<dyn AnchorScheme> {
+    fn scheme() -> Scheme {
         SchemeConfig::default().build_scheme().unwrap()
     }
 
-    fn anchor_for(content: &str, line: usize, scheme: &dyn AnchorScheme) -> String {
-        let lines = split_lines(content);
-        scheme.generate_anchors(&lines)[line - 1].render()
+    fn anchor_for(content: &str, line: usize, scheme: Scheme) -> String {
+        let index = FileIndex::new(content);
+        scheme
+            .anchor_at(&index, line - 1)
+            .expect("line within file")
+            .render()
     }
 
     fn ws(root: &Path) -> Workspace {
@@ -162,12 +165,12 @@ mod tests {
         let input = HashlineEditInput {
             file_path: "code.rs".to_owned(),
             edits: vec![HashlineOp::Replace {
-                anchor: anchor_for(content, 2, &*s),
+                anchor: anchor_for(content, 2, s),
                 end_anchor: None,
                 content: "    let x = 42;".to_owned(),
             }],
         };
-        let outcome = run_edit(&ws(tmp.path()), &input, &*s).await;
+        let outcome = run_edit(&ws(tmp.path()), &input, s).await;
         assert!(!outcome.is_error, "{}", outcome.text);
         assert!(outcome.text.contains("Applied 1 edit(s)"));
         assert!(outcome.text.contains("fresh anchors"));
@@ -187,7 +190,7 @@ mod tests {
                 content: "created\n".to_owned(),
             }],
         };
-        let outcome = run_edit(&ws(tmp.path()), &input, &*s).await;
+        let outcome = run_edit(&ws(tmp.path()), &input, s).await;
         assert!(!outcome.is_error, "{}", outcome.text);
         assert_eq!(
             std::fs::read_to_string(tmp.path().join("nested/dir/new.txt")).unwrap(),
@@ -207,7 +210,7 @@ mod tests {
                 content: "x".to_owned(),
             }],
         };
-        let outcome = run_edit(&ws(tmp.path()), &input, &*s).await;
+        let outcome = run_edit(&ws(tmp.path()), &input, s).await;
         assert!(outcome.is_error);
         assert!(outcome.text.contains("File not found"));
     }
@@ -220,7 +223,7 @@ mod tests {
             file_path: "any.txt".to_owned(),
             edits: vec![],
         };
-        let outcome = run_edit(&ws(tmp.path()), &input, &*s).await;
+        let outcome = run_edit(&ws(tmp.path()), &input, s).await;
         assert!(outcome.is_error);
         assert!(outcome.text.contains("No edit operations"));
     }
@@ -241,7 +244,7 @@ mod tests {
                 content: "nope".to_owned(),
             }],
         };
-        let outcome = run_edit(&ws(tmp.path()), &input, &*s).await;
+        let outcome = run_edit(&ws(tmp.path()), &input, s).await;
         assert!(outcome.is_error);
         assert!(outcome.text.contains("retry your edit"));
         assert_eq!(std::fs::read_to_string(&file).unwrap(), original);

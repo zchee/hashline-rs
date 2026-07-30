@@ -521,6 +521,8 @@ dependencies = [
  "clap",
  "criterion",
  "ignore",
+ "itoa",
+ "memchr",
  "percent-encoding",
  "regex",
  "rmcp",

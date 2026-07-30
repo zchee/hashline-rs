@@ -8,38 +8,23 @@ use super::range_policy;
 use super::types::{
     HashlineEditError, HashlineEditErrorKind, HashlineEditOutput, HashlineEditsApplied, HashlineOp,
 };
+use crate::index::{FileIndex, split_lines};
 use crate::read::format_hashline_content;
 use crate::scheme::{
-    Anchor, AnchorScheme, DEFAULT_SEARCH_RADIUS, ParsedAnchor, ShiftResult, ValidationResult,
-    split_lines,
+    Anchor, DEFAULT_SEARCH_RADIUS, ParsedAnchor, Scheme, ShiftResult, ValidationResult,
 };
 
 const SNIPPET_CONTEXT: usize = 3;
 
 /// Generate a scheme-appropriate format label and example anchor for error messages.
-///
-/// Probes the scheme with a single-line sample to determine whether it uses
-/// a context hash (e.g. `"22:abc:rst"`) or only a local hash (e.g. `"22:abc"`).
-fn anchor_format_hint(scheme: &dyn AnchorScheme) -> (&'static str, String) {
+fn anchor_format_hint(scheme: Scheme) -> (&'static str, String) {
     let len = scheme.hash_len().clamp(1, 4);
     let hash = &"abcd"[..len];
-    let has_context = scheme
-        .generate_anchors(&["x"])
-        .first()
-        .is_some_and(|a| a.context.is_some());
-    if has_context {
+    if scheme.has_context() {
         let ctx = &"rstu"[..len];
         ("LINE:HASH1:HASH2", format!("22:{hash}:{ctx}"))
     } else {
         ("LINE:HASH", format!("22:{hash}"))
-    }
-}
-
-/// Format an anchor's local+context as `"local:ctx"` or `"local"`.
-fn anchor_suffix(a: &Anchor) -> String {
-    match &a.context {
-        Some(ctx) => format!("{}:{ctx}", a.local),
-        None => a.local.clone(),
     }
 }
 
@@ -96,7 +81,7 @@ fn anchor_content_error(op_label: &str, content: &str, line_num: usize) -> Hashl
 
 /// Format `"LINE:SUFFIX→CONTENT"`.
 fn render_anchored_line(a: &Anchor, content: &str) -> String {
-    format!("{}:{}→{content}", a.line, anchor_suffix(a))
+    format!("{a}\u{2192}{content}")
 }
 
 /// A validated, resolved edit operation ready for application.
@@ -129,8 +114,8 @@ pub struct ApplyResult {
 /// Returns both the structured output and the new file content (if
 /// successful), so the caller can write to disk without re-deriving the
 /// content through a separate code path.
-pub fn apply_edits(content: &str, ops: &[HashlineOp], scheme: &dyn AnchorScheme) -> ApplyResult {
-    let lines = split_lines(content);
+pub fn apply_edits(content: &str, ops: &[HashlineOp], scheme: Scheme) -> ApplyResult {
+    let index = FileIndex::new(content);
 
     if ops.len() == 1
         && let HashlineOp::Write {
@@ -156,7 +141,7 @@ pub fn apply_edits(content: &str, ops: &[HashlineOp], scheme: &dyn AnchorScheme)
     let mut resolved: Vec<ResolvedOp> = Vec::with_capacity(ops.len());
 
     for (idx, op) in ops.iter().enumerate() {
-        match resolve_op(op, idx, &lines, scheme) {
+        match resolve_op(op, idx, &index, scheme) {
             Ok(r) => resolved.push(r),
             Err(mut e) => {
                 if ops.len() > 1 {
@@ -217,7 +202,7 @@ pub fn apply_edits(content: &str, ops: &[HashlineOp], scheme: &dyn AnchorScheme)
             .then(b.original_idx.cmp(&a.original_idx))
     });
 
-    let mut result_lines: Vec<String> = lines.iter().map(|s| (*s).to_owned()).collect();
+    let mut result_lines: Vec<String> = index.lines().iter().map(|s| (*s).to_owned()).collect();
 
     // Collect each edit's affected region in post-edit coordinates by
     // tracking cumulative line-count shifts. Ops are sorted bottom-up for
@@ -274,7 +259,7 @@ fn build_snippet(
     new_content: &str,
     edit_regions: &[(usize, usize)],
     total_new_lines: usize,
-    scheme: &dyn AnchorScheme,
+    scheme: Scheme,
 ) -> String {
     let (Some(first), Some(last)) = (edit_regions.first(), edit_regions.last()) else {
         return String::new();
@@ -340,8 +325,8 @@ fn build_snippet(
 fn resolve_op(
     op: &HashlineOp,
     original_idx: usize,
-    lines: &[&str],
-    scheme: &dyn AnchorScheme,
+    index: &FileIndex<'_>,
+    scheme: Scheme,
 ) -> Result<ResolvedOp, HashlineEditError> {
     match op {
         HashlineOp::Replace {
@@ -349,10 +334,10 @@ fn resolve_op(
             end_anchor,
             content,
         } => {
-            let start = validate_anchor(anchor, lines, scheme)?;
+            let start = validate_anchor(anchor, index, scheme)?;
             let end = match end_anchor {
                 Some(ea) => {
-                    let e = validate_anchor(ea, lines, scheme)?;
+                    let e = validate_anchor(ea, index, scheme)?;
                     if e < start {
                         return Err(HashlineEditError::new(
                             HashlineEditErrorKind::InvalidInput,
@@ -392,14 +377,14 @@ fn resolve_op(
                 // Insert at the actual end of file content. If the file ends
                 // with '\n', split_lines produces a synthetic trailing empty
                 // line — insert before it rather than after it.
-                let len = lines.len();
-                if len > 1 && lines[len - 1].is_empty() {
+                let len = index.len();
+                if len > 1 && index.line(len - 1).is_some_and(str::is_empty) {
                     len - 1
                 } else {
                     len
                 }
             } else {
-                let line = validate_anchor(anchor, lines, scheme)?;
+                let line = validate_anchor(anchor, index, scheme)?;
                 line + 1
             };
 
@@ -440,26 +425,21 @@ fn resolve_op(
 /// line's suffix matches, avoiding ambiguity.
 fn recover_anchor_by_suffix(
     suffix: &str,
-    lines: &[&str],
-    scheme: &dyn AnchorScheme,
+    index: &FileIndex<'_>,
+    scheme: Scheme,
 ) -> Option<ParsedAnchor> {
-    let anchors = scheme.generate_anchors(lines);
-    let mut matches = anchors
-        .iter()
-        .filter(|a| match (&a.context, suffix.split_once(':')) {
-            (Some(ctx), Some((local, sfx_ctx))) => a.local == local && ctx.as_str() == sfx_ctx,
+    let mut matches = scheme.anchors_for_range(index, 0..index.len()).filter(|a| {
+        match (a.context, suffix.split_once(':')) {
+            (Some(ctx), Some((local, sfx_ctx))) => a.local == local && ctx == sfx_ctx,
             (None, None) => a.local == suffix,
             _ => false,
-        });
+        }
+    });
     let first = matches.next()?;
     if matches.next().is_some() {
         return None;
     }
-    Some(ParsedAnchor {
-        line: first.line,
-        local: first.local.clone(),
-        context: first.context.clone(),
-    })
+    Some(ParsedAnchor::from(first))
 }
 
 /// Validate an anchor string against file content.
@@ -467,8 +447,8 @@ fn recover_anchor_by_suffix(
 /// Returns the 0-based line index on success, or a structured error.
 fn validate_anchor(
     anchor_str: &str,
-    lines: &[&str],
-    scheme: &dyn AnchorScheme,
+    index: &FileIndex<'_>,
+    scheme: Scheme,
 ) -> Result<usize, HashlineEditError> {
     // Strip trailing arrow + content that the model copies from hashline_read
     // output (e.g. `22:abc:rst→code` or `22:abc:rst->code`).
@@ -483,7 +463,7 @@ fn validate_anchor(
             // Recovery: the model sometimes drops the line number, sending
             // just "ab:cd" instead of "22:ab:cd". Try matching the hash suffix
             // against generated anchors — accept if exactly one line matches.
-            if let Some(recovered) = recover_anchor_by_suffix(anchor_str, lines, scheme) {
+            if let Some(recovered) = recover_anchor_by_suffix(anchor_str, index, scheme) {
                 tracing::debug!(
                     anchor = anchor_str,
                     recovered_line = recovered.line,
@@ -503,7 +483,7 @@ fn validate_anchor(
         }
     };
 
-    match scheme.validate(&parsed, lines) {
+    match scheme.validate(&parsed, index) {
         ValidationResult::Valid => Ok(parsed.line - 1), // 0-based
 
         ValidationResult::OutOfRange => Err(HashlineEditError::new(
@@ -511,27 +491,27 @@ fn validate_anchor(
             format!(
                 "Line {} is out of range (file has {} lines).",
                 parsed.line,
-                lines.len()
+                index.len()
             ),
         )),
 
         ValidationResult::Stale => {
-            let shift = scheme.find_shifted(&parsed, lines, DEFAULT_SEARCH_RADIUS);
-            let anchors = scheme.generate_anchors(lines);
+            let shift = scheme.find_shifted(&parsed, index, DEFAULT_SEARCH_RADIUS);
+            let anchors: Vec<Anchor> = scheme.anchors_for_range(index, 0..index.len()).collect();
 
             // Wider context for recovery (±5 lines).
             let recovery_ctx = 5;
             let ctx_start = parsed.line.saturating_sub(1).saturating_sub(recovery_ctx);
-            let ctx_end = (parsed.line + recovery_ctx).min(lines.len());
+            let ctx_end = (parsed.line + recovery_ctx).min(index.len());
 
             let context: String = (ctx_start..ctx_end)
-                .map(|i| render_anchored_line(&anchors[i], lines[i]))
+                .map(|i| render_anchored_line(&anchors[i], index.line(i).unwrap_or_default()))
                 .collect::<Vec<_>>()
                 .join("\n");
 
             let (shifted_anchor, error_kind, message) = match shift {
                 ShiftResult::Found { new_line } => {
-                    let fresh = format!("{}:{}", new_line, anchor_suffix(&anchors[new_line - 1]));
+                    let fresh = anchors[new_line - 1].render();
                     let msg = format!(
                         "Anchor stale at line {}. \
                          Content appears to have shifted to line {new_line}. \
@@ -640,7 +620,7 @@ fn overlap_error(
     )
 }
 
-fn build_write_result(new_content: &str, scheme: &dyn AnchorScheme) -> HashlineEditOutput {
+fn build_write_result(new_content: &str, scheme: Scheme) -> HashlineEditOutput {
     let total = split_lines(new_content).len();
     let snippet_end = (SNIPPET_CONTEXT * 2).min(total);
     let snippet = format_hashline_content(new_content, Some(1), Some(snippet_end), scheme);
@@ -659,11 +639,11 @@ mod tests {
     use super::*;
     use crate::config::{SchemeConfig, SchemeKind};
 
-    fn scheme() -> Box<dyn AnchorScheme> {
+    fn scheme() -> Scheme {
         SchemeConfig::default().build_scheme().unwrap()
     }
 
-    fn content_only() -> Box<dyn AnchorScheme> {
+    fn content_only() -> Scheme {
         SchemeConfig {
             kind: SchemeKind::ContentOnly,
             ..Default::default()
@@ -673,10 +653,12 @@ mod tests {
     }
 
     /// Render the anchor of `line` (1-based) for `content` under `scheme`.
-    fn anchor_for(content: &str, line: usize, scheme: &dyn AnchorScheme) -> String {
-        let lines = split_lines(content);
-        let anchors = scheme.generate_anchors(&lines);
-        anchors[line - 1].render()
+    fn anchor_for(content: &str, line: usize, scheme: Scheme) -> String {
+        let index = FileIndex::new(content);
+        scheme
+            .anchor_at(&index, line - 1)
+            .expect("line within file")
+            .render()
     }
 
     fn replace(anchor: &str, content: &str) -> HashlineOp {
@@ -705,8 +687,8 @@ mod tests {
     fn replace_single_line() {
         let content = "let a = 1;\nlet b = 2;\nlet c = 3;\n";
         let s = scheme();
-        let anchor = anchor_for(content, 2, &*s);
-        let result = apply_edits(content, &[replace(&anchor, "let b = 42;")], &*s);
+        let anchor = anchor_for(content, 2, s);
+        let result = apply_edits(content, &[replace(&anchor, "let b = 42;")], s);
 
         let applied = expect_applied(&result);
         assert_eq!(applied.applied, 1);
@@ -721,14 +703,14 @@ mod tests {
     fn replace_range_inclusive() {
         let content = "one\ntwo\nthree\nfour\nfive\n";
         let s = scheme();
-        let start = anchor_for(content, 2, &*s);
-        let end = anchor_for(content, 4, &*s);
+        let start = anchor_for(content, 2, s);
+        let end = anchor_for(content, 4, s);
         let op = HashlineOp::Replace {
             anchor: start,
             end_anchor: Some(end),
             content: "MERGED".to_owned(),
         };
-        let result = apply_edits(content, &[op], &*s);
+        let result = apply_edits(content, &[op], s);
 
         expect_applied(&result);
         assert_eq!(result.new_content.as_deref(), Some("one\nMERGED\nfive\n"));
@@ -738,8 +720,8 @@ mod tests {
     fn replace_with_empty_content_deletes() {
         let content = "keep\ndelete me\nkeep too\n";
         let s = scheme();
-        let anchor = anchor_for(content, 2, &*s);
-        let result = apply_edits(content, &[replace(&anchor, "")], &*s);
+        let anchor = anchor_for(content, 2, s);
+        let result = apply_edits(content, &[replace(&anchor, "")], s);
 
         expect_applied(&result);
         assert_eq!(result.new_content.as_deref(), Some("keep\nkeep too\n"));
@@ -749,8 +731,8 @@ mod tests {
     fn replace_multiline_content() {
         let content = "a\nb\nc\n";
         let s = scheme();
-        let anchor = anchor_for(content, 2, &*s);
-        let result = apply_edits(content, &[replace(&anchor, "x\ny\nz")], &*s);
+        let anchor = anchor_for(content, 2, s);
+        let result = apply_edits(content, &[replace(&anchor, "x\ny\nz")], s);
 
         expect_applied(&result);
         assert_eq!(result.new_content.as_deref(), Some("a\nx\ny\nz\nc\n"));
@@ -761,11 +743,11 @@ mod tests {
         let content = "one\ntwo\nthree\n";
         let s = scheme();
         let op = HashlineOp::Replace {
-            anchor: anchor_for(content, 3, &*s),
-            end_anchor: Some(anchor_for(content, 1, &*s)),
+            anchor: anchor_for(content, 3, s),
+            end_anchor: Some(anchor_for(content, 1, s)),
             content: "x".to_owned(),
         };
-        let result = apply_edits(content, &[op], &*s);
+        let result = apply_edits(content, &[op], s);
         let err = expect_error(&result);
         assert_eq!(err.error, HashlineEditErrorKind::InvalidInput);
         assert!(err.message.contains("before start anchor"));
@@ -775,12 +757,12 @@ mod tests {
     fn insert_after_line() {
         let content = "first\nsecond\n";
         let s = scheme();
-        let anchor = anchor_for(content, 1, &*s);
+        let anchor = anchor_for(content, 1, s);
         let op = HashlineOp::InsertAfter {
             anchor,
             content: "inserted".to_owned(),
         };
-        let result = apply_edits(content, &[op], &*s);
+        let result = apply_edits(content, &[op], s);
 
         expect_applied(&result);
         assert_eq!(
@@ -797,7 +779,7 @@ mod tests {
             anchor: "0:".to_owned(),
             content: "header".to_owned(),
         };
-        let result = apply_edits(content, &[op], &*s);
+        let result = apply_edits(content, &[op], s);
 
         expect_applied(&result);
         assert_eq!(result.new_content.as_deref(), Some("header\nbody\n"));
@@ -811,7 +793,7 @@ mod tests {
             anchor: "EOF".to_owned(),
             content: "footer".to_owned(),
         };
-        let result = apply_edits(content, &[op], &*s);
+        let result = apply_edits(content, &[op], s);
 
         expect_applied(&result);
         // Inserted before the synthetic trailing empty line → keeps final newline.
@@ -826,7 +808,7 @@ mod tests {
             anchor: "EOF".to_owned(),
             content: "footer".to_owned(),
         };
-        let result = apply_edits(content, &[op], &*s);
+        let result = apply_edits(content, &[op], s);
 
         expect_applied(&result);
         assert_eq!(result.new_content.as_deref(), Some("body\nfooter"));
@@ -836,12 +818,12 @@ mod tests {
     fn insert_after_empty_content_adds_blank_line() {
         let content = "a\nb\n";
         let s = scheme();
-        let anchor = anchor_for(content, 1, &*s);
+        let anchor = anchor_for(content, 1, s);
         let op = HashlineOp::InsertAfter {
             anchor,
             content: String::new(),
         };
-        let result = apply_edits(content, &[op], &*s);
+        let result = apply_edits(content, &[op], s);
 
         expect_applied(&result);
         assert_eq!(result.new_content.as_deref(), Some("a\n\nb\n"));
@@ -854,7 +836,7 @@ mod tests {
         let op = HashlineOp::Write {
             content: "brand\nnew\n".to_owned(),
         };
-        let result = apply_edits(content, &[op], &*s);
+        let result = apply_edits(content, &[op], s);
 
         let applied = expect_applied(&result);
         assert_eq!(applied.snippet_start_line, 1);
@@ -865,14 +847,14 @@ mod tests {
     fn write_must_be_sole_op() {
         let content = "a\nb\n";
         let s = scheme();
-        let anchor = anchor_for(content, 1, &*s);
+        let anchor = anchor_for(content, 1, s);
         let ops = [
             replace(&anchor, "x"),
             HashlineOp::Write {
                 content: "y".to_owned(),
             },
         ];
-        let result = apply_edits(content, &ops, &*s);
+        let result = apply_edits(content, &ops, s);
         let err = expect_error(&result);
         assert_eq!(err.error, HashlineEditErrorKind::InvalidInput);
         assert!(err.message.contains("only operation"));
@@ -883,10 +865,10 @@ mod tests {
         let content = "l1\nl2\nl3\nl4\nl5\n";
         let s = scheme();
         // Both anchors validated against the same pre-edit snapshot.
-        let a1 = anchor_for(content, 1, &*s);
-        let a4 = anchor_for(content, 4, &*s);
+        let a1 = anchor_for(content, 1, s);
+        let a4 = anchor_for(content, 4, s);
         let ops = [replace(&a1, "L1a\nL1b"), replace(&a4, "L4x")];
-        let result = apply_edits(content, &ops, &*s);
+        let result = apply_edits(content, &ops, s);
 
         let applied = expect_applied(&result);
         assert_eq!(applied.applied, 2);
@@ -901,12 +883,12 @@ mod tests {
         let content = "a\nb\nc\nd\n";
         let s = scheme();
         let op1 = HashlineOp::Replace {
-            anchor: anchor_for(content, 1, &*s),
-            end_anchor: Some(anchor_for(content, 3, &*s)),
+            anchor: anchor_for(content, 1, s),
+            end_anchor: Some(anchor_for(content, 3, s)),
             content: "x".to_owned(),
         };
-        let op2 = replace(&anchor_for(content, 2, &*s), "y");
-        let result = apply_edits(content, &[op1, op2], &*s);
+        let op2 = replace(&anchor_for(content, 2, s), "y");
+        let result = apply_edits(content, &[op1, op2], s);
 
         let err = expect_error(&result);
         assert_eq!(err.error, HashlineEditErrorKind::OverlappingEdits);
@@ -918,15 +900,15 @@ mod tests {
         let content = "a\nb\nc\nd\n";
         let s = scheme();
         let op1 = HashlineOp::Replace {
-            anchor: anchor_for(content, 1, &*s),
-            end_anchor: Some(anchor_for(content, 3, &*s)),
+            anchor: anchor_for(content, 1, s),
+            end_anchor: Some(anchor_for(content, 3, s)),
             content: "x".to_owned(),
         };
         let op2 = HashlineOp::InsertAfter {
-            anchor: anchor_for(content, 1, &*s),
+            anchor: anchor_for(content, 1, s),
             content: "y".to_owned(),
         };
-        let result = apply_edits(content, &[op1, op2], &*s);
+        let result = apply_edits(content, &[op1, op2], s);
         assert_eq!(
             expect_error(&result).error,
             HashlineEditErrorKind::OverlappingEdits
@@ -938,10 +920,10 @@ mod tests {
         let content = "a\nb\nc\nd\n";
         let s = scheme();
         let ops = [
-            replace(&anchor_for(content, 1, &*s), "A"),
-            replace(&anchor_for(content, 2, &*s), "B"),
+            replace(&anchor_for(content, 1, s), "A"),
+            replace(&anchor_for(content, 2, s), "B"),
         ];
-        let result = apply_edits(content, &ops, &*s);
+        let result = apply_edits(content, &ops, s);
         expect_applied(&result);
         assert_eq!(result.new_content.as_deref(), Some("A\nB\nc\nd\n"));
     }
@@ -950,11 +932,11 @@ mod tests {
     fn stale_anchor_reports_shift_suggestion() {
         let original = "alpha\nbeta\ngamma\n";
         let s = content_only();
-        let anchor = anchor_for(original, 2, &*s); // "beta" at line 2
+        let anchor = anchor_for(original, 2, s); // "beta" at line 2
 
         // A line was inserted above → "beta" now at line 3.
         let current = "inserted\nalpha\nbeta\ngamma\n";
-        let result = apply_edits(current, &[replace(&anchor, "BETA")], &*s);
+        let result = apply_edits(current, &[replace(&anchor, "BETA")], s);
 
         let err = expect_error(&result);
         assert_eq!(err.error, HashlineEditErrorKind::AnchorStale);
@@ -964,7 +946,7 @@ mod tests {
         assert!(err.context.is_some());
 
         // The suggested anchor must actually work on retry.
-        let retry = apply_edits(current, &[replace(suggested, "BETA")], &*s);
+        let retry = apply_edits(current, &[replace(suggested, "BETA")], s);
         expect_applied(&retry);
         assert_eq!(
             retry.new_content.as_deref(),
@@ -976,10 +958,10 @@ mod tests {
     fn stale_anchor_ambiguous_candidates() {
         let s = content_only();
         let original = "x\ndup\ny\n";
-        let anchor = anchor_for(original, 2, &*s);
+        let anchor = anchor_for(original, 2, s);
         // "dup" now appears at lines 1 and 3, original line 2 changed.
         let current = "dup\nchanged\ndup\n";
-        let result = apply_edits(current, &[replace(&anchor, "z")], &*s);
+        let result = apply_edits(current, &[replace(&anchor, "z")], s);
 
         let err = expect_error(&result);
         assert_eq!(err.error, HashlineEditErrorKind::AmbiguousAnchor);
@@ -990,7 +972,7 @@ mod tests {
     fn out_of_range_anchor() {
         let content = "only\n";
         let s = scheme();
-        let result = apply_edits(content, &[replace("99:abc:rst", "x")], &*s);
+        let result = apply_edits(content, &[replace("99:abc:rst", "x")], s);
         let err = expect_error(&result);
         assert_eq!(err.error, HashlineEditErrorKind::AnchorNotFound);
         assert!(err.message.contains("out of range"));
@@ -1000,7 +982,7 @@ mod tests {
     fn malformed_anchor_rejected_with_hint() {
         let content = "a\nb\n";
         let s = scheme();
-        let result = apply_edits(content, &[replace("not-an-anchor", "x")], &*s);
+        let result = apply_edits(content, &[replace("not-an-anchor", "x")], s);
         let err = expect_error(&result);
         assert_eq!(err.error, HashlineEditErrorKind::InvalidInput);
         assert!(err.message.contains("Malformed anchor"));
@@ -1011,9 +993,9 @@ mod tests {
     fn anchor_with_copied_arrow_suffix_accepted() {
         let content = "let a = 1;\nlet b = 2;\n";
         let s = scheme();
-        let anchor = anchor_for(content, 1, &*s);
+        let anchor = anchor_for(content, 1, s);
         let sloppy = format!("{anchor}\u{2192}let a = 1;");
-        let result = apply_edits(content, &[replace(&sloppy, "let a = 9;")], &*s);
+        let result = apply_edits(content, &[replace(&sloppy, "let a = 9;")], s);
         expect_applied(&result);
         assert_eq!(
             result.new_content.as_deref(),
@@ -1025,10 +1007,10 @@ mod tests {
     fn line_number_free_anchor_recovered_when_unique() {
         let content = "unique line here\nother content\n";
         let s = scheme();
-        let full = anchor_for(content, 1, &*s);
+        let full = anchor_for(content, 1, s);
         // Drop the leading "1:" — suffix like "abc:rst".
         let suffix = full.split_once(':').unwrap().1;
-        let result = apply_edits(content, &[replace(suffix, "REPLACED")], &*s);
+        let result = apply_edits(content, &[replace(suffix, "REPLACED")], s);
         expect_applied(&result);
         assert_eq!(
             result.new_content.as_deref(),
@@ -1040,9 +1022,9 @@ mod tests {
     fn replace_content_with_anchor_prefixes_rejected() {
         let content = "a\nb\n";
         let s = scheme();
-        let anchor = anchor_for(content, 1, &*s);
+        let anchor = anchor_for(content, 1, s);
         let bad = "1:abc:rst\u{2192}let x = 1;";
-        let result = apply_edits(content, &[replace(&anchor, bad)], &*s);
+        let result = apply_edits(content, &[replace(&anchor, bad)], s);
         let err = expect_error(&result);
         assert_eq!(err.error, HashlineEditErrorKind::InvalidInput);
         assert!(err.message.contains("anchor prefixes"));
@@ -1054,7 +1036,7 @@ mod tests {
         let op = HashlineOp::Write {
             content: "10:abc:rst->code here".to_owned(),
         };
-        let result = apply_edits("old\n", &[op], &*s);
+        let result = apply_edits("old\n", &[op], s);
         let err = expect_error(&result);
         assert_eq!(err.error, HashlineEditErrorKind::InvalidInput);
     }
@@ -1063,9 +1045,9 @@ mod tests {
     fn batch_failure_message_mentions_batch() {
         let content = "a\nb\nc\n";
         let s = scheme();
-        let good = anchor_for(content, 1, &*s);
+        let good = anchor_for(content, 1, s);
         let ops = [replace(&good, "x"), replace("2:zzz:zzz", "y")];
-        let result = apply_edits(content, &ops, &*s);
+        let result = apply_edits(content, &ops, s);
         let err = expect_error(&result);
         assert!(err.message.contains("Edit 2/2"), "{}", err.message);
         assert!(err.message.contains("none of the edits were applied"));
@@ -1076,11 +1058,11 @@ mod tests {
         let content: String = (1..=30).map(|i| format!("line {i}\n")).collect();
         let s = scheme();
         let op = HashlineOp::Replace {
-            anchor: anchor_for(&content, 5, &*s),
-            end_anchor: Some(anchor_for(&content, 14, &*s)),
+            anchor: anchor_for(&content, 5, s),
+            end_anchor: Some(anchor_for(&content, 14, s)),
             content: "condensed".to_owned(),
         };
-        let result = apply_edits(&content, &[op], &*s);
+        let result = apply_edits(&content, &[op], s);
         let applied = expect_applied(&result);
         assert_eq!(applied.warnings.len(), 1);
         assert!(applied.warnings[0].contains("medium range"));
@@ -1090,19 +1072,19 @@ mod tests {
     fn snippet_contains_fresh_valid_anchors() {
         let content = "one\ntwo\nthree\nfour\n";
         let s = scheme();
-        let anchor = anchor_for(content, 2, &*s);
-        let result = apply_edits(content, &[replace(&anchor, "TWO")], &*s);
+        let anchor = anchor_for(content, 2, s);
+        let result = apply_edits(content, &[replace(&anchor, "TWO")], s);
 
         let applied = expect_applied(&result);
         let new_content = result.new_content.as_deref().unwrap();
-        let new_lines = split_lines(new_content);
+        let new_index = FileIndex::new(new_content);
 
         // Every anchor in the snippet must validate against the new content.
         for line in applied.snippet.lines() {
             let anchor_part = line.split('\u{2192}').next().unwrap();
             let parsed = ParsedAnchor::parse(anchor_part).unwrap();
             assert_eq!(
-                s.validate(&parsed, &new_lines),
+                s.validate(&parsed, &new_index),
                 ValidationResult::Valid,
                 "snippet anchor {anchor_part} must be fresh"
             );
@@ -1114,10 +1096,10 @@ mod tests {
         let content: String = (1..=200).map(|i| format!("line number {i}\n")).collect();
         let s = scheme();
         let ops = [
-            replace(&anchor_for(&content, 5, &*s), "EDIT-A"),
-            replace(&anchor_for(&content, 180, &*s), "EDIT-B"),
+            replace(&anchor_for(&content, 5, s), "EDIT-A"),
+            replace(&anchor_for(&content, 180, s), "EDIT-B"),
         ];
-        let result = apply_edits(&content, &ops, &*s);
+        let result = apply_edits(&content, &ops, s);
         let applied = expect_applied(&result);
         assert!(
             applied.snippet.contains("lines not shown"),
@@ -1132,7 +1114,7 @@ mod tests {
     fn same_position_ops_preserve_request_order() {
         let content = "target\n";
         let s = scheme();
-        let anchor = anchor_for(content, 1, &*s);
+        let anchor = anchor_for(content, 1, s);
         let ops = [
             HashlineOp::InsertAfter {
                 anchor: anchor.clone(),
@@ -1143,7 +1125,7 @@ mod tests {
                 content: "second".to_owned(),
             },
         ];
-        let result = apply_edits(content, &ops, &*s);
+        let result = apply_edits(content, &ops, s);
         expect_applied(&result);
         assert_eq!(
             result.new_content.as_deref(),
