@@ -180,6 +180,34 @@ impl<'a> FileIndex<'a> {
     pub fn new_partial(content: &'a str, hash_spans: &[Range<usize>]) -> Self {
         let mut lines = Vec::with_capacity(content.len() / AVG_LINE_BYTES + 2);
         for_each_line(content, |line| lines.push(line));
+        Self::from_lines_partial(lines, hash_spans)
+    }
+
+    /// Index an already-split line vector, hashing only the lines in
+    /// `hash_spans`.
+    ///
+    /// The splitting half of [`Self::new_partial`], skipped. A caller that has
+    /// just built the line vector itself — the edit path, whose splice result
+    /// *is* the post-edit line vector — would otherwise pay to re-split content
+    /// it already knows the line structure of.
+    ///
+    /// `hash_spans` is normalized exactly as [`Self::new_partial`] normalizes
+    /// it, and the out-of-span panic contract is identical.
+    ///
+    /// # Preconditions
+    ///
+    /// `lines` must be exactly what [`split_lines`] would produce for the
+    /// content this index describes — one entry per logical line, terminators
+    /// stripped, including the synthetic trailing empty line that content
+    /// ending in `\n` implies. Passing anything else silently misnumbers every
+    /// anchor. An empty vector is taken as the single empty line, so
+    /// [`Self::len`] stays at least 1 either way.
+    pub fn from_lines_partial(mut lines: Vec<&'a str>, hash_spans: &[Range<usize>]) -> Self {
+        // Even empty content indexes as one empty line; keeping that true here
+        // preserves the `len() >= 1` invariant the accessors rely on.
+        if lines.is_empty() {
+            lines.push("");
+        }
 
         let spans = normalize_spans(hash_spans, lines.len());
         // `vec![0; n]` lowers to a zeroed allocation, so the untouched slots
@@ -697,6 +725,79 @@ mod tests {
         assert_eq!(partial.hash(4), None);
         // Fingerprint folds that clamp to an empty range read no hash at all.
         assert_eq!(partial.chunk_fingerprint(999, 8), CHUNK_SEED);
+    }
+
+    /// `from_lines_partial` must be the splitting half of `new_partial`
+    /// removed and nothing else: same lines, length, hashes, and full-coverage
+    /// collapse, for every span shape.
+    #[test]
+    fn from_lines_partial_matches_new_partial() {
+        let span_shapes: &[&[(usize, usize)]] = &[
+            &[],
+            &[(0, 16)],
+            &[(32, 64)],
+            &[(80, 96), (0, 16), (8, 24), (400, 500)],
+            &[(0, 200)],
+            &[(0, 9_999)],
+            &[(7, 7), (9, 3)],
+        ];
+
+        for seed in 0..6u32 {
+            for &trailing_newline in &[true, false] {
+                let content = corpus(120, 0xF20D_0000 + seed, trailing_newline);
+                for shape in span_shapes {
+                    let hash_spans = spans(shape);
+                    let split = FileIndex::new_partial(&content, &hash_spans);
+                    let adopted = FileIndex::from_lines_partial(split_lines(&content), &hash_spans);
+
+                    assert_eq!(adopted.lines(), split.lines(), "seed {seed} {shape:?}");
+                    assert_eq!(adopted.len(), split.len());
+                    assert!(!adopted.is_empty());
+                    // Hashes agree wherever they are readable at all.
+                    for span in normalize_spans(&hash_spans, split.len()) {
+                        for idx in span {
+                            assert_eq!(adopted.hash(idx), split.hash(idx), "idx {idx}");
+                        }
+                    }
+                    assert_eq!(adopted.hash(split.len()), None);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn from_lines_partial_keeps_the_out_of_span_panic_contract() {
+        let content = corpus(200, 0xF20D_9999, true);
+        let adopted = FileIndex::from_lines_partial(split_lines(&content), &spans(&[(32, 64)]));
+        // In-span reads work, out-of-range reads answer `None`...
+        assert!(adopted.hash(40).is_some());
+        assert_eq!(adopted.hash(adopted.len()), None);
+        // ...and an in-file, out-of-span read is the loud programmer error.
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| adopted.hash(64)));
+        assert!(panicked.is_err(), "out-of-span read must panic");
+    }
+
+    #[test]
+    fn from_lines_partial_full_coverage_collapses_to_all() {
+        let content = "a\nb\nc\n";
+        let lines = split_lines(content);
+        let len = lines.len();
+        let adopted = FileIndex::from_lines_partial(lines, &spans(&[(0, len)]));
+        // Full coverage is recorded as `Hashed::All`, so the whole-file
+        // accessors work rather than panicking.
+        assert_eq!(adopted.hashes(), FileIndex::new(content).hashes());
+    }
+
+    #[test]
+    fn from_lines_partial_treats_an_empty_vector_as_one_empty_line() {
+        // The `len() >= 1` invariant holds even if a caller hands over the
+        // empty vector a delete-everything splice produces.
+        let adopted = FileIndex::from_lines_partial(Vec::new(), &spans(&[(0, 1)]));
+        assert_eq!(adopted.len(), 1);
+        assert!(!adopted.is_empty());
+        assert_eq!(adopted.line(0), Some(""));
+        assert_eq!(adopted.hash(0), Some(hash::line_hash("")));
+        assert_eq!(FileIndex::new("").lines(), adopted.lines());
     }
 
     #[test]

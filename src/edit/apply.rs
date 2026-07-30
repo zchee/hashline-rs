@@ -153,19 +153,26 @@ fn render_region(index: &FileIndex<'_>, scheme: Scheme, region: Range<usize>, ou
     }
 }
 
-/// Index `content` for rendering `regions`, hashing only the lines those
-/// regions' anchors depend on.
+/// The hash spans needed to anchor `regions`.
 ///
 /// Each region is expanded to the block boundaries its scheme needs, so a
 /// snippet of a 50,000-line file hashes tens of lines rather than all of them.
-fn snippet_index<'a>(content: &'a str, regions: &[Range<usize>], scheme: Scheme) -> FileIndex<'a> {
-    // The post-edit line count is not known until the content is split, so the
-    // spans are computed against an unbounded file and `new_partial` clamps.
-    let spans: Vec<Range<usize>> = regions
+/// The line count is not always known here, so the spans are computed against
+/// an unbounded file and the `FileIndex` constructor clamps them.
+fn snippet_spans(regions: &[Range<usize>], scheme: Scheme) -> Vec<Range<usize>> {
+    regions
         .iter()
         .map(|region| scheme.required_hash_span(region.clone(), usize::MAX))
-        .collect();
-    FileIndex::new_partial(content, &spans)
+        .collect()
+}
+
+/// Index `content` for rendering `regions`, hashing only the lines those
+/// regions' anchors depend on.
+///
+/// For the edit path prefer [`FileIndex::from_lines_partial`] with the spliced
+/// line vector — it is already the post-edit split, so re-splitting is waste.
+fn snippet_index<'a>(content: &'a str, regions: &[Range<usize>], scheme: Scheme) -> FileIndex<'a> {
+    FileIndex::new_partial(content, &snippet_spans(regions, scheme))
 }
 
 /// Bytes `lines` contribute to a newline-joined string: their content plus one
@@ -385,10 +392,14 @@ pub fn apply_edits(content: &str, ops: &[HashlineOp], scheme: Scheme) -> ApplyRe
         result_lines.splice(op.start..op.end, op.new_lines.iter().copied());
     }
 
-    // `split_lines` of the join has exactly one entry per spliced line, and
-    // always at least one — deleting every line still leaves the empty file's
-    // single line.
-    let total_new_lines = result_lines.len().max(1);
+    // Deleting every line empties the vector, but the resulting empty file
+    // still has one (empty) line. Restoring it keeps `result_lines` exactly
+    // equal to `split_lines(new_content)`, which is the precondition
+    // `FileIndex::from_lines_partial` relies on.
+    if result_lines.is_empty() {
+        result_lines.push("");
+    }
+    let total_new_lines = result_lines.len();
 
     let mut new_content = String::with_capacity(spliced_bytes);
     for (i, line) in result_lines.iter().enumerate() {
@@ -400,7 +411,9 @@ pub fn apply_edits(content: &str, ops: &[HashlineOp], scheme: Scheme) -> ApplyRe
 
     // Sort edit regions top-down and merge nearby ones.
     edit_regions.sort_by_key(|r| r.0);
-    let snippet = build_snippet(&new_content, &edit_regions, total_new_lines, scheme);
+    // The splice result *is* the post-edit line vector, so the snippet is
+    // anchored straight off it — no second split of the new content.
+    let snippet = build_snippet(result_lines, &edit_regions, total_new_lines, scheme);
     let snippet_start_line = edit_regions
         .first()
         .map_or(1, |r| r.0.saturating_sub(SNIPPET_CONTEXT) + 1);
@@ -429,7 +442,7 @@ const MAX_CONTIGUOUS_SNIPPET: usize = 80;
 /// returns a single contiguous snippet. Otherwise, returns per-edit-region
 /// snippets separated by gap markers.
 fn build_snippet(
-    new_content: &str,
+    new_lines: Vec<&str>,
     edit_regions: &[(usize, usize)],
     total_new_lines: usize,
     scheme: Scheme,
@@ -444,7 +457,8 @@ fn build_snippet(
     // If the span is small enough, emit one contiguous snippet.
     if global_end - global_start <= MAX_CONTIGUOUS_SNIPPET {
         let region = global_start..global_end;
-        let index = snippet_index(new_content, std::slice::from_ref(&region), scheme);
+        let spans = snippet_spans(std::slice::from_ref(&region), scheme);
+        let index = FileIndex::from_lines_partial(new_lines, &spans);
         let mut out = String::new();
         render_region(&index, scheme, region, &mut out);
         return out;
@@ -466,7 +480,7 @@ fn build_snippet(
 
     // One index for every region: each is hashed once, none of the file
     // between them is hashed at all.
-    let index = snippet_index(new_content, &merged, scheme);
+    let index = FileIndex::from_lines_partial(new_lines, &snippet_spans(&merged, scheme));
 
     // Build per-region snippets separated by gap markers. Parts are joined
     // with '\n', including empty ones from regions that clamp away.
@@ -1585,6 +1599,95 @@ mod tests {
                 // And it over-reserves by exactly the terminator bytes the join
                 // drops — never more.
                 assert_eq!(reserved - produced.len(), content.len() - joined.len());
+            }
+        }
+    }
+
+    /// Assert every rendered snippet line is byte-identical to what the read
+    /// path produces for that absolute line number.
+    ///
+    /// The read path splits `new_content` itself, so this is a direct
+    /// differential check of `from_lines_partial`'s precondition: if the
+    /// spliced line vector ever diverged from `split_lines(new_content)`, the
+    /// anchors or line numbers here would disagree.
+    fn assert_snippet_matches_read_path(new_content: &str, snippet: &str, scheme: Scheme) {
+        let mut checked = 0usize;
+        for line in snippet.lines().filter(|l| !l.starts_with("... ")) {
+            let anchor_part = line.split('\u{2192}').next().expect("anchor prefix");
+            let line_no: usize = anchor_part
+                .split(':')
+                .next()
+                .expect("line number")
+                .parse()
+                .expect("numeric line");
+            let expected =
+                crate::read::format_hashline_content(new_content, Some(line_no), Some(1), scheme);
+            assert_eq!(line, expected, "snippet line {line_no}");
+            checked += 1;
+        }
+        assert!(checked > 0, "no snippet lines checked");
+    }
+
+    /// The spliced line vector must equal `split_lines(new_content)` for every
+    /// op shape, with and without a trailing newline — otherwise adopting it as
+    /// the snippet index would misnumber anchors.
+    #[test]
+    fn spliced_lines_match_a_fresh_split_of_the_new_content() {
+        for &trailing in &[true, false] {
+            for seed in 0..4u32 {
+                let mut content = corpus(120, 0x5911_0000 + seed, trailing);
+                if !trailing && content.ends_with('\n') {
+                    content.pop();
+                }
+                let total = FileIndex::new(&content).len();
+
+                for s in [scheme(), content_only(), checkpoint()] {
+                    let single = vec![replace(&anchor_for(&content, 40, s), "SINGLE")];
+                    let multiline = vec![replace(&anchor_for(&content, 40, s), "ONE\nTWO\nTHREE")];
+                    let range = vec![HashlineOp::Replace {
+                        anchor: anchor_for(&content, 30, s),
+                        end_anchor: Some(anchor_for(&content, 36, s)),
+                        content: "COLLAPSED".to_owned(),
+                    }];
+                    let delete = vec![replace(&anchor_for(&content, 50, s), "")];
+                    let insert = vec![HashlineOp::InsertAfter {
+                        anchor: anchor_for(&content, 20, s),
+                        content: "INSERTED\nLINES".to_owned(),
+                    }];
+                    let batch = vec![
+                        replace(&anchor_for(&content, 10, s), "B1"),
+                        replace(&anchor_for(&content, 60, s), "B2\nB2b"),
+                        HashlineOp::InsertAfter {
+                            anchor: anchor_for(&content, 100, s),
+                            content: "B3".to_owned(),
+                        },
+                    ];
+                    let eof = vec![HashlineOp::InsertAfter {
+                        anchor: "EOF".to_owned(),
+                        content: "TAIL".to_owned(),
+                    }];
+                    let bof = vec![HashlineOp::InsertAfter {
+                        anchor: "0:".to_owned(),
+                        content: "HEAD".to_owned(),
+                    }];
+                    let delete_all = vec![HashlineOp::Replace {
+                        anchor: anchor_for(&content, 1, s),
+                        end_anchor: Some(anchor_for(&content, total, s)),
+                        content: String::new(),
+                    }];
+
+                    for ops in [
+                        single, multiline, range, delete, insert, batch, eof, bof, delete_all,
+                    ] {
+                        let result = apply_edits(&content, &ops, s);
+                        let applied = expect_applied(&result);
+                        let new_content = result.new_content.as_deref().expect("applied");
+
+                        // The snippet's own line numbering is the observable
+                        // consequence of the precondition holding.
+                        assert_snippet_matches_read_path(new_content, &applied.snippet, s);
+                    }
+                }
             }
         }
     }
