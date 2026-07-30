@@ -11,9 +11,11 @@
 //! `LINE:ANCHOR-CONTENT` for context lines (grep-style separators).
 //!
 //! Only the lines that are actually rendered (matches plus their context) are
-//! anchored: spans are merged first and [`Scheme::anchors_for_range`] is called
-//! per span, so a single match in a 100,000-line file costs a handful of
-//! anchors rather than a full-file sweep.
+//! hashed and anchored: the windows are merged first, expanded to the blocks
+//! the scheme's contextual fingerprints fold over, and fed to
+//! [`FileIndex::new_partial`], then [`Scheme::anchors_for_range`] runs per
+//! window. A single match in a 100,000-line file therefore costs one pass of
+//! line splitting plus a handful of line hashes, not a whole-file sweep.
 
 use std::io;
 use std::ops::Range;
@@ -176,20 +178,20 @@ fn match_lines(
 /// Merge each match's `±context` window into a minimal set of ascending,
 /// non-adjacent 0-based line spans.
 ///
+/// Windows are unbounded above: the file's line count is only known once the
+/// index has split it, so the caller trims the spans afterwards. Trimming
+/// cannot change how they merge, because every match line is below the line
+/// count and therefore below any window end that trimming would shorten.
+///
 /// Adjacent windows are merged as well as overlapping ones, so the gap between
 /// two returned spans is always at least one unrendered line — exactly where a
 /// `--` marker belongs.
-fn included_spans(
-    match_lines: &[usize],
-    before: usize,
-    after: usize,
-    line_count: usize,
-) -> Vec<Range<usize>> {
+fn included_spans(match_lines: &[usize], before: usize, after: usize) -> Vec<Range<usize>> {
     let mut spans: Vec<Range<usize>> = Vec::new();
     for &line_no in match_lines {
         let idx = line_no - 1;
         let start = idx.saturating_sub(before);
-        let end = idx.saturating_add(after).saturating_add(1).min(line_count);
+        let end = idx.saturating_add(after).saturating_add(1);
         match spans.last_mut() {
             Some(last) if start <= last.end => last.end = last.end.max(end),
             _ => spans.push(start..end),
@@ -217,9 +219,20 @@ fn search_file(
         return None;
     }
 
-    // Anchors are generated from the same FileIndex view hashline_read and
+    // The rendered windows decide how much of the file needs hashing: each one
+    // is expanded to the blocks its scheme's contextual fingerprints fold over,
+    // and nothing else is hashed. That is what keeps a single match in a
+    // 50,000-line file from paying for 50,000 line hashes. `usize::MAX` stands
+    // in for the not-yet-known line count — both `required_hash_span` and
+    // `new_partial` clamp to the real file, so the result is exact.
+    let mut spans = included_spans(&matched, before, after);
+    let hash_spans: Vec<Range<usize>> = spans
+        .iter()
+        .map(|span| scheme.required_hash_span(span.clone(), usize::MAX))
+        .collect();
+    // Anchors still come from the same FileIndex view hashline_read and
     // hashline_edit use, so a grep anchor can be passed straight to an edit.
-    let index = FileIndex::new(&content);
+    let index = FileIndex::new_partial(&content, &hash_spans);
     // `FileIndex` appends the synthetic trailing empty line hashline's 1-based
     // numbering needs; grep numbers lines like `str::lines()` and never renders
     // that line, so searchable lines stop one short of the index for content
@@ -229,8 +242,13 @@ fn search_file(
     } else {
         index.len()
     };
+    // Trim the windows now that the line count is known. Each span keeps at
+    // least its match line, and the hashed blocks computed above cover a
+    // superset of what is left.
+    for span in &mut spans {
+        span.end = span.end.min(line_count);
+    }
 
-    let spans = included_spans(&matched, before, after, line_count);
     let rendered_lines: usize = spans.iter().map(Range::len).sum();
     let avg_line_bytes = content.len() / line_count.max(1);
     let mut body = String::with_capacity(
@@ -801,10 +819,92 @@ mod tests {
     fn context_windows_merge_into_minimal_spans() {
         // Overlapping and merely adjacent windows both collapse, so a `--`
         // marker is only ever emitted across a genuinely skipped line.
-        assert_eq!(included_spans(&[5], 2, 2, 100), vec![2..7]);
-        assert_eq!(included_spans(&[5, 7], 1, 1, 100), vec![3..8]);
-        assert_eq!(included_spans(&[1, 3], 0, 1, 100), vec![0..4]);
-        assert_eq!(included_spans(&[1, 5], 0, 0, 100), vec![0..1, 4..5]);
-        assert_eq!(included_spans(&[1], 5, 5, 3), vec![0..3]);
+        assert_eq!(included_spans(&[5], 2, 2), vec![2..7]);
+        assert_eq!(included_spans(&[5, 7], 1, 1), vec![3..8]);
+        assert_eq!(included_spans(&[1, 3], 0, 1), vec![0..4]);
+        assert_eq!(included_spans(&[1, 5], 0, 0), vec![0..1, 4..5]);
+        // Windows are unbounded above; `search_file` trims them to the file.
+        assert_eq!(included_spans(&[1], 5, 5), vec![0..6]);
+    }
+
+    #[test]
+    fn context_past_end_of_file_renders_no_phantom_line() {
+        // The trailing context of a match on the last line runs past EOF, and
+        // `FileIndex` carries a synthetic trailing empty line beyond that.
+        // Neither may be rendered.
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("tail.txt"), "alpha\nbeta\nlast target\n").unwrap();
+
+        let mut inp = input("target");
+        inp.context = Some(4);
+        let outcome = run_grep(&ws(tmp.path()), &inp, scheme());
+        assert!(!outcome.is_error, "{}", outcome.text);
+        let numbered: Vec<&str> = outcome
+            .text
+            .lines()
+            .filter(|l| {
+                l.split_once(':')
+                    .is_some_and(|(n, _)| n.parse::<u32>().is_ok())
+            })
+            .collect();
+        assert_eq!(numbered.len(), 3, "{numbered:?}");
+        assert!(numbered[2].ends_with("last target"), "{:?}", numbered[2]);
+    }
+
+    #[test]
+    fn partial_index_anchors_match_full_index_anchors() {
+        // Grep hashes only the blocks its rendered windows need. Every anchor
+        // it emits must still be identical to the one a whole-file index
+        // produces, for every scheme shape — otherwise grep → edit breaks.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut content = String::new();
+        for i in 0..200usize {
+            if i % 17 == 3 {
+                content.push_str(&format!("    let target_{i} = compute();\n"));
+            } else {
+                content.push_str(&format!("    let filler_{i} = other({i});\n"));
+            }
+        }
+        std::fs::write(tmp.path().join("m.rs"), &content).unwrap();
+
+        let full = FileIndex::new(&content);
+        for candidate in [
+            Scheme::content_only(3),
+            Scheme::chunk(3, 16),
+            Scheme::chunk(4, 7),
+            Scheme::checkpoint(3, 32),
+            Scheme::checkpoint(2, 5),
+        ] {
+            for context in [0usize, 3] {
+                let mut inp = input("target_");
+                inp.context = Some(context);
+                let outcome = run_grep(&ws(tmp.path()), &inp, candidate);
+                assert!(!outcome.is_error, "{}", outcome.text);
+
+                let mut checked = 0usize;
+                for line in outcome.text.lines() {
+                    // Section headers, gap markers and the summary carry no
+                    // leading line number.
+                    let Some((number, _)) = line.split_once(':') else {
+                        continue;
+                    };
+                    let Ok(line_no) = number.parse::<usize>() else {
+                        continue;
+                    };
+                    let mut want = String::new();
+                    candidate
+                        .anchor_at(&full, line_no - 1)
+                        .expect("line within file")
+                        .render_into(&mut want);
+                    assert!(
+                        line.starts_with(&want),
+                        "scheme={candidate:?} context={context} line={line:?} \
+                         expected anchor prefix {want:?}"
+                    );
+                    checked += 1;
+                }
+                assert!(checked > 0, "scheme={candidate:?} rendered no anchors");
+            }
+        }
     }
 }
