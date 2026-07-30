@@ -485,6 +485,7 @@ pub fn encode_hash(hash: u32, len: usize) -> EncodedHash {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testutil::Xorshift32;
 
     /// The pre-`EncodedHash` letter encoding, kept as a differential reference:
     /// the compact encoding must stay byte-identical to it.
@@ -611,6 +612,179 @@ mod tests {
             divergences > 0,
             "the guard must be load-bearing, but no refused input actually diverged"
         );
+    }
+
+    /// Adversarial fixtures: the bytes and characters most likely to make a
+    /// segment scanner diverge from the byte-at-a-time definition.
+    ///
+    /// Vertical tab is the sharp one. `char::is_whitespace` counts U+000B, so
+    /// `str::trim` strips it from the ends, but `u8::is_ascii_whitespace` does
+    /// *not*, so an interior one must survive as a literal byte rather than
+    /// collapsing into a space. Interior multi-byte whitespace (NBSP,
+    /// ideographic space) is the same story one level up: no byte of it is
+    /// ASCII whitespace, so it must be copied through untouched.
+    #[test]
+    fn normalizers_agree_on_adversarial_fixtures() {
+        let fixtures = [
+            "",
+            " ",
+            "\x0B",
+            "\x0C",
+            "\r",
+            "\n",
+            "a\x0Bb",
+            "a \x0B b",
+            "\x0Ba\x0B",
+            "a\x0Cb",
+            "a \x0C b",
+            "a\rb",
+            "a\r\nb",
+            "trailing\r",
+            "\ttabbed\tline\t",
+            "mixed \t \r \t spacing",
+            "a\u{00A0}b",
+            "a \u{00A0} b",
+            "\u{00A0}leading nbsp",
+            "a\u{3000}b",
+            "\u{3000}",
+            "héllo wörld",
+            "漢字 と かな",
+            "emoji \u{1F600} between",
+            "a\u{0085}b",
+            "a\u{2028}b",
+            "\u{feff}bom prefixed",
+        ];
+
+        for fixture in fixtures {
+            // The reference and the fused pass always agree.
+            assert_eq!(
+                fused_fnv(fixture),
+                fnv1a_32(&branchy(fixture)),
+                "fixture {fixture:?}"
+            );
+            // The segment scan agrees exactly where the guard permits it.
+            if lines_segment_scannable(&[fixture]) {
+                assert_eq!(segments(fixture), branchy(fixture), "fixture {fixture:?}");
+            }
+            // And the shipped hasher agrees with the conservative one either
+            // way, which is the property that actually ships.
+            assert_eq!(
+                LineHasher::for_lines(&[fixture]).hash(fixture),
+                line_hash(fixture),
+                "fixture {fixture:?}"
+            );
+        }
+    }
+
+    /// Randomized equivalence over an alphabet built to hit every branch:
+    /// ASCII whitespace (including the two the segment scan cannot see), the
+    /// vertical tab that looks like whitespace but is not ASCII whitespace,
+    /// ordinary content, and multi-byte characters.
+    #[test]
+    fn normalizers_agree_on_random_corpora() {
+        const ALPHABET: &[char] = &[
+            'a',
+            'b',
+            'Z',
+            '9',
+            '_',
+            ';',
+            ' ',
+            ' ',
+            ' ',
+            '\t',
+            '\r',
+            '\n',
+            '\x0B',
+            '\x0C',
+            '\u{00A0}',
+            '\u{3000}',
+            'é',
+            '漢',
+            '\u{1F600}',
+        ];
+
+        let mut rng = Xorshift32::new(0x9E37_79B9);
+        let (mut scanned, mut refused, mut would_diverge) = (0usize, 0usize, 0usize);
+        for case in 0..20_000u32 {
+            let len = (rng.next_range(12) + 1) as usize;
+            let line: String = (0..len)
+                .map(|_| ALPHABET[rng.next_range(ALPHABET.len() as u32) as usize])
+                .collect();
+
+            assert_eq!(
+                fused_fnv(&line),
+                fnv1a_32(&branchy(&line)),
+                "case {case} line {line:?}"
+            );
+            if lines_segment_scannable(&[line.as_str()]) {
+                scanned += 1;
+                assert_eq!(segments(&line), branchy(&line), "case {case} line {line:?}");
+            } else {
+                refused += 1;
+                if segments(&line) != branchy(&line) {
+                    would_diverge += 1;
+                }
+            }
+            assert_eq!(
+                LineHasher::for_lines(&[line.as_str()]).hash(&line),
+                line_hash(&line),
+                "case {case} line {line:?}"
+            );
+        }
+
+        // A randomized test that never reached a branch would prove nothing
+        // about it, so pin that both were exercised — and that the refused
+        // ones really are the dangerous ones.
+        assert!(scanned > 1_000, "fast path barely exercised ({scanned})");
+        assert!(refused > 1_000, "guarded path barely exercised ({refused})");
+        assert!(
+            would_diverge > 100,
+            "the guard must be load-bearing, but only {would_diverge} refused \
+             inputs would actually have diverged"
+        );
+    }
+
+    /// The same randomized sweep, but through a whole buffer: lines split from
+    /// random multi-line content must hash identically whether they go through
+    /// the content-narrowed hasher or the conservative one.
+    #[test]
+    fn content_hasher_agrees_on_random_multi_line_corpora() {
+        const ALPHABET: &[char] = &[
+            'a', 'b', ';', ' ', ' ', '\t', '\r', '\n', '\n', '\x0B', '\x0C', '\u{00A0}', 'é',
+        ];
+
+        let mut rng = Xorshift32::new(0x1234_5678);
+        let (mut with_form_feed, mut without) = (0usize, 0usize);
+        for case in 0..2_000u32 {
+            let len = (rng.next_range(60) + 1) as usize;
+            let content: String = (0..len)
+                .map(|_| ALPHABET[rng.next_range(ALPHABET.len() as u32) as usize])
+                .collect();
+
+            if content.contains('\x0C') {
+                with_form_feed += 1;
+            } else {
+                without += 1;
+            }
+
+            let mut hasher = LineHasher::for_content(&content);
+            for line in crate::index::split_lines(&content) {
+                assert_eq!(
+                    hasher.hash(line),
+                    line_hash(line),
+                    "case {case} content {content:?} line {line:?}"
+                );
+            }
+        }
+
+        // Both whole-buffer verdicts must actually occur, or the content scan
+        // is only being tested in one direction.
+        assert!(
+            with_form_feed > 100,
+            "no form-feed buffers ({with_form_feed})"
+        );
+        assert!(without > 100, "no clean buffers ({without})");
     }
 
     /// A hasher narrowed by the content scan must agree line for line with the
