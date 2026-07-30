@@ -202,6 +202,45 @@ impl Scheme {
         }
     }
 
+    /// The line range that must be hashed to anchor the 0-based line window
+    /// `target` in a file of `len` lines.
+    ///
+    /// Anchors carry a contextual fingerprint spanning more lines than they
+    /// render, so a window's anchors need the surrounding block: chunk anchors
+    /// need every chunk the window touches, checkpoint anchors need everything
+    /// back to the preceding checkpoint boundary, and content-only anchors need
+    /// nothing but the window itself. Feed the result to
+    /// [`crate::index::FileIndex::new_partial`] to hash exactly that much.
+    ///
+    /// The result is clamped to `len`, and an empty or reversed `target` yields
+    /// an empty range — nothing is rendered, so nothing needs hashing.
+    pub fn required_hash_span(&self, target: Range<usize>, len: usize) -> Range<usize> {
+        let start = target.start.min(len);
+        let end = target.end.min(len);
+        if start >= end {
+            return start..start;
+        }
+        match *self {
+            Self::ContentOnly { .. } => start..end,
+            Self::Chunk { chunk_size, .. } => {
+                let floor = (start / chunk_size) * chunk_size;
+                // The window's last line needs its whole chunk, which ends at
+                // the next chunk boundary at or after `end`.
+                let ceil = end.div_ceil(chunk_size).saturating_mul(chunk_size);
+                floor..ceil.min(len)
+            }
+            Self::Checkpoint {
+                checkpoint_interval,
+                ..
+            } => {
+                // A checkpoint chain folds forward from its boundary up to the
+                // line itself, so nothing past the window is needed.
+                let floor = (start / checkpoint_interval) * checkpoint_interval;
+                floor..end
+            }
+        }
+    }
+
     /// Validate a parsed anchor against the indexed file content.
     pub fn validate(&self, anchor: &ParsedAnchor, index: &FileIndex<'_>) -> ValidationResult {
         let Some(idx) = anchor.line.checked_sub(1) else {
@@ -551,7 +590,7 @@ pub enum ShiftResult {
 mod tests {
     use super::*;
     use crate::index::split_lines;
-    use crate::testutil::corpus;
+    use crate::testutil::{Xorshift32, corpus};
 
     fn sample_lines() -> Vec<&'static str> {
         vec![
@@ -935,6 +974,138 @@ mod tests {
             // A reversed range yields nothing rather than panicking.
             let (start, end) = (3usize, 1usize);
             assert_eq!(scheme.anchors_for_range(&index, start..end).count(), 0);
+        }
+    }
+
+    #[test]
+    fn required_hash_span_covers_the_scheme_block() {
+        // Content-only anchors need nothing but the window.
+        let content_only = Scheme::content_only(3);
+        assert_eq!(content_only.required_hash_span(10..20, 100), 10..20usize);
+        assert_eq!(content_only.required_hash_span(10..500, 100), 10..100usize);
+
+        // Chunk anchors need every chunk the window touches, both ends.
+        let chunk = Scheme::chunk(3, 16);
+        assert_eq!(chunk.required_hash_span(0..1, 100), 0..16usize);
+        assert_eq!(chunk.required_hash_span(15..17, 100), 0..32usize);
+        assert_eq!(chunk.required_hash_span(16..32, 100), 16..32usize);
+        assert_eq!(chunk.required_hash_span(17..31, 100), 16..32usize);
+        // Boundary-exact windows do not pull in the next chunk.
+        assert_eq!(chunk.required_hash_span(32..48, 100), 32..48usize);
+        // The final short chunk clamps to the file.
+        assert_eq!(chunk.required_hash_span(95..100, 100), 80..100usize);
+        assert_eq!(chunk.required_hash_span(95..usize::MAX, 100), 80..100usize);
+
+        // Checkpoint chains fold forward from their boundary only.
+        let checkpoint = Scheme::checkpoint(3, 32);
+        assert_eq!(checkpoint.required_hash_span(40..50, 100), 32..50usize);
+        assert_eq!(checkpoint.required_hash_span(32..33, 100), 32..33usize);
+        assert_eq!(checkpoint.required_hash_span(40..500, 100), 32..100usize);
+
+        // Empty, reversed, and out-of-file windows need no hashing at all.
+        let (reversed_start, reversed_end) = (30usize, 10usize);
+        for scheme in [content_only, chunk, checkpoint] {
+            assert!(scheme.required_hash_span(20..20, 100).is_empty());
+            assert!(
+                scheme
+                    .required_hash_span(reversed_start..reversed_end, 100)
+                    .is_empty()
+            );
+            assert!(scheme.required_hash_span(200..300, 100).is_empty());
+            assert!(scheme.required_hash_span(0..10, 0).is_empty());
+        }
+    }
+
+    #[test]
+    fn partial_index_anchors_match_full_index() {
+        // The partial-index gate: anchors generated from an index that hashed
+        // only `required_hash_span(window)` must be identical to the ones a
+        // fully hashed index produces for the same window — at chunk and
+        // checkpoint boundaries, one line off them, and at EOF.
+        let mut rng = Xorshift32::new(0x9E37_79B9);
+        for block in [1usize, 4, 16, 32] {
+            for seed in 0..6u32 {
+                for &trailing_newline in &[true, false] {
+                    let content = corpus(140, 0x2A00_0000_u32.wrapping_add(seed), trailing_newline);
+                    let full = FileIndex::new(&content);
+                    let total = full.len();
+
+                    let mut starts = vec![
+                        0,
+                        1,
+                        block.saturating_sub(1),
+                        block,
+                        block + 1,
+                        2 * block,
+                        2 * block + 1,
+                        total / 2,
+                        total.saturating_sub(1),
+                        total,
+                    ];
+                    // Random starts widen the boundary-focused fixed set.
+                    starts.extend((0..4).map(|_| rng.next_range(total as u32 + 1) as usize));
+
+                    for scheme in [
+                        Scheme::content_only(3),
+                        Scheme::chunk(3, block),
+                        Scheme::checkpoint(3, block),
+                    ] {
+                        for start in starts.iter().copied() {
+                            for len in [0usize, 1, block, block + 1, 37, total] {
+                                let window = start..start.saturating_add(len);
+                                let span = scheme.required_hash_span(window.clone(), total);
+                                let partial = FileIndex::new_partial(&content, &[span]);
+                                assert_eq!(partial.len(), total);
+
+                                let expected: Vec<Anchor> =
+                                    scheme.anchors_for_range(&full, window.clone()).collect();
+                                let actual: Vec<Anchor> =
+                                    scheme.anchors_for_range(&partial, window.clone()).collect();
+                                assert_eq!(
+                                    actual,
+                                    expected,
+                                    "scheme {} block {block} seed {seed} \
+                                     trailing_newline {trailing_newline} window {start}..{}",
+                                    scheme.name(),
+                                    window.end
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn partial_index_anchors_match_full_index_on_short_and_empty_files() {
+        // 10 content lines + the synthetic trailing line = 11, so a block of 4
+        // leaves a 3-line final block — the case a naive span overruns.
+        let short: String = (0..10).map(|i| format!("line {i}\n")).collect();
+        for (label, content) in [("short_final_block", short.as_str()), ("empty", "")] {
+            let full = FileIndex::new(content);
+            let total = full.len();
+            for scheme in [
+                Scheme::content_only(3),
+                Scheme::chunk(3, 4),
+                Scheme::checkpoint(3, 4),
+            ] {
+                for start in 0..=total {
+                    for end in start..=total + 2 {
+                        let window = start..end;
+                        let span = scheme.required_hash_span(window.clone(), total);
+                        let partial = FileIndex::new_partial(content, &[span]);
+                        assert_eq!(
+                            scheme
+                                .anchors_for_range(&partial, window.clone())
+                                .collect::<Vec<_>>(),
+                            scheme.anchors_for_range(&full, window).collect::<Vec<_>>(),
+                            "{label}: scheme {} window {start}..{end}",
+                            scheme.name()
+                        );
+                    }
+                }
+            }
         }
     }
 
