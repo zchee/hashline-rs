@@ -2,13 +2,11 @@
 //!
 //! Output format: `ANCHOR→CONTENT` (e.g. `22:abc:rst→  let x = 1;`).
 
-use std::path::Path;
-
 use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::scheme::{AnchorScheme, split_lines};
-use crate::util::{ToolOutcome, resolve_path};
+use crate::util::{ToolOutcome, Workspace};
 
 /// Maximum number of lines returned by a single read.
 pub const MAX_LINES_READ: usize = 2000;
@@ -71,7 +69,7 @@ pub fn format_hashline_content(
 
 /// Execute a `hashline_read` request against the local filesystem.
 pub async fn run_read(
-    root: &Path,
+    workspace: &Workspace,
     input: &HashlineReadInput,
     scheme: &dyn AnchorScheme,
 ) -> ToolOutcome {
@@ -84,7 +82,10 @@ pub async fn run_read(
         return ToolOutcome::error("limit must be greater than 0.".to_owned());
     }
 
-    let path = resolve_path(root, &input.path);
+    let path = match workspace.resolve(&input.path) {
+        Ok(path) => path,
+        Err(reason) => return ToolOutcome::error(reason),
+    };
     let bytes = match tokio::fs::read(&path).await {
         Ok(bytes) => bytes,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -140,6 +141,10 @@ mod tests {
 
     fn scheme() -> Box<dyn AnchorScheme> {
         SchemeConfig::default().build_scheme().unwrap()
+    }
+
+    fn ws(root: &std::path::Path) -> Workspace {
+        Workspace::new(root.to_path_buf(), false)
     }
 
     #[test]
@@ -224,7 +229,7 @@ mod tests {
             offset: None,
             limit: None,
         };
-        let outcome = run_read(tmp.path(), &input, &*scheme()).await;
+        let outcome = run_read(&ws(tmp.path()), &input, &*scheme()).await;
         assert!(!outcome.is_error);
         assert!(outcome.text.contains('→'));
         assert!(outcome.text.contains("fn main()"));
@@ -238,7 +243,7 @@ mod tests {
             offset: None,
             limit: None,
         };
-        let outcome = run_read(tmp.path(), &input, &*scheme()).await;
+        let outcome = run_read(&ws(tmp.path()), &input, &*scheme()).await;
         assert!(outcome.is_error);
         assert!(outcome.text.contains("File not found"));
     }
@@ -252,7 +257,7 @@ mod tests {
             offset: None,
             limit: None,
         };
-        let outcome = run_read(tmp.path(), &input, &*scheme()).await;
+        let outcome = run_read(&ws(tmp.path()), &input, &*scheme()).await;
         assert!(!outcome.is_error);
         assert!(outcome.text.contains("exists but is empty"));
     }
@@ -266,7 +271,7 @@ mod tests {
             offset: None,
             limit: None,
         };
-        let outcome = run_read(tmp.path(), &input, &*scheme()).await;
+        let outcome = run_read(&ws(tmp.path()), &input, &*scheme()).await;
         assert!(outcome.is_error);
         assert!(outcome.text.contains("binary"));
     }
@@ -282,7 +287,7 @@ mod tests {
             offset: Some(10),
             limit: Some(5),
         };
-        let outcome = run_read(tmp.path(), &input, &*scheme()).await;
+        let outcome = run_read(&ws(tmp.path()), &input, &*scheme()).await;
         assert!(!outcome.is_error);
         assert!(
             outcome.text.contains("Showing lines 10-14 of 51"),
@@ -301,7 +306,7 @@ mod tests {
             offset: Some(100),
             limit: None,
         };
-        let outcome = run_read(tmp.path(), &input, &*scheme()).await;
+        let outcome = run_read(&ws(tmp.path()), &input, &*scheme()).await;
         assert!(outcome.is_error);
         assert!(outcome.text.contains("beyond the end"));
     }

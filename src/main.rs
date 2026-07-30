@@ -33,6 +33,11 @@ struct Cli {
     /// Checkpoint interval for the checkpoint scheme.
     #[arg(long, env = "HASHLINE_CHECKPOINT_INTERVAL", default_value_t = 32, value_parser = clap::value_parser!(u16).range(1..))]
     checkpoint_interval: u16,
+
+    /// Confine all tool paths to the workspace root (reject absolute paths
+    /// and symlinks escaping it).
+    #[arg(long, env = "HASHLINE_RESTRICT")]
+    restrict: bool,
 }
 
 #[tokio::main]
@@ -49,6 +54,10 @@ async fn main() -> anyhow::Result<()> {
 
     let cli = Cli::parse();
 
+    // A root given via --root or HASHLINE_ROOT is pinned; otherwise the CWD
+    // is only a fallback that a client advertising the MCP roots capability
+    // may replace after initialization.
+    let explicit_root = cli.root.is_some();
     let root = match cli.root {
         Some(root) => root,
         None => std::env::current_dir().context("failed to determine current directory")?,
@@ -57,6 +66,17 @@ async fn main() -> anyhow::Result<()> {
         .canonicalize()
         .with_context(|| format!("workspace root does not exist: {}", root.display()))?;
 
+    if !explicit_root {
+        let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+        if root == std::path::Path::new("/") || home.as_deref() == Some(&root) {
+            tracing::warn!(
+                root = %root.display(),
+                "no --root/HASHLINE_ROOT given and the fallback CWD looks wrong; \
+                 relative paths may misresolve unless the client provides MCP roots"
+            );
+        }
+    }
+
     let config = SchemeConfig {
         kind: cli.scheme,
         hash_len: usize::from(cli.hash_len),
@@ -64,10 +84,14 @@ async fn main() -> anyhow::Result<()> {
         checkpoint_interval: usize::from(cli.checkpoint_interval),
     };
 
-    let server =
-        HashlineServer::new(root.clone(), config).context("invalid scheme configuration")?;
+    let server = HashlineServer::new(root.clone(), config)
+        .context("invalid scheme configuration")?
+        .with_root_pinned(explicit_root)
+        .with_restrict(cli.restrict);
     tracing::info!(
         root = %root.display(),
+        root_pinned = explicit_root,
+        restrict = cli.restrict,
         scheme = ?config.kind,
         hash_len = config.hash_len,
         "starting hashline MCP server on stdio"

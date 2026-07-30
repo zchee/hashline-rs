@@ -37,14 +37,30 @@ cargo install --path .
 ## Usage
 
 ```console
-hashline-mcp [--root <DIR>] [--scheme chunk|content_only|checkpoint]
+hashline-mcp [--root <DIR>] [--restrict] [--scheme chunk|content_only|checkpoint]
              [--hash-len 1..4] [--chunk-size N] [--checkpoint-interval N]
 ```
 
 All flags are also available as environment variables (`HASHLINE_ROOT`,
-`HASHLINE_SCHEME`, `HASHLINE_HASH_LEN`, `HASHLINE_CHUNK_SIZE`,
-`HASHLINE_CHECKPOINT_INTERVAL`). The server speaks MCP over stdio; logs go to
-stderr (`RUST_LOG` controls verbosity).
+`HASHLINE_RESTRICT`, `HASHLINE_SCHEME`, `HASHLINE_HASH_LEN`,
+`HASHLINE_CHUNK_SIZE`, `HASHLINE_CHECKPOINT_INTERVAL`). The server speaks MCP
+over stdio; logs go to stderr (`RUST_LOG` controls verbosity).
+
+### Workspace root resolution
+
+Relative paths resolve against the workspace root, chosen as follows:
+
+1. `--root` / `HASHLINE_ROOT` — explicit and **pinned**: never changes.
+2. Otherwise, if the client advertises the MCP `roots` capability, the first
+   usable `file://` root from `roots/list` is adopted after initialization
+   (and re-queried on `notifications/roots/list_changed`).
+3. Otherwise the process CWD at launch — fine for project-scoped
+   registrations that launch in the project directory, but a warning is
+   logged when it looks wrong (`/` or `$HOME`).
+
+`--restrict` confines every tool path to the workspace root: absolute paths
+outside it, `..` components, and symlink escapes are rejected. It is off by
+default to match the reference implementation's behavior.
 
 Register with Claude Code:
 

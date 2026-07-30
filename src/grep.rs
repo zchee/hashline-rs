@@ -17,7 +17,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::scheme::{AnchorScheme, split_lines};
-use crate::util::{ToolOutcome, resolve_path};
+use crate::util::{ToolOutcome, Workspace};
 
 /// Default cap on reported match lines.
 pub const DEFAULT_MAX_MATCHES: usize = 200;
@@ -190,7 +190,11 @@ fn assemble_output(hits: &[FileHit], max_matches: usize) -> String {
 ///
 /// This is a blocking function — call it via `spawn_blocking` from async
 /// contexts.
-pub fn run_grep(root: &Path, input: &HashlineGrepInput, scheme: &dyn AnchorScheme) -> ToolOutcome {
+pub fn run_grep(
+    workspace: &Workspace,
+    input: &HashlineGrepInput,
+    scheme: &dyn AnchorScheme,
+) -> ToolOutcome {
     let re = match RegexBuilder::new(&input.pattern)
         .case_insensitive(input.ignore_case.unwrap_or(false))
         .build()
@@ -210,7 +214,10 @@ pub fn run_grep(root: &Path, input: &HashlineGrepInput, scheme: &dyn AnchorSchem
     };
     let max_matches = input.max_matches.unwrap_or(DEFAULT_MAX_MATCHES).max(1);
 
-    let search_root = resolve_path(root, input.path.as_deref().unwrap_or("."));
+    let search_root = match workspace.resolve(input.path.as_deref().unwrap_or(".")) {
+        Ok(path) => path,
+        Err(reason) => return ToolOutcome::error(reason),
+    };
     let meta = match std::fs::metadata(&search_root) {
         Ok(m) => m,
         Err(_) => {
@@ -296,6 +303,10 @@ mod tests {
         SchemeConfig::default().build_scheme().unwrap()
     }
 
+    fn ws(root: &Path) -> Workspace {
+        Workspace::new(root.to_path_buf(), false)
+    }
+
     fn input(pattern: &str) -> HashlineGrepInput {
         HashlineGrepInput {
             pattern: pattern.to_owned(),
@@ -314,7 +325,7 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         std::fs::write(tmp.path().join("a.rs"), "fn alpha() {}\nfn beta() {}\n").unwrap();
 
-        let outcome = run_grep(tmp.path(), &input("beta"), &*scheme());
+        let outcome = run_grep(&ws(tmp.path()), &input("beta"), &*scheme());
         assert!(!outcome.is_error);
         assert!(outcome.text.contains("a.rs"), "{}", outcome.text);
         // Match line: LINE:LOCAL:CTX:CONTENT — 3 colons before content.
@@ -335,7 +346,7 @@ mod tests {
 
         let mut inp = input("three");
         inp.context = Some(1);
-        let outcome = run_grep(tmp.path(), &inp, &*scheme());
+        let outcome = run_grep(&ws(tmp.path()), &inp, &*scheme());
         let ctx_line = outcome.text.lines().find(|l| l.contains("two")).unwrap();
         assert!(ctx_line.starts_with("2:"), "{ctx_line}");
         // Context separator is '-' right before content.
@@ -358,7 +369,7 @@ mod tests {
             .collect();
         std::fs::write(tmp.path().join("g.txt"), &content).unwrap();
 
-        let outcome = run_grep(tmp.path(), &input("NEEDLE"), &*scheme());
+        let outcome = run_grep(&ws(tmp.path()), &input("NEEDLE"), &*scheme());
         assert!(outcome.text.contains("--"), "{}", outcome.text);
         assert!(outcome.text.contains("Found 2 match(es)"));
     }
@@ -371,7 +382,7 @@ mod tests {
 
         let mut inp = input("needle");
         inp.glob = Some("*.rs".to_owned());
-        let outcome = run_grep(tmp.path(), &inp, &*scheme());
+        let outcome = run_grep(&ws(tmp.path()), &inp, &*scheme());
         assert!(outcome.text.contains("a.rs"));
         assert!(!outcome.text.contains("b.py"));
     }
@@ -383,13 +394,13 @@ mod tests {
 
         let mut inp = input("needle");
         assert!(
-            run_grep(tmp.path(), &inp, &*scheme())
+            run_grep(&ws(tmp.path()), &inp, &*scheme())
                 .text
                 .contains("No matches")
         );
         inp.ignore_case = Some(true);
         assert!(
-            run_grep(tmp.path(), &inp, &*scheme())
+            run_grep(&ws(tmp.path()), &inp, &*scheme())
                 .text
                 .contains("Found 1 match(es)")
         );
@@ -399,14 +410,14 @@ mod tests {
     fn binary_files_skipped() {
         let tmp = tempfile::TempDir::new().unwrap();
         std::fs::write(tmp.path().join("bin.dat"), b"needle\0needle").unwrap();
-        let outcome = run_grep(tmp.path(), &input("needle"), &*scheme());
+        let outcome = run_grep(&ws(tmp.path()), &input("needle"), &*scheme());
         assert!(outcome.text.contains("No matches found."));
     }
 
     #[test]
     fn invalid_regex_reports_error() {
         let tmp = tempfile::TempDir::new().unwrap();
-        let outcome = run_grep(tmp.path(), &input("(unclosed"), &*scheme());
+        let outcome = run_grep(&ws(tmp.path()), &input("(unclosed"), &*scheme());
         assert!(outcome.is_error);
         assert!(outcome.text.contains("Invalid regex"));
     }
@@ -417,7 +428,7 @@ mod tests {
         std::fs::write(tmp.path().join("only.txt"), "hit here\n").unwrap();
         let mut inp = input("hit");
         inp.path = Some("only.txt".to_owned());
-        let outcome = run_grep(tmp.path(), &inp, &*scheme());
+        let outcome = run_grep(&ws(tmp.path()), &inp, &*scheme());
         assert!(outcome.text.contains("only.txt"), "{}", outcome.text);
         assert!(outcome.text.contains("Found 1 match(es)"));
     }
@@ -427,7 +438,7 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         let mut inp = input("x");
         inp.path = Some("no/such/dir".to_owned());
-        let outcome = run_grep(tmp.path(), &inp, &*scheme());
+        let outcome = run_grep(&ws(tmp.path()), &inp, &*scheme());
         assert!(outcome.is_error);
         assert!(outcome.text.contains("Search path not found"));
     }
@@ -441,7 +452,7 @@ mod tests {
         }
         let mut inp = input("needle");
         inp.max_matches = Some(15);
-        let outcome = run_grep(tmp.path(), &inp, &*scheme());
+        let outcome = run_grep(&ws(tmp.path()), &inp, &*scheme());
         assert!(
             outcome.text.contains("at least 50 matches"),
             "{}",
@@ -459,7 +470,7 @@ mod tests {
         std::fs::write(tmp.path().join("x.rs"), content).unwrap();
 
         let s = scheme();
-        let outcome = run_grep(tmp.path(), &input("target"), &*s);
+        let outcome = run_grep(&ws(tmp.path()), &input("target"), &*s);
         let grep_line = outcome.text.lines().find(|l| l.starts_with("2:")).unwrap();
         // grep format: 2:local:ctx:CONTENT — extract "2:local:ctx".
         let anchor: String = grep_line

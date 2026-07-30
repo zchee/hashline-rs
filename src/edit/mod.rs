@@ -14,7 +14,7 @@ use std::path::Path;
 pub use types::{HashlineEditInput, HashlineEditOutput, HashlineOp};
 
 use crate::scheme::AnchorScheme;
-use crate::util::{ToolOutcome, resolve_path};
+use crate::util::{ToolOutcome, Workspace};
 use types::{HashlineEditError, HashlineEditErrorKind, HashlineEditsApplied};
 
 /// Render a successful edit application as model-facing text.
@@ -59,7 +59,7 @@ fn render_error(err: &HashlineEditError) -> String {
 
 /// Execute a `hashline_edit` request against the local filesystem.
 pub async fn run_edit(
-    root: &Path,
+    workspace: &Workspace,
     input: &HashlineEditInput,
     scheme: &dyn AnchorScheme,
 ) -> ToolOutcome {
@@ -67,7 +67,10 @@ pub async fn run_edit(
         return ToolOutcome::error("No edit operations provided.".to_owned());
     }
 
-    let path = resolve_path(root, &input.file_path);
+    let path = match workspace.resolve(&input.file_path) {
+        Ok(path) => path,
+        Err(reason) => return ToolOutcome::error(reason),
+    };
 
     let old_content = match tokio::fs::read(&path).await {
         Ok(bytes) => Some(String::from_utf8_lossy(&bytes).into_owned()),
@@ -144,6 +147,10 @@ mod tests {
         scheme.generate_anchors(&lines)[line - 1].render()
     }
 
+    fn ws(root: &Path) -> Workspace {
+        Workspace::new(root.to_path_buf(), false)
+    }
+
     #[tokio::test]
     async fn edit_existing_file_roundtrip() {
         let tmp = tempfile::TempDir::new().unwrap();
@@ -160,7 +167,7 @@ mod tests {
                 content: "    let x = 42;".to_owned(),
             }],
         };
-        let outcome = run_edit(tmp.path(), &input, &*s).await;
+        let outcome = run_edit(&ws(tmp.path()), &input, &*s).await;
         assert!(!outcome.is_error, "{}", outcome.text);
         assert!(outcome.text.contains("Applied 1 edit(s)"));
         assert!(outcome.text.contains("fresh anchors"));
@@ -180,7 +187,7 @@ mod tests {
                 content: "created\n".to_owned(),
             }],
         };
-        let outcome = run_edit(tmp.path(), &input, &*s).await;
+        let outcome = run_edit(&ws(tmp.path()), &input, &*s).await;
         assert!(!outcome.is_error, "{}", outcome.text);
         assert_eq!(
             std::fs::read_to_string(tmp.path().join("nested/dir/new.txt")).unwrap(),
@@ -200,7 +207,7 @@ mod tests {
                 content: "x".to_owned(),
             }],
         };
-        let outcome = run_edit(tmp.path(), &input, &*s).await;
+        let outcome = run_edit(&ws(tmp.path()), &input, &*s).await;
         assert!(outcome.is_error);
         assert!(outcome.text.contains("File not found"));
     }
@@ -213,7 +220,7 @@ mod tests {
             file_path: "any.txt".to_owned(),
             edits: vec![],
         };
-        let outcome = run_edit(tmp.path(), &input, &*s).await;
+        let outcome = run_edit(&ws(tmp.path()), &input, &*s).await;
         assert!(outcome.is_error);
         assert!(outcome.text.contains("No edit operations"));
     }
@@ -234,7 +241,7 @@ mod tests {
                 content: "nope".to_owned(),
             }],
         };
-        let outcome = run_edit(tmp.path(), &input, &*s).await;
+        let outcome = run_edit(&ws(tmp.path()), &input, &*s).await;
         assert!(outcome.is_error);
         assert!(outcome.text.contains("retry your edit"));
         assert_eq!(std::fs::read_to_string(&file).unwrap(), original);
