@@ -13,7 +13,6 @@ use std::path::Path;
 
 pub use types::{HashlineEditInput, HashlineEditOutput, HashlineOp};
 
-use crate::read::SPAWN_BLOCKING_THRESHOLD_BYTES;
 use crate::scheme::Scheme;
 use crate::util::{ToolOutcome, Workspace, decode_utf8};
 use types::{HashlineEditError, HashlineEditErrorKind, HashlineEditsApplied};
@@ -117,23 +116,23 @@ async fn write_and_render(
     path: &Path,
     scheme: Scheme,
 ) -> ToolOutcome {
-    // Splicing and anchoring a large file would stall the reactor, so hand the
-    // CPU-bound step to a blocking thread once it is big enough to matter. The
-    // task needs `'static` data, so the (request-sized) op list is cloned; the
-    // file bytes move, and the decoded text borrows from them on that thread.
-    let result = if old_bytes.len() > SPAWN_BLOCKING_THRESHOLD_BYTES {
-        let edits = input.edits.clone();
-        let task = tokio::task::spawn_blocking(move || {
-            apply::apply_edits(&decode_utf8(&old_bytes), &edits, scheme)
-        });
-        match task.await {
-            Ok(result) => result,
-            Err(e) => {
-                return ToolOutcome::error(format!("Failed to edit {}: {e}", path.display()));
-            }
+    // Splicing and anchoring a large file would stall the reactor, so the
+    // CPU-bound step always runs on a blocking thread — every size, not just
+    // the large ones. The partial index panics on a programmer error, and a
+    // panic on a blocking thread surfaces as a failed join (this one tool call
+    // errors) instead of unwinding through the reactor and taking the session
+    // with it. The task needs `'static` data, so the (request-sized) op list is
+    // cloned; the file bytes move, and the decoded text borrows from them on
+    // that thread.
+    let edits = input.edits.clone();
+    let task = tokio::task::spawn_blocking(move || {
+        apply::apply_edits(&decode_utf8(&old_bytes), &edits, scheme)
+    });
+    let result = match task.await {
+        Ok(result) => result,
+        Err(e) => {
+            return ToolOutcome::error(format!("Failed to edit {}: {e}", path.display()));
         }
-    } else {
-        apply::apply_edits(&decode_utf8(&old_bytes), &input.edits, scheme)
     };
 
     if let Some(ref new_content) = result.new_content
@@ -273,15 +272,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn large_file_edit_runs_on_a_blocking_thread() {
-        // Comfortably past SPAWN_BLOCKING_THRESHOLD_BYTES, so the apply step
-        // takes the spawn_blocking branch rather than running on the reactor.
+    async fn large_file_edit_applies_on_the_blocking_thread() {
+        // Every edit runs on a blocking thread; this is the size at which that
+        // matters, so it pins that a whole-file splice survives the round trip.
         let tmp = tempfile::TempDir::new().unwrap();
         let file = tmp.path().join("big.rs");
         let content: String = (0..30_000)
             .map(|i| format!("let value_{i} = {i};\n"))
             .collect();
-        assert!(content.len() > SPAWN_BLOCKING_THRESHOLD_BYTES);
         std::fs::write(&file, &content).unwrap();
 
         let s = scheme();

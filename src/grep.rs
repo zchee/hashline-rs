@@ -189,7 +189,9 @@ fn match_lines(
 fn included_spans(match_lines: &[usize], before: usize, after: usize) -> Vec<Range<usize>> {
     let mut spans: Vec<Range<usize>> = Vec::new();
     for &line_no in match_lines {
-        let idx = line_no - 1;
+        // The sink only reports 1-based line numbers, so this never saturates;
+        // it is written this way because every other index conversion here is.
+        let idx = line_no.saturating_sub(1);
         let start = idx.saturating_sub(before);
         let end = idx.saturating_add(after).saturating_add(1);
         match spans.last_mut() {

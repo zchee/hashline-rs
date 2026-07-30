@@ -14,9 +14,26 @@
 # configuration and comparisons stay apples-to-apples. That is also why this is a
 # committed file rather than ambient `RUSTFLAGS`.
 #
-# Any target without an entry here simply builds the portable fused FNV-1a line
-# hash instead — `src/hash.rs` selects on `target_feature = "aes"`, so a missing
-# entry costs speed, never correctness.
+# Which line hash a build ends up with:
+#
+#   default features + a target that has AES (an entry here, or a baseline that
+#     already includes it)                                  -> gxhash32
+#   `--no-default-features`, or a target with neither        -> fused FNV-1a
+#
+# The fallback is slower and produces different anchor letters, never wrong
+# ones: both paths hash the same normalized bytes, and anchors are ephemeral
+# per session, so a per-build divergence is invisible to callers.
+#
+# Two ways to lose the `+aes` here, both of which need
+# `--no-default-features` to build at all, because `gxhash` fails compilation
+# rather than degrading:
+#
+#   * Any ambient `RUSTFLAGS` value REPLACES `target.<triple>.rustflags`
+#     wholesale — cargo does not merge them — so setting it for an unrelated
+#     reason silently drops `+aes`.
+#   * Cargo discovers `.cargo/config.toml` from the invocation's working
+#     directory, so a crate that depends on hashline-rs never sees this file.
+#     Such a consumer supplies `+aes` itself or turns the feature off.
 #
 # Enabling `+aes` means the resulting binary uses AES instructions
 # unconditionally, which faults on a CPU that lacks them (pre-2010 x86_64

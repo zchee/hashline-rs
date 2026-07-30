@@ -17,6 +17,14 @@ path = "src/main.rs"
 name = "hashline"
 path = "src/lib.rs"
 
+[features]
+default = ["gxhash"]
+# Link `gxhash` and use it for the line hash wherever the target actually has
+# AES intrinsics. Optional because `gxhash` itself refuses to compile without
+# them: a consumer whose build does not enable `+aes` (see .cargo/config.toml
+# and src/hash.rs) turns this off and gets the portable FNV-1a line hash.
+gxhash = ["dep:gxhash"]
+
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive", "env"] }
@@ -24,9 +32,10 @@ grep-matcher = "0.1"
 grep-regex = "0.1"
 grep-searcher = "0.1"
 # Line hash on targets with AES intrinsics; see src/hash.rs and
-# .cargo/config.toml. Other targets fall back to the fused FNV-1a pass and
-# never link it in.
-gxhash = "3.5.0"
+# .cargo/config.toml. Gated behind the `gxhash` feature (on by default) because
+# the crate emits a `compile_error!` on any build without `+aes`, so a build
+# that cannot supply the flag must be able to drop the dependency outright.
+gxhash = { version = "3.5.0", optional = true }
 ignore = "0.4"
 itoa = "1"
 memchr = "2"

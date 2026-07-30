@@ -43,27 +43,29 @@ struct Cli {
 /// Fail fast if this CPU lacks the AES extension the line hash was built for.
 ///
 /// `.cargo/config.toml` compiles `+aes` into the x86_64 and aarch64 targets
-/// that do not have it by default, which makes the resulting binary use AES
+/// that do not have it by default, which makes a `gxhash` line hash use AES
 /// instructions unconditionally. On a CPU without them — pre-2010 x86_64
 /// without AES-NI, or an aarch64 part lacking the optional crypto extension —
 /// that faults with SIGILL somewhere inside the first request. Checking once at
 /// startup turns an unexplained mid-session crash into a message that says what
 /// to do about it.
 ///
-/// Compiled out entirely on builds that did not enable `+aes`: those use the
-/// portable FNV-1a line hash and run anywhere.
+/// Compiled out entirely on any build that does not hash with `gxhash` —
+/// `--no-default-features`, or a target without `+aes`. Those use the portable
+/// FNV-1a line hash and run anywhere.
 fn check_cpu_features() -> anyhow::Result<()> {
-    #[cfg(all(target_arch = "x86_64", target_feature = "aes"))]
+    #[cfg(all(feature = "gxhash", target_arch = "x86_64", target_feature = "aes"))]
     anyhow::ensure!(
         std::arch::is_x86_feature_detected!("aes"),
         "this hashline-mcp binary was built with AES-NI (-C target-feature=+aes) \
-         but this CPU does not have it. Rebuild without the +aes entry for this \
-         target in .cargo/config.toml to get the portable line hash."
+         but this CPU does not have it. Rebuild with --no-default-features to \
+         get the portable line hash."
     );
 
     // Feature detection needs OS support; these are the aarch64 targets whose
     // `.cargo/config.toml` entries enable `+aes` and where `std` can check.
     #[cfg(all(
+        feature = "gxhash",
         target_arch = "aarch64",
         target_feature = "aes",
         any(
@@ -76,9 +78,8 @@ fn check_cpu_features() -> anyhow::Result<()> {
     anyhow::ensure!(
         std::arch::is_aarch64_feature_detected!("aes"),
         "this hashline-mcp binary was built with the AES extension \
-         (-C target-feature=+aes) but this CPU does not have it. Rebuild without \
-         the +aes entry for this target in .cargo/config.toml to get the \
-         portable line hash."
+         (-C target-feature=+aes) but this CPU does not have it. Rebuild with \
+         --no-default-features to get the portable line hash."
     );
 
     Ok(())
@@ -140,6 +141,10 @@ async fn main() -> anyhow::Result<()> {
         restrict = cli.restrict,
         scheme = ?config.kind,
         hash_len = config.hash_len,
+        // Which line hash this binary carries. The two produce different
+        // anchor letters for the same line, so a session that reports the
+        // wrong ones is answered by this field rather than by guesswork.
+        block_hash = hashline::hash::BLOCK_HASH,
         "starting hashline MCP server on stdio"
     );
 

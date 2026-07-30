@@ -685,6 +685,9 @@ fn bench_hash_matrix(c: &mut Criterion) {
                 });
             });
 
+            // Absent on a `--no-default-features` build: `gxhash` is not
+            // linked there, which is the whole point of the feature.
+            #[cfg(feature = "gxhash")]
             group.bench_function(format!("{norm_label}+gxhash32"), |b| {
                 let mut scratch = Vec::with_capacity(8_192);
                 b.iter(|| {

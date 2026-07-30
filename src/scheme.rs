@@ -29,9 +29,17 @@ use crate::hash::{self, DEFAULT_HASH_LEN, EncodedHash, MAX_HASH_LEN, fold_line_h
 use crate::index::FileIndex;
 
 /// Default chunk size for [`Scheme::Chunk`] when constructed with defaults.
-pub const DEFAULT_CHUNK_SIZE: usize = 16;
+///
+/// Must equal the `chunk_size` of [`crate::config::SchemeConfig`]'s `Default`,
+/// which is what the server actually builds its scheme from; otherwise
+/// [`Scheme::default`] would describe a chunking no deployment uses.
+/// `scheme_defaults_match_the_config_defaults` pins the two together.
+pub const DEFAULT_CHUNK_SIZE: usize = 8;
 
 /// Default checkpoint interval for [`Scheme::Checkpoint`].
+///
+/// Tied to [`crate::config::SchemeConfig`]'s default the same way
+/// [`DEFAULT_CHUNK_SIZE`] is.
 pub const DEFAULT_CHECKPOINT_INTERVAL: usize = 32;
 
 /// Default search radius for shifted-anchor recovery (±15 lines).
@@ -675,6 +683,18 @@ mod tests {
         }
         assert_eq!(Scheme::default(), Scheme::chunk(3, DEFAULT_CHUNK_SIZE));
         assert_eq!(Scheme::content_only(2).hash_len(), 2);
+    }
+
+    /// The module's default constants and the config the server builds its
+    /// scheme from must describe the same scheme, or `Scheme::default()`
+    /// silently means something no deployment runs.
+    #[test]
+    fn scheme_defaults_match_the_config_defaults() {
+        let config = crate::config::SchemeConfig::default();
+        assert_eq!(config.chunk_size, DEFAULT_CHUNK_SIZE);
+        assert_eq!(config.checkpoint_interval, DEFAULT_CHECKPOINT_INTERVAL);
+        assert_eq!(config.hash_len, DEFAULT_HASH_LEN);
+        assert_eq!(config.build_scheme().expect("valid"), Scheme::default());
     }
 
     #[test]

@@ -14,21 +14,12 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::index::FileIndex;
+use crate::render::render_range;
 use crate::scheme::Scheme;
 use crate::util::{ToolOutcome, Workspace, decode_utf8};
 
 /// Maximum number of lines returned by a single read.
 pub const MAX_LINES_READ: usize = 2000;
-
-/// File size above which indexing and rendering move off the async reactor.
-///
-/// Below this, the work is short enough that a thread hop would cost more than
-/// it saves; above it, hashing inline would stall protocol traffic. Other tools
-/// that index whole files share this threshold.
-pub const SPAWN_BLOCKING_THRESHOLD_BYTES: usize = 256 * 1024;
-
-/// Separator between a line's anchor and its content.
-const CONTENT_SEPARATOR: char = '→';
 
 /// Bytes inspected for NUL before a file is rejected as binary.
 ///
@@ -95,51 +86,13 @@ fn windowed_index<'a>(content: &'a str, window: Range<usize>, scheme: Scheme) ->
 /// Render `window` of `index` as newline-separated `ANCHOR→CONTENT` lines.
 ///
 /// The window is clamped to the index, so an out-of-range window renders empty.
+/// Shares [`render_range`] with the edit path, which is what makes an edit
+/// snippet and a later read of the same lines byte-identical rather than
+/// merely intended to be.
 fn render_window(index: &FileIndex<'_>, scheme: Scheme, window: Range<usize>) -> String {
-    let end = window.end.min(index.len());
-    let start = window.start.min(end);
-
-    // Reading the window line by line — rather than slicing the whole-file line
-    // vector — is what lets a partial index leave the rest of the file
-    // unmaterialized.
-    let content_bytes: usize = (start..end)
-        .filter_map(|idx| index.line(idx))
-        .map(str::len)
-        .sum();
-    let overhead = per_line_overhead(scheme, end);
-    let mut out = String::with_capacity(content_bytes + (end - start) * overhead);
-
-    let mut first = true;
-    for (offset, anchor) in scheme.anchors_for_range(index, start..end).enumerate() {
-        if first {
-            first = false;
-        } else {
-            out.push('\n');
-        }
-        anchor.render_into(&mut out);
-        out.push(CONTENT_SEPARATOR);
-        out.push_str(index.line(start + offset).unwrap_or_default());
-    }
-
+    let mut out = String::new();
+    render_range(index, scheme, window, &mut out);
     out
-}
-
-/// Bytes of anchor and separator overhead to reserve per rendered line, for a
-/// window whose highest line number is `last_line`.
-fn per_line_overhead(scheme: Scheme, last_line: usize) -> usize {
-    let hash_len = scheme.hash_len();
-    let context = if scheme.has_context() {
-        1 + hash_len
-    } else {
-        0
-    };
-    // "LINE" ':' LOCAL [':' CONTEXT] CONTENT_SEPARATOR '\n'
-    decimal_digits(last_line) + 1 + hash_len + context + CONTENT_SEPARATOR.len_utf8() + 1
-}
-
-/// Number of decimal digits needed for `value`, at least 1.
-fn decimal_digits(value: usize) -> usize {
-    value.checked_ilog10().unwrap_or(0) as usize + 1
 }
 
 /// A rendered window plus the file's total line count, from one index build.
@@ -209,27 +162,26 @@ pub async fn run_read(
     let offset = input.offset.unwrap_or(1);
     let effective_limit = input.limit.unwrap_or(usize::MAX).min(MAX_LINES_READ);
 
-    // Splitting and hashing a large file would stall the reactor, so hand the
-    // CPU-bound step to a blocking thread once it is big enough to matter. The
-    // byte buffer moves into the task and the decoded text borrows from it
-    // there, so validation happens on the blocking thread too.
-    let window = if size > SPAWN_BLOCKING_THRESHOLD_BYTES {
-        let task = tokio::task::spawn_blocking(move || {
-            read_window(&decode_utf8(&bytes), offset, effective_limit, scheme)
-        });
-        match task.await {
-            Ok(window) => window,
-            Err(e) => {
-                return ToolOutcome::error(format!("Failed to read {}: {e}", path.display()));
-            }
-        }
-    } else {
+    // Splitting and hashing a large file would stall the reactor, so the
+    // CPU-bound step always runs on a blocking thread. Every size goes through
+    // it, not just the large ones: the partial index panics on a programmer
+    // error, and on a blocking thread that surfaces as a failed join — one
+    // tool call erroring — instead of unwinding through the reactor and taking
+    // the session with it. The hop costs a few microseconds; a killed session
+    // costs the conversation. The byte buffer moves into the task and the
+    // decoded text borrows from it there, so validation happens there too.
+    let task = tokio::task::spawn_blocking(move || {
         read_window(&decode_utf8(&bytes), offset, effective_limit, scheme)
-    };
+    });
     let ReadWindow {
         mut text,
         total_lines,
-    } = window;
+    } = match task.await {
+        Ok(window) => window,
+        Err(e) => {
+            return ToolOutcome::error(format!("Failed to read {}: {e}", path.display()));
+        }
+    };
 
     if offset > total_lines {
         return ToolOutcome::error(format!(
@@ -369,9 +321,12 @@ mod tests {
     }
 
     #[test]
-    fn format_reserves_enough_capacity_for_the_window() {
-        // The capacity estimate must cover the rendered window, or the render
-        // loop silently reallocates and the estimate is pointless.
+    fn format_reserves_exactly_one_buffer_for_the_window() {
+        // `capacity() >= len()` is a String invariant and would prove nothing.
+        // The reservation is recomputed here from the window the renderer was
+        // asked for, then checked two ways: it covers the render (no growth
+        // mid-loop), and the returned buffer's capacity is still exactly it
+        // (so the single reservation really was the only allocation).
         let content = corpus(500, 0x5A1E_0001, true);
         for scheme in [
             Scheme::content_only(4),
@@ -380,11 +335,26 @@ mod tests {
         ] {
             for (offset, limit) in [(None, None), (Some(1), Some(100)), (Some(400), Some(50))] {
                 let out = format_hashline_content(&content, offset, limit, scheme);
+
+                let index = FileIndex::new(&content);
+                let window = line_window(offset, limit);
+                let end = window.end.min(index.len());
+                let start = window.start.min(end);
+                let content_bytes: usize = (start..end)
+                    .filter_map(|idx| index.line(idx))
+                    .map(str::len)
+                    .sum();
+                let reserved =
+                    content_bytes + (end - start) * crate::render::per_line_overhead(scheme, end);
+
+                let label = format!("scheme {} offset {offset:?}", scheme.name());
+                assert!(reserved >= 8, "{label}: fixture too small to pin capacity");
                 assert!(
-                    out.capacity() >= out.len(),
-                    "scheme {} offset {offset:?}",
-                    scheme.name()
+                    reserved >= out.len(),
+                    "{label}: reserved {reserved} < rendered {}",
+                    out.len()
                 );
+                assert_eq!(out.capacity(), reserved, "{label}: buffer was regrown");
             }
         }
     }
@@ -402,15 +372,6 @@ mod tests {
             line_window(Some(usize::MAX), Some(usize::MAX)).end,
             usize::MAX
         );
-    }
-
-    #[test]
-    fn decimal_digits_counts_digits() {
-        assert_eq!(decimal_digits(0), 1);
-        assert_eq!(decimal_digits(9), 1);
-        assert_eq!(decimal_digits(10), 2);
-        assert_eq!(decimal_digits(999), 3);
-        assert_eq!(decimal_digits(1_000), 4);
     }
 
     #[test]
@@ -564,15 +525,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn read_large_file_uses_blocking_path() {
-        // Above the threshold the index+render step runs on a blocking thread;
-        // the result must be identical to the inline path.
+    async fn read_large_file_matches_the_direct_renderer() {
+        // The index+render step always runs on a blocking thread; this is the
+        // size at which that matters, so it pins that the tool's output still
+        // matches what the renderer produces when called directly.
         let content = corpus(15_000, 0xB10C_0001, true);
-        assert!(
-            content.len() > SPAWN_BLOCKING_THRESHOLD_BYTES,
-            "fixture must exceed the blocking threshold, got {} bytes",
-            content.len()
-        );
         let tmp = tempfile::TempDir::new().unwrap();
         std::fs::write(tmp.path().join("big.txt"), &content).unwrap();
 
@@ -588,7 +545,7 @@ mod tests {
         let expected = format_hashline_content(&content, Some(9_000), Some(100), s);
         assert!(
             outcome.text.starts_with(&expected),
-            "blocking path diverged from the inline renderer"
+            "the tool's output diverged from the renderer called directly"
         );
         assert!(
             outcome.text.contains("Showing lines 9000-9099 of 15001"),

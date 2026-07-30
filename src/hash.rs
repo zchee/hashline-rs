@@ -20,10 +20,18 @@
 //!
 //! ## Which hash
 //!
-//! Where the target has AES intrinsics (`aarch64` and `x86_64` built with
+//! Lines are hashed with `gxhash32` when the default `gxhash` feature is on
+//! *and* the target has AES intrinsics — `aarch64` or `x86_64` built with
 //! `target-feature=+aes`, which `.cargo/config.toml` enables for the targets
-//! that do not have it by default), lines are hashed with `gxhash32` over the
-//! normalized bytes. Everywhere else the portable fused FNV-1a pass is used.
+//! that do not carry it in their baseline. Everything else — a
+//! `--no-default-features` build, a target with no AES, or a build whose
+//! ambient `RUSTFLAGS` displaced the `+aes` flag — takes the portable fused
+//! FNV-1a pass.
+//!
+//! The feature is what makes the fallback reachable at all: `gxhash` emits a
+//! `compile_error!` rather than degrading, so a build that cannot supply
+//! `+aes` has to drop the dependency instead of merely bypassing it.
+//!
 //! Both paths consume identical normalized bytes; only the hash function
 //! differs, so anchor letters differ between the two kinds of build. That is
 //! harmless — anchors are per-session ephemeral and never persisted or
@@ -32,7 +40,9 @@
 
 use std::fmt;
 
-use memchr::{memchr2, memchr3_iter};
+// `memchr3_iter` is reached through its path rather than imported: its only
+// caller is compiled out on the fused FNV build, and an unused import is not.
+use memchr::memchr2;
 
 /// FNV-1a 32-bit offset basis.
 const FNV_OFFSET: u32 = 2_166_136_261;
@@ -58,9 +68,12 @@ pub const fn fnv1a_32(data: &[u8]) -> u32 {
 
 /// Whether this build hashes normalized lines with `gxhash32`.
 ///
-/// `false` selects the portable fused FNV-1a pass. Exposed so tests and
-/// diagnostics can report which path a binary was built with.
+/// `false` means the portable fused FNV-1a pass — the `gxhash` feature is off,
+/// or the target has no AES intrinsics. Reported in the server's startup log
+/// so a running process self-documents the path it carries, since the two
+/// produce different anchor letters for the same line.
 pub const BLOCK_HASH: bool = cfg!(all(
+    feature = "gxhash",
     any(target_arch = "aarch64", target_arch = "x86_64"),
     target_feature = "aes"
 ));
@@ -70,6 +83,7 @@ pub const BLOCK_HASH: bool = cfg!(all(
 /// Fixed rather than random — anchors must be reproducible for a given file
 /// within and across processes of the same build.
 #[cfg(all(
+    feature = "gxhash",
     any(target_arch = "aarch64", target_arch = "x86_64"),
     target_feature = "aes"
 ))]
@@ -83,6 +97,18 @@ const FORM_FEED: u8 = 0x0C;
 /// This loop *is* the normalization contract: `str::trim`, then every run of
 /// ASCII whitespace collapsed to a single space. It is exact for every input
 /// and is what [`normalize_segments`] is checked against.
+///
+/// Materializing normalized bytes is only useful ahead of a block hash, so the
+/// fused FNV build has no caller for this outside the tests that pin the
+/// contract — the mirror image of how [`fused_fnv`] is compiled.
+#[cfg(any(
+    all(
+        feature = "gxhash",
+        any(target_arch = "aarch64", target_arch = "x86_64"),
+        target_feature = "aes"
+    ),
+    test
+))]
 fn normalize_branchy(line: &str, scratch: &mut Vec<u8>) {
     let mut prev_ws = false;
     for byte in line.trim().bytes() {
@@ -109,11 +135,21 @@ fn normalize_branchy(line: &str, scratch: &mut Vec<u8>) {
 /// neither `\n` nor [`FORM_FEED`]. Establishing that is the caller's job, and
 /// [`LineHasher`] is the only caller — it proves it once per buffer, because a
 /// `memchr` per line costs more than the block hash saves.
+///
+/// Compiled where [`normalize_branchy`] is, and for the same reason.
+#[cfg(any(
+    all(
+        feature = "gxhash",
+        any(target_arch = "aarch64", target_arch = "x86_64"),
+        target_feature = "aes"
+    ),
+    test
+))]
 fn normalize_segments(line: &str, scratch: &mut Vec<u8>) {
     let trimmed = line.trim().as_bytes();
     let mut start = 0usize;
     let mut wrote = false;
-    for pos in memchr3_iter(b' ', b'\t', b'\r', trimmed) {
+    for pos in memchr::memchr3_iter(b' ', b'\t', b'\r', trimmed) {
         if pos > start {
             if wrote {
                 scratch.push(b' ');
@@ -168,12 +204,14 @@ pub struct LineHasher {
     /// Reusable normalized-bytes buffer. Unused on the fused FNV path, where
     /// normalization and hashing are the same pass.
     #[cfg(all(
+        feature = "gxhash",
         any(target_arch = "aarch64", target_arch = "x86_64"),
         target_feature = "aes"
     ))]
     scratch: Vec<u8>,
     /// Whether [`normalize_segments`] is known to be exact for this buffer.
     #[cfg(all(
+        feature = "gxhash",
         any(target_arch = "aarch64", target_arch = "x86_64"),
         target_feature = "aes"
     ))]
@@ -207,6 +245,7 @@ impl LineHasher {
     /// constructors above are the supported ways to establish it.
     #[cfg_attr(
         not(all(
+            feature = "gxhash",
             any(target_arch = "aarch64", target_arch = "x86_64"),
             target_feature = "aes"
         )),
@@ -217,6 +256,7 @@ impl LineHasher {
     )]
     pub(crate) fn with_segment_scan(segment_scan: bool) -> Self {
         #[cfg(all(
+            feature = "gxhash",
             any(target_arch = "aarch64", target_arch = "x86_64"),
             target_feature = "aes"
         ))]
@@ -225,6 +265,7 @@ impl LineHasher {
             segment_scan,
         };
         #[cfg(not(all(
+            feature = "gxhash",
             any(target_arch = "aarch64", target_arch = "x86_64"),
             target_feature = "aes"
         )))]
@@ -233,6 +274,7 @@ impl LineHasher {
 
     /// Hash one line's normalized bytes.
     #[cfg(all(
+        feature = "gxhash",
         any(target_arch = "aarch64", target_arch = "x86_64"),
         target_feature = "aes"
     ))]
@@ -248,6 +290,7 @@ impl LineHasher {
 
     /// Hash one line's normalized bytes.
     #[cfg(not(all(
+        feature = "gxhash",
         any(target_arch = "aarch64", target_arch = "x86_64"),
         target_feature = "aes"
     )))]
@@ -264,6 +307,7 @@ impl LineHasher {
 /// it, so it is compiled only where it is one of those two things.
 #[cfg(any(
     not(all(
+        feature = "gxhash",
         any(target_arch = "aarch64", target_arch = "x86_64"),
         target_feature = "aes"
     )),
@@ -303,6 +347,7 @@ fn fused_fnv(line: &str) -> u32 {
 /// Returns the raw `u32` hash. Use [`encode_hash`] to convert to a compact
 /// letter-based anchor encoding.
 #[cfg(all(
+    feature = "gxhash",
     any(target_arch = "aarch64", target_arch = "x86_64"),
     target_feature = "aes"
 ))]
@@ -322,6 +367,7 @@ pub fn line_hash(line: &str) -> u32 {
 /// normalization and the FNV-1a hash are a single fused pass, so there is no
 /// scratch buffer to reuse and no reason to prefer [`LineHasher`].
 #[cfg(not(all(
+    feature = "gxhash",
     any(target_arch = "aarch64", target_arch = "x86_64"),
     target_feature = "aes"
 )))]

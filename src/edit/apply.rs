@@ -11,6 +11,7 @@ use super::types::{
     HashlineEditError, HashlineEditErrorKind, HashlineEditOutput, HashlineEditsApplied, HashlineOp,
 };
 use crate::index::{FileIndex, split_lines};
+use crate::render::{CONTENT_SEPARATOR, render_range};
 use crate::scheme::{DEFAULT_SEARCH_RADIUS, ParsedAnchor, Scheme, ShiftResult, ValidationResult};
 
 const SNIPPET_CONTEXT: usize = 3;
@@ -27,12 +28,6 @@ const RECOVERY_CONTEXT: usize = 5;
 /// window of this radius around the target is the most any one anchor can
 /// touch.
 const ANCHOR_HASH_PADDING: usize = DEFAULT_SEARCH_RADIUS + RECOVERY_CONTEXT;
-
-/// Separator between a line's anchor and its content.
-///
-/// Mirrors `hashline_read`'s separator: edit snippets are rendered here rather
-/// than through `read`, and the two must stay byte-identical.
-const CONTENT_SEPARATOR: char = '\u{2192}';
 
 /// Generate a scheme-appropriate format label and example anchor for error messages.
 fn anchor_format_hint(scheme: Scheme) -> (&'static str, String) {
@@ -106,55 +101,23 @@ fn strip_anchor_suffix(anchor_str: &str) -> &str {
         .map_or(anchor_str, |(pre, _)| pre)
 }
 
-/// Number of decimal digits needed for `value`, at least 1.
-fn decimal_digits(value: usize) -> usize {
-    value.checked_ilog10().unwrap_or(0) as usize + 1
-}
-
-/// Render the 0-based half-open line range `region` of `index` as
-/// newline-separated `ANCHOR→CONTENT` lines, appending to `out`.
+/// Split replacement content into the lines it contributes to the file.
 ///
-/// Byte-identical to the window `hashline_read` renders for the same lines.
-/// The region is clamped to the index, so an out-of-range region renders
-/// nothing and appends no separator.
+/// `str::lines` strips a `\r` only when a `\n` follows it, so content ending in
+/// a bare `\r` keeps it — and the join about to happen would turn that into a
+/// `\r\n` terminator, leaving one CRLF line in a file this path otherwise
+/// rewrites entirely with `\n` terminators. Caller-supplied text is the one
+/// place that is ours to normalize, so it is normalized here, the same way the
+/// join normalizes the terminators of every line it rewrites.
 ///
-/// # Panics
-///
-/// Panics if `index` is a partial [`FileIndex`] that does not hash everything
-/// `region`'s anchors depend on — build it with [`snippet_index`], which
-/// expands each region through [`Scheme::required_hash_span`].
-fn render_region(index: &FileIndex<'_>, scheme: Scheme, region: Range<usize>, out: &mut String) {
-    let end = region.end.min(index.len());
-    let start = region.start.min(end);
-
-    // Line-by-line rather than a slice of the whole-file line vector, so a
-    // partial index never has to materialize the lines it skipped.
-    let content_bytes: usize = (start..end)
-        .filter_map(|idx| index.line(idx))
-        .map(str::len)
-        .sum();
-    let hash_len = scheme.hash_len();
-    let context_bytes = if scheme.has_context() {
-        1 + hash_len
-    } else {
-        0
-    };
-    // "LINE" ':' LOCAL [':' CONTEXT] CONTENT_SEPARATOR '\n'
-    let per_line =
-        decimal_digits(end) + 1 + hash_len + context_bytes + CONTENT_SEPARATOR.len_utf8() + 1;
-    out.reserve(content_bytes + (end - start) * per_line);
-
-    let mut first = true;
-    for (offset, anchor) in scheme.anchors_for_range(index, start..end).enumerate() {
-        if first {
-            first = false;
-        } else {
-            out.push('\n');
-        }
-        anchor.render_into(out);
-        out.push(CONTENT_SEPARATOR);
-        out.push_str(index.line(start + offset).unwrap_or_default());
-    }
+/// This is a policy choice, not the correctness fix: the spliced vector is
+/// reconciled with `split_lines(new_content)` in [`apply_edits`], which also
+/// covers the `\r`s that come from the file rather than from an op.
+fn content_lines(content: &str) -> Vec<&str> {
+    content
+        .lines()
+        .map(|line| line.trim_end_matches('\r'))
+        .collect()
 }
 
 /// The hash spans needed to anchor `regions`.
@@ -407,6 +370,7 @@ pub fn apply_edits(content: &str, ops: &[HashlineOp], scheme: Scheme) -> ApplyRe
     if result_lines.is_empty() {
         result_lines.push("");
     }
+
     let total_new_lines = result_lines.len();
 
     let mut new_content = String::with_capacity(spliced_bytes);
@@ -415,6 +379,28 @@ pub fn apply_edits(content: &str, ops: &[HashlineOp], scheme: Scheme) -> ApplyRe
             new_content.push('\n');
         }
         new_content.push_str(line);
+    }
+
+    // Joining with `\n` and splitting again is not quite the identity: a line
+    // ending in `\r` just gained a `\r\n` terminator, and `split_lines` strips
+    // exactly one `\r` from it. A file line can arrive that way — one the file
+    // wrote as `\r\r\n`, or an unterminated last line — and then the vector no
+    // longer equals `split_lines(new_content)`, the precondition
+    // `FileIndex::from_lines_partial` relies on, so the snippet would render
+    // an anchor hashed over text a later read does not produce.
+    //
+    // Re-splitting to find out would cost the split this path exists to skip,
+    // so the equivalent is applied directly: every line but the last drops one
+    // trailing `\r`, which is exactly what a re-split would have done. The
+    // last one keeps it — nothing follows it, so the join reproduced it byte
+    // for byte. `new_content` is already built and is not touched: this
+    // corrects the bookkeeping, never the file.
+    if let Some((_, above)) = result_lines.split_last_mut() {
+        for line in above {
+            if let Some(stripped) = line.strip_suffix('\r') {
+                *line = stripped;
+            }
+        }
     }
 
     // Sort edit regions top-down and merge nearby ones.
@@ -468,7 +454,7 @@ fn build_snippet(
         let spans = snippet_spans(std::slice::from_ref(&region), scheme);
         let index = FileIndex::from_lines_partial(new_lines, &spans);
         let mut out = String::new();
-        render_region(&index, scheme, region, &mut out);
+        render_range(&index, scheme, region, &mut out);
         return out;
     }
 
@@ -507,7 +493,7 @@ fn build_snippet(
         }
 
         push_part_separator(&mut out, &mut written);
-        render_region(&index, scheme, region.clone(), &mut out);
+        render_range(&index, scheme, region.clone(), &mut out);
         prev_end = end;
     }
 
@@ -557,7 +543,7 @@ fn resolve_op<'a>(
             let new_lines: Vec<&str> = if content.is_empty() {
                 Vec::new() // delete
             } else {
-                content.lines().collect()
+                content_lines(content)
             };
 
             Ok(ResolvedOp {
@@ -592,7 +578,7 @@ fn resolve_op<'a>(
             let new_lines: Vec<&str> = if content.is_empty() {
                 vec![""] // blank line
             } else {
-                content.lines().collect()
+                content_lines(content)
             };
 
             Ok(ResolvedOp {
@@ -704,7 +690,7 @@ fn validate_anchor(
             let ctx_end = (parsed.line + RECOVERY_CONTEXT).min(index.len());
 
             let mut context = String::new();
-            render_region(index, scheme, ctx_start..ctx_end, &mut context);
+            render_range(index, scheme, ctx_start..ctx_end, &mut context);
 
             let (shifted_anchor, error_kind, message) = match shift {
                 ShiftResult::Found { new_line } => {
@@ -822,11 +808,11 @@ fn overlap_error(
 }
 
 fn build_write_result(new_content: &str, scheme: Scheme) -> HashlineEditOutput {
-    // `render_region` clamps to the file, so a short file needs no line count.
+    // `render_range` clamps to the file, so a short file needs no line count.
     let region = 0..SNIPPET_CONTEXT * 2;
     let index = snippet_index(new_content, std::slice::from_ref(&region), scheme);
     let mut snippet = String::new();
-    render_region(&index, scheme, region, &mut snippet);
+    render_range(&index, scheme, region, &mut snippet);
 
     HashlineEditOutput::EditsApplied(HashlineEditsApplied {
         applied: 1,
@@ -1618,9 +1604,13 @@ mod tests {
     /// differential check of `from_lines_partial`'s precondition: if the
     /// spliced line vector ever diverged from `split_lines(new_content)`, the
     /// anchors or line numbers here would disagree.
+    ///
+    /// Split on `'\n'` rather than with `lines()`: the snippet's parts are
+    /// joined with a bare `'\n'`, and `lines()` would strip a trailing `'\r'`
+    /// off each one — precisely the divergence this guard exists to catch.
     fn assert_snippet_matches_read_path(new_content: &str, snippet: &str, scheme: Scheme) {
         let mut checked = 0usize;
-        for line in snippet.lines().filter(|l| !l.starts_with("... ")) {
+        for line in snippet.split('\n').filter(|l| !l.starts_with("... ")) {
             let anchor_part = line.split('\u{2192}').next().expect("anchor prefix");
             let line_no: usize = anchor_part
                 .split(':')
@@ -1698,6 +1688,105 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Replacement content ending in a bare `\r` must not carry the CR into
+    /// the spliced line vector.
+    ///
+    /// `str::lines` strips a `\r` only ahead of a `\n`, so a trailing one
+    /// survives; joining the lines then makes it part of a `\r\n` terminator
+    /// that a re-split drops, and the spliced vector stops matching
+    /// `split_lines(new_content)` — the snippet renders `→TWO\r` where a
+    /// follow-up read renders `→TWO`.
+    ///
+    /// Both sides are compared as raw bytes: iterating either through
+    /// `lines()` would strip exactly the byte under test.
+    #[test]
+    fn trailing_carriage_return_in_replacement_never_reaches_the_snippet() {
+        let content = "one\ntwo\nthree\n";
+        let s = scheme();
+        for (replacement, expected_content) in [
+            ("TWO\r", "one\nTWO\nthree\n"),
+            ("TWO\r\r", "one\nTWO\nthree\n"),
+            ("TWO\r\nTHREE\r", "one\nTWO\nTHREE\nthree\n"),
+        ] {
+            let anchor = anchor_for(content, 2, s);
+            let result = apply_edits(content, &[replace(&anchor, replacement)], s);
+            let applied = expect_applied(&result);
+            let new_content = result.new_content.as_deref().expect("applied");
+            assert_eq!(new_content, expected_content, "replacement {replacement:?}");
+
+            // The snippet covers the whole (short) file here, so the read path
+            // renders exactly the same window.
+            let total = FileIndex::new(new_content).len();
+            let expected =
+                crate::read::format_hashline_content(new_content, Some(1), Some(total), s);
+            assert_eq!(
+                applied.snippet.as_bytes(),
+                expected.as_bytes(),
+                "replacement {replacement:?}: snippet diverged from the read path"
+            );
+            assert!(
+                !applied.snippet.contains('\r'),
+                "replacement {replacement:?}: CR leaked into {:?}",
+                applied.snippet
+            );
+        }
+
+        // `insert_after` parses its content through the same split, so it
+        // carries the same hazard.
+        let op = HashlineOp::InsertAfter {
+            anchor: anchor_for(content, 2, s),
+            content: "MIDDLE\r".to_owned(),
+        };
+        let result = apply_edits(content, &[op], s);
+        let applied = expect_applied(&result);
+        let new_content = result.new_content.as_deref().expect("applied");
+        assert_eq!(new_content, "one\ntwo\nMIDDLE\nthree\n");
+        let total = FileIndex::new(new_content).len();
+        let expected = crate::read::format_hashline_content(new_content, Some(1), Some(total), s);
+        assert_eq!(applied.snippet.as_bytes(), expected.as_bytes());
+    }
+
+    /// The same divergence from the other direction: a `\r` the file itself
+    /// carried into the splice rather than one an op introduced.
+    ///
+    /// `split_lines` leaves a trailing `\r` on exactly two kinds of line — a
+    /// final line with no newline after it, and a line the file wrote as
+    /// `\r\r\n` — and either one breaks the precondition as soon as it stops
+    /// being the last element of the spliced vector. These bytes belong to the
+    /// file, not to the request, so the fix reconciles the line vector and
+    /// leaves the written content exactly as it was.
+    #[test]
+    fn carriage_returns_from_the_file_never_reach_the_snippet() {
+        let s = scheme();
+
+        // (a) Unterminated last line ending in `\r`, with an insert appended
+        //     after it: the `\r` stops being last and becomes a terminator.
+        let content = "one\ntwo\nthree\r";
+        let op = HashlineOp::InsertAfter {
+            anchor: "EOF".to_owned(),
+            content: "TAIL".to_owned(),
+        };
+        let result = apply_edits(content, &[op], s);
+        let applied = expect_applied(&result);
+        let new_content = result.new_content.as_deref().expect("applied");
+        // The file's own `\r` survives, now as the line's terminator.
+        assert_eq!(new_content, "one\ntwo\nthree\r\nTAIL");
+        assert_snippet_matches_read_path(new_content, &applied.snippet, s);
+        assert!(!applied.snippet.contains('\r'), "{:?}", applied.snippet);
+
+        // (b) An interior line the file wrote as `\r\r\n`, so one `\r` outlives
+        //     the terminator strip and is part of the line's content.
+        let content = "one\r\r\ntwo\n";
+        let result = apply_edits(content, &[replace(&anchor_for(content, 2, s), "TWO")], s);
+        let applied = expect_applied(&result);
+        let new_content = result.new_content.as_deref().expect("applied");
+        // Line 1 is untouched: its content `"one\r"` is preserved and only its
+        // terminator is normalized, exactly as every other line's is.
+        assert_eq!(new_content, "one\r\nTWO\n");
+        assert_snippet_matches_read_path(new_content, &applied.snippet, s);
+        assert!(!applied.snippet.contains('\r'), "{:?}", applied.snippet);
     }
 
     #[test]
