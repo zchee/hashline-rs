@@ -39,112 +39,10 @@ use hashline::scheme::{Anchor, Scheme};
 use hashline::util::Workspace;
 use memchr::{memchr_iter, memchr3_iter};
 
-/// Deterministic xorshift32 PRNG for reproducible synthetic corpora.
-///
-/// Not cryptographic and not `rand` — a self-contained generator is enough
-/// to produce varied, reproducible code-like fixtures without a new
-/// dependency.
-struct Xorshift32(u32);
+#[path = "support/phase0_workloads.rs"]
+mod phase0_workloads;
 
-impl Xorshift32 {
-    /// Create a generator seeded with `seed` (zero is remapped to a nonzero
-    /// constant, since an all-zero xorshift state never advances).
-    fn new(seed: u32) -> Self {
-        Self(if seed == 0 { 0x9E37_79B9 } else { seed })
-    }
-
-    /// Next pseudo-random `u32`.
-    fn next_u32(&mut self) -> u32 {
-        let mut x = self.0;
-        x ^= x << 13;
-        x ^= x >> 17;
-        x ^= x << 5;
-        self.0 = x;
-        x
-    }
-
-    /// Next pseudo-random value in `0..bound`.
-    fn next_range(&mut self, bound: u32) -> u32 {
-        self.next_u32() % bound
-    }
-}
-
-/// Identifier pool for synthetic code-like lines.
-const IDENTIFIERS: &[&str] = &[
-    "value", "index", "buffer", "result", "config", "handler", "state", "count", "items", "cursor",
-    "reader", "writer", "context", "target", "source", "delta",
-];
-
-/// Keyword pool for synthetic code-like lines (includes `fn` at zero
-/// indentation for the grep `^`-anchored regex fixture).
-const KEYWORDS: &[&str] = &[
-    "let", "fn", "if", "for", "while", "return", "match", "struct", "impl", "pub",
-];
-
-/// Generate one deterministic code-like line.
-///
-/// The line number is embedded in an identifier so every generated line is
-/// content-unique regardless of indentation — this keeps anchor/find-shifted
-/// benchmarks free of incidental hash collisions between distinct lines.
-fn generate_line(rng: &mut Xorshift32, line_no: usize) -> String {
-    // Occasional blank line.
-    if rng.next_range(37) == 0 {
-        return String::new();
-    }
-    // Occasional long line (~2 KiB), simulating a long literal or comment.
-    if rng.next_range(211) == 0 {
-        let word = IDENTIFIERS[rng.next_range(IDENTIFIERS.len() as u32) as usize];
-        return format!("// {}", word.repeat(300));
-    }
-
-    let depth = rng.next_range(5) as usize;
-    let indent = "    ".repeat(depth);
-    let kw = KEYWORDS[rng.next_range(KEYWORDS.len() as u32) as usize];
-    let ident = IDENTIFIERS[rng.next_range(IDENTIFIERS.len() as u32) as usize];
-    let ident2 = IDENTIFIERS[rng.next_range(IDENTIFIERS.len() as u32) as usize];
-    let n = rng.next_range(1000);
-    format!("{indent}{kw} {ident}_{line_no} = {ident2}({n});")
-}
-
-/// Generate a deterministic code-like corpus of `num_lines` lines, joined
-/// with `\n` and ending in a trailing newline (matching typical source
-/// files).
-fn generate_corpus(num_lines: usize, seed: u32) -> String {
-    let mut rng = Xorshift32::new(seed);
-    let mut out = String::with_capacity(num_lines * 24);
-    for i in 0..num_lines {
-        out.push_str(&generate_line(&mut rng, i));
-        out.push('\n');
-    }
-    out
-}
-
-/// Share of lines that are ~2 KiB long in the long-line-heavy corpus.
-const LONG_LINE_PERCENT: u32 = 85;
-
-/// Generate a deterministic long-line-heavy corpus (a minified-bundle shape):
-/// [`LONG_LINE_PERCENT`] of the lines are ~2 KiB, the rest are ordinary
-/// code-like lines.
-///
-/// The realistic corpus ([`generate_corpus`]) already carries the ~0.5 % long
-/// -line tail real source files have; this one inverts the distribution so the
-/// hash bench-off can see the bulk-throughput end of the range too.
-fn generate_long_line_corpus(num_lines: usize, seed: u32) -> String {
-    let mut rng = Xorshift32::new(seed);
-    let mut out = String::with_capacity(num_lines * 1_800);
-    for i in 0..num_lines {
-        if rng.next_range(100) < LONG_LINE_PERCENT {
-            let word = IDENTIFIERS[rng.next_range(IDENTIFIERS.len() as u32) as usize];
-            let n = rng.next_range(1000);
-            out.push_str(&format!("const {word}_{i}={};", word.repeat(250)));
-            out.push_str(&format!("//{n}"));
-        } else {
-            out.push_str(&generate_line(&mut rng, i));
-        }
-        out.push('\n');
-    }
-    out
-}
+use phase0_workloads::{generate_corpus, generate_long_line_corpus};
 
 /// Render the anchor string for a specific 1-based line under `scheme`.
 fn anchor_at(index: &FileIndex<'_>, scheme: Scheme, line_1based: usize) -> String {
@@ -731,6 +629,282 @@ fn bench_hash_matrix(c: &mut Criterion) {
     }
 }
 
+/// Paired incompatible-v2 lower-bound benches on byte-identical corpora.
+///
+/// Every group has a current implementation and one prototype candidate. The
+/// Phase 0 capture harness invokes those functions in an interleaved order and
+/// preserves each Criterion estimate separately.
+fn bench_phase0_v2_pairs(c: &mut Criterion) {
+    let content_10k = generate_corpus(10_000, 0xB200_0010);
+    let content_50k = generate_corpus(50_000, 0xB200_0050);
+    let content_100k = generate_corpus(100_000, 0xB200_0100);
+
+    #[cfg(feature = "gxhash")]
+    for (size, content) in [(10_000usize, &content_10k), (50_000, &content_50k)] {
+        let mut group = c.benchmark_group(format!("phase0_snapshot_raw/{size}"));
+        group.sample_size(30);
+        group.measurement_time(Duration::from_secs(3));
+        group.bench_function("base_current_index", |b| {
+            b.iter(|| {
+                let index = FileIndex::new(black_box(content));
+                black_box(index.len())
+            });
+        });
+        group.bench_function("candidate_raw_line_hashes", |b| {
+            b.iter(|| black_box(phase0_workloads::raw_line_hashes(black_box(content))));
+        });
+        group.finish();
+    }
+
+    for (algorithm, candidate) in [
+        (
+            "xxh3",
+            phase0_workloads::xxh3_128_and_line_count as fn(&str) -> (u128, usize),
+        ),
+        ("blake3", phase0_workloads::blake3_128_and_line_count),
+    ] {
+        for (size, content) in [(10_000usize, &content_10k), (50_000, &content_50k)] {
+            let mut group = c.benchmark_group(format!("phase0_snapshot_{algorithm}/{size}"));
+            group.sample_size(30);
+            group.measurement_time(Duration::from_secs(3));
+            group.bench_function("base_current_index", |b| {
+                b.iter(|| {
+                    let index = FileIndex::new(black_box(content));
+                    black_box(index.len())
+                });
+            });
+            group.bench_function("candidate_version_and_count", |b| {
+                b.iter(|| black_box(candidate(black_box(content))));
+            });
+            group.finish();
+        }
+    }
+
+    #[cfg(feature = "gxhash")]
+    for (size, content) in [(10_000usize, &content_10k), (50_000, &content_50k)] {
+        let mut group = c.benchmark_group(format!("phase0_snapshot_gxhash/{size}"));
+        group.sample_size(30);
+        group.measurement_time(Duration::from_secs(3));
+        group.bench_function("base_current_index", |b| {
+            b.iter(|| {
+                let index = FileIndex::new(black_box(content));
+                black_box(index.len())
+            });
+        });
+        group.bench_function("candidate_version_and_count", |b| {
+            b.iter(|| {
+                black_box(phase0_workloads::gxhash128_and_line_count(black_box(
+                    content,
+                )))
+            });
+        });
+        group.finish();
+    }
+
+    let sparse_span = 50_000..52_000;
+    let mut sparse = c.benchmark_group("phase0_sparse_select/window_2k_of_100k");
+    sparse.sample_size(30);
+    sparse.measurement_time(Duration::from_secs(3));
+    sparse.bench_function("base_current_partial_index", |b| {
+        b.iter(|| {
+            let index = FileIndex::new_partial(
+                black_box(&content_100k),
+                std::slice::from_ref(&sparse_span),
+            );
+            black_box(index.len())
+        });
+    });
+    sparse.bench_function("candidate_sparse_positions", |b| {
+        b.iter(|| {
+            black_box(phase0_workloads::sparse_select(
+                black_box(&content_100k),
+                50_000,
+                2_000,
+            ))
+        });
+    });
+    sparse.finish();
+
+    let mut offsets_u32 = c.benchmark_group("phase0_offsets/u32_50k");
+    offsets_u32.sample_size(30);
+    offsets_u32.measurement_time(Duration::from_secs(3));
+    offsets_u32.bench_function("base_current_index", |b| {
+        b.iter(|| black_box(FileIndex::new(black_box(&content_50k))));
+    });
+    offsets_u32.bench_function("candidate_offsets", |b| {
+        b.iter(|| black_box(phase0_workloads::offsets_u32(black_box(&content_50k))));
+    });
+    offsets_u32.finish();
+
+    let mut offsets_u64 = c.benchmark_group("phase0_offsets/u64_50k");
+    offsets_u64.sample_size(30);
+    offsets_u64.measurement_time(Duration::from_secs(3));
+    offsets_u64.bench_function("base_current_index", |b| {
+        b.iter(|| black_box(FileIndex::new(black_box(&content_50k))));
+    });
+    offsets_u64.bench_function("candidate_offsets", |b| {
+        b.iter(|| black_box(phase0_workloads::offsets_u64(black_box(&content_50k))));
+    });
+    offsets_u64.finish();
+
+    let scheme = SchemeConfig::default()
+        .build_scheme()
+        .expect("build scheme");
+    let (version_10k, _) = phase0_workloads::xxh3_128_and_line_count(&content_10k);
+    let (version_100k, _) = phase0_workloads::xxh3_128_and_line_count(&content_100k);
+
+    let mut render_full = c.benchmark_group("phase0_position_render/full_10k");
+    render_full.sample_size(30);
+    render_full.measurement_time(Duration::from_secs(3));
+    render_full.bench_function("base_current_render", |b| {
+        b.iter(|| {
+            black_box(format_hashline_content(
+                black_box(&content_10k),
+                None,
+                None,
+                scheme,
+            ))
+        });
+    });
+    render_full.bench_function("candidate_position_render", |b| {
+        b.iter(|| {
+            black_box(phase0_workloads::render_all_positions(
+                black_box(&content_10k),
+                version_10k,
+            ))
+        });
+    });
+    render_full.finish();
+
+    let mut render_window = c.benchmark_group("phase0_position_render/window_2k_of_100k");
+    render_window.sample_size(30);
+    render_window.measurement_time(Duration::from_secs(3));
+    render_window.bench_function("base_current_render", |b| {
+        b.iter(|| {
+            black_box(format_hashline_content(
+                black_box(&content_100k),
+                Some(50_000),
+                Some(2_000),
+                scheme,
+            ))
+        });
+    });
+    render_window.bench_function("candidate_position_render", |b| {
+        b.iter(|| {
+            black_box(phase0_workloads::render_positions(
+                black_box(&content_100k),
+                version_100k,
+                50_000,
+                2_000,
+            ))
+        });
+    });
+    render_window.finish();
+
+    let mut full_read = c.benchmark_group("phase0_full_read/full_10k");
+    full_read.sample_size(30);
+    full_read.measurement_time(Duration::from_secs(3));
+    full_read.bench_function("base_current_read", |b| {
+        b.iter(|| {
+            black_box(format_hashline_content(
+                black_box(&content_10k),
+                None,
+                None,
+                scheme,
+            ))
+        });
+    });
+    full_read.bench_function("candidate_versioned_read", |b| {
+        b.iter(|| {
+            black_box(phase0_workloads::versioned_render_all(black_box(
+                &content_10k,
+            )))
+        });
+    });
+    full_read.finish();
+
+    let current_index = FileIndex::new(&content_50k);
+    let current_lines = current_index.lines();
+    let one_line = nearest_nonblank(current_lines, 25_000);
+    let one_current = vec![HashlineOp::Replace {
+        anchor: anchor_at(&current_index, scheme, one_line),
+        end_anchor: None,
+        content: "REPLACED SINGLE LINE".to_owned(),
+    }];
+    let eight_lines = (1..=8usize)
+        .map(|index| nearest_nonblank(current_lines, index * 6_000))
+        .collect::<Vec<_>>();
+    let eight_current = eight_lines
+        .iter()
+        .enumerate()
+        .map(|(index, &line)| HashlineOp::Replace {
+            anchor: anchor_at(&current_index, scheme, line),
+            end_anchor: None,
+            content: format!("REPLACED BATCH LINE {index}"),
+        })
+        .collect::<Vec<_>>();
+    let one_candidate = phase0_workloads::replacement_edits(&content_50k, &[one_line]);
+    let eight_candidate = phase0_workloads::replacement_edits(&content_50k, &eight_lines);
+
+    let mut splice_one = c.benchmark_group("phase0_splice/one_edit_50k");
+    splice_one.sample_size(30);
+    splice_one.measurement_time(Duration::from_secs(3));
+    splice_one.bench_function("base_current_apply", |b| {
+        b.iter(|| black_box(apply_edits(black_box(&content_50k), &one_current, scheme)));
+    });
+    splice_one.bench_function("candidate_byte_splice", |b| {
+        b.iter(|| {
+            black_box(phase0_workloads::apply_byte_edits(
+                black_box(&content_50k),
+                &one_candidate,
+            ))
+        });
+    });
+    splice_one.finish();
+
+    let mut splice_eight = c.benchmark_group("phase0_splice/eight_edits_50k");
+    splice_eight.sample_size(30);
+    splice_eight.measurement_time(Duration::from_secs(3));
+    splice_eight.bench_function("base_current_apply", |b| {
+        b.iter(|| black_box(apply_edits(black_box(&content_50k), &eight_current, scheme)));
+    });
+    splice_eight.bench_function("candidate_byte_splice", |b| {
+        b.iter(|| {
+            black_box(phase0_workloads::apply_byte_edits(
+                black_box(&content_50k),
+                &eight_candidate,
+            ))
+        });
+    });
+    splice_eight.finish();
+
+    let persist_dir = tempfile::TempDir::new().expect("tempdir for persistence bench");
+    let persist_path = persist_dir.path().join("destination.rs");
+    std::fs::write(&persist_path, &content_50k).expect("initialize persistence fixture");
+    let mut persist_nonce = 0u64;
+    let mut persist = c.benchmark_group("phase0_persist/atomic_50k");
+    persist.sample_size(20);
+    persist.measurement_time(Duration::from_secs(4));
+    persist.bench_function("base_direct_write", |b| {
+        b.iter(|| {
+            phase0_workloads::direct_write(&persist_path, content_50k.as_bytes())
+                .expect("direct persistence benchmark");
+        });
+    });
+    persist.bench_function("candidate_temp_rename", |b| {
+        b.iter(|| {
+            persist_nonce = persist_nonce.wrapping_add(1);
+            phase0_workloads::atomic_temp_write(
+                &persist_path,
+                content_50k.as_bytes(),
+                persist_nonce,
+            )
+            .expect("atomic persistence benchmark");
+        });
+    });
+    persist.finish();
+}
+
 /// End-to-end `HashlineServer::dispatch` bench: a realistic 300-line file
 /// through the read path, and a single-op edit — answers the plan's
 /// pre-mortem question of whether hot paths are already sub-millisecond at
@@ -795,6 +969,7 @@ criterion_group!(
     bench_grep_large_file,
     bench_index_partial,
     bench_hash_matrix,
+    bench_phase0_v2_pairs,
     bench_dispatch,
 );
 criterion_main!(benches);

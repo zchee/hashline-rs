@@ -52,6 +52,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
 criterion = { version = "0.8.2", features = ["async_tokio", "html_reports"] }
+blake3 = "1"
+libc = "0.2"
 # Runner-up of the Phase 6 bench-off, kept so the `hash_matrix` group can keep
 # measuring the shipped choice against it. Not used by the crate itself.
 rapidhash = "4.5.1"
@@ -59,9 +61,15 @@ rapidhash = "4.5.1"
 # implementation; the production path matches via grep-regex/grep-searcher.
 regex = "1"
 tempfile = "3"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
 
 [[bench]]
 name = "hashline"
+harness = false
+
+[[bench]]
+name = "phase0-resources"
+path = "benches/support/phase0_resources.rs"
 harness = false
 
 [profile.release]
