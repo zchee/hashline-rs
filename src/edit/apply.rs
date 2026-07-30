@@ -4,17 +4,35 @@
 //! edits, sorts operations bottom-up, and applies them. Returns a fresh-anchor
 //! snippet of the edited region.
 
+use std::ops::Range;
+
 use super::range_policy;
 use super::types::{
     HashlineEditError, HashlineEditErrorKind, HashlineEditOutput, HashlineEditsApplied, HashlineOp,
 };
-use crate::index::{FileIndex, split_lines};
-use crate::read::format_hashline_content;
-use crate::scheme::{
-    Anchor, DEFAULT_SEARCH_RADIUS, ParsedAnchor, Scheme, ShiftResult, ValidationResult,
-};
+use crate::index::FileIndex;
+use crate::scheme::{DEFAULT_SEARCH_RADIUS, ParsedAnchor, Scheme, ShiftResult, ValidationResult};
 
 const SNIPPET_CONTEXT: usize = 3;
+
+/// Lines of fresh-anchor context rendered around a stale anchor.
+const RECOVERY_CONTEXT: usize = 5;
+
+/// Lines hashed on each side of an anchor's target in the pre-edit index.
+///
+/// A single anchor reaches three ways: [`Scheme::validate`] reads the target
+/// line, [`Scheme::find_shifted`] scans `±DEFAULT_SEARCH_RADIUS`, and the
+/// stale-anchor error renders `±RECOVERY_CONTEXT` lines of fresh anchors. The
+/// widest of those is the shift search, and the sum bounds all three, so a
+/// window of this radius around the target is the most any one anchor can
+/// touch.
+const ANCHOR_HASH_PADDING: usize = DEFAULT_SEARCH_RADIUS + RECOVERY_CONTEXT;
+
+/// Separator between a line's anchor and its content.
+///
+/// Mirrors `hashline_read`'s separator: edit snippets are rendered here rather
+/// than through `read`, and the two must stay byte-identical.
+const CONTENT_SEPARATOR: char = '\u{2192}';
 
 /// Generate a scheme-appropriate format label and example anchor for error messages.
 fn anchor_format_hint(scheme: Scheme) -> (&'static str, String) {
@@ -79,23 +97,154 @@ fn anchor_content_error(op_label: &str, content: &str, line_num: usize) -> Hashl
     }
 }
 
-/// Format `"LINE:SUFFIX→CONTENT"`.
-fn render_anchored_line(a: &Anchor, content: &str) -> String {
-    format!("{a}\u{2192}{content}")
+/// Strip the `→CONTENT` (or `->CONTENT`) tail that models copy verbatim from
+/// `hashline_read` output, leaving the bare anchor.
+fn strip_anchor_suffix(anchor_str: &str) -> &str {
+    anchor_str
+        .split_once(CONTENT_SEPARATOR)
+        .or_else(|| anchor_str.split_once("->"))
+        .map_or(anchor_str, |(pre, _)| pre)
+}
+
+/// Number of decimal digits needed for `value`, at least 1.
+fn decimal_digits(value: usize) -> usize {
+    value.checked_ilog10().unwrap_or(0) as usize + 1
+}
+
+/// Render the 0-based half-open line range `region` of `index` as
+/// newline-separated `ANCHOR→CONTENT` lines, appending to `out`.
+///
+/// Byte-identical to the window `hashline_read` renders for the same lines.
+/// The region is clamped to the index, so an out-of-range region renders
+/// nothing and appends no separator.
+///
+/// # Panics
+///
+/// Panics if `index` is a partial [`FileIndex`] that does not hash everything
+/// `region`'s anchors depend on — build it with [`snippet_index`], which
+/// expands each region through [`Scheme::required_hash_span`].
+fn render_region(index: &FileIndex<'_>, scheme: Scheme, region: Range<usize>, out: &mut String) {
+    let end = region.end.min(index.len());
+    let start = region.start.min(end);
+    let lines = &index.lines()[start..end];
+
+    let content_bytes: usize = lines.iter().map(|line| line.len()).sum();
+    let hash_len = scheme.hash_len();
+    let context_bytes = if scheme.has_context() {
+        1 + hash_len
+    } else {
+        0
+    };
+    // "LINE" ':' LOCAL [':' CONTEXT] CONTENT_SEPARATOR '\n'
+    let per_line =
+        decimal_digits(end) + 1 + hash_len + context_bytes + CONTENT_SEPARATOR.len_utf8() + 1;
+    out.reserve(content_bytes + lines.len() * per_line);
+
+    let mut first = true;
+    for (anchor, line) in scheme.anchors_for_range(index, start..end).zip(lines) {
+        if first {
+            first = false;
+        } else {
+            out.push('\n');
+        }
+        anchor.render_into(out);
+        out.push(CONTENT_SEPARATOR);
+        out.push_str(line);
+    }
+}
+
+/// Index `content` for rendering `regions`, hashing only the lines those
+/// regions' anchors depend on.
+///
+/// Each region is expanded to the block boundaries its scheme needs, so a
+/// snippet of a 50,000-line file hashes tens of lines rather than all of them.
+fn snippet_index<'a>(content: &'a str, regions: &[Range<usize>], scheme: Scheme) -> FileIndex<'a> {
+    // The post-edit line count is not known until the content is split, so the
+    // spans are computed against an unbounded file and `new_partial` clamps.
+    let spans: Vec<Range<usize>> = regions
+        .iter()
+        .map(|region| scheme.required_hash_span(region.clone(), usize::MAX))
+        .collect();
+    FileIndex::new_partial(content, &spans)
+}
+
+/// Bytes `lines` contribute to a newline-joined string: their content plus one
+/// separator each.
+fn line_bytes(lines: &[&str]) -> usize {
+    lines.iter().map(|line| line.len() + 1).sum()
+}
+
+/// Separate snippet parts with `'\n'`, matching a `join("\n")` over them:
+/// nothing before the first part, one newline before every later one.
+fn push_part_separator(out: &mut String, written: &mut bool) {
+    if *written {
+        out.push('\n');
+    } else {
+        *written = true;
+    }
+}
+
+/// Append `"... {count} lines not shown ..."` to `out`.
+fn push_gap_marker(out: &mut String, count: usize) {
+    let mut buf = itoa::Buffer::new();
+    out.push_str("... ");
+    out.push_str(buf.format(count));
+    out.push_str(" lines not shown ...");
+}
+
+/// Build the pre-edit index for `ops`, hashing only the lines their anchors
+/// can reach.
+///
+/// Every anchor that parses contributes the `±ANCHOR_HASH_PADDING` window
+/// around its target, expanded to scheme block boundaries; overlapping windows
+/// merge inside [`FileIndex::new_partial`]. An anchor that does not parse falls
+/// through to [`recover_anchor_by_suffix`], which must compare against every
+/// line in the file to detect ambiguity, so one unparseable anchor forces a
+/// full index — a rare recovery path, paid for only when it is taken.
+fn pre_edit_index<'a>(content: &'a str, ops: &[HashlineOp], scheme: Scheme) -> FileIndex<'a> {
+    let mut spans: Vec<Range<usize>> = Vec::with_capacity(ops.len() + 1);
+
+    for op in ops {
+        let anchors: [Option<&str>; 2] = match op {
+            HashlineOp::Replace {
+                anchor, end_anchor, ..
+            } => [Some(anchor.as_str()), end_anchor.as_deref()],
+            // `"0:"` and `"EOF"` resolve from the line count alone.
+            HashlineOp::InsertAfter { anchor, .. } if anchor == "0:" || anchor == "EOF" => {
+                [None, None]
+            }
+            HashlineOp::InsertAfter { anchor, .. } => [Some(anchor.as_str()), None],
+            HashlineOp::Write { .. } => [None, None],
+        };
+
+        for anchor in anchors.into_iter().flatten() {
+            let Some(parsed) = ParsedAnchor::parse(strip_anchor_suffix(anchor)) else {
+                return FileIndex::new(content);
+            };
+            // `ParsedAnchor::parse` rejects line 0, so this cannot underflow.
+            let target = parsed.line - 1;
+            let window = target.saturating_sub(ANCHOR_HASH_PADDING)
+                ..target.saturating_add(ANCHOR_HASH_PADDING).saturating_add(1);
+            spans.push(scheme.required_hash_span(window, usize::MAX));
+        }
+    }
+
+    FileIndex::new_partial(content, &spans)
 }
 
 /// A validated, resolved edit operation ready for application.
 /// All line indices are 0-based.
 #[derive(Debug)]
-struct ResolvedOp {
+struct ResolvedOp<'a> {
     /// Original index in the input batch (for stable ordering).
     original_idx: usize,
     /// Start line (0-based, inclusive).
     start: usize,
     /// End line (0-based, exclusive). For insert_after, start == end (insertion point).
     end: usize,
-    /// Replacement lines (empty = delete).
-    new_lines: Vec<String>,
+    /// Replacement lines, borrowed from the operation's content (empty =
+    /// delete).
+    new_lines: Vec<&'a str>,
 }
 
 /// Result of [`apply_edits`]: the output to return to the caller, plus the new
@@ -115,8 +264,6 @@ pub struct ApplyResult {
 /// successful), so the caller can write to disk without re-deriving the
 /// content through a separate code path.
 pub fn apply_edits(content: &str, ops: &[HashlineOp], scheme: Scheme) -> ApplyResult {
-    let index = FileIndex::new(content);
-
     if ops.len() == 1
         && let HashlineOp::Write {
             content: new_content,
@@ -138,7 +285,11 @@ pub fn apply_edits(content: &str, ops: &[HashlineOp], scheme: Scheme) -> ApplyRe
         };
     }
 
-    let mut resolved: Vec<ResolvedOp> = Vec::with_capacity(ops.len());
+    // Hashes only what the batch's anchors can reach, so validating a handful
+    // of anchors in a large file costs a handful of windows, not the file.
+    let index = pre_edit_index(content, ops, scheme);
+
+    let mut resolved: Vec<ResolvedOp<'_>> = Vec::with_capacity(ops.len());
 
     for (idx, op) in ops.iter().enumerate() {
         match resolve_op(op, idx, &index, scheme) {
@@ -202,7 +353,9 @@ pub fn apply_edits(content: &str, ops: &[HashlineOp], scheme: Scheme) -> ApplyRe
             .then(b.original_idx.cmp(&a.original_idx))
     });
 
-    let mut result_lines: Vec<String> = index.lines().iter().map(|s| (*s).to_owned()).collect();
+    // Every unchanged line stays a borrow of the original content; only the
+    // pointer table is rebuilt, never the file text.
+    let mut result_lines: Vec<&str> = index.lines().to_vec();
 
     // Collect each edit's affected region in post-edit coordinates by
     // tracking cumulative line-count shifts. Ops are sorted bottom-up for
@@ -218,12 +371,32 @@ pub fn apply_edits(content: &str, ops: &[HashlineOp], scheme: Scheme) -> ApplyRe
         cumulative_shift += inserted as isize - replaced as isize;
     }
 
+    // Joining the lines costs `sum(len) + count - 1` bytes, which differs from
+    // the input only by what the edits add and remove. `content.len()` bounds
+    // the join of the *unedited* lines from above (a `\r\n` terminator becomes
+    // a bare `\n`), so this never under-reserves and the join never reallocates.
+    let mut spliced_bytes = content.len();
     for op in &resolved {
-        result_lines.splice(op.start..op.end, op.new_lines.iter().cloned());
+        spliced_bytes += line_bytes(&op.new_lines);
+        spliced_bytes = spliced_bytes.saturating_sub(line_bytes(&index.lines()[op.start..op.end]));
     }
 
-    let new_content = result_lines.join("\n");
-    let total_new_lines = split_lines(&new_content).len();
+    for op in &resolved {
+        result_lines.splice(op.start..op.end, op.new_lines.iter().copied());
+    }
+
+    // `split_lines` of the join has exactly one entry per spliced line, and
+    // always at least one — deleting every line still leaves the empty file's
+    // single line.
+    let total_new_lines = result_lines.len().max(1);
+
+    let mut new_content = String::with_capacity(spliced_bytes);
+    for (i, line) in result_lines.iter().enumerate() {
+        if i > 0 {
+            new_content.push('\n');
+        }
+        new_content.push_str(line);
+    }
 
     // Sort edit regions top-down and merge nearby ones.
     edit_regions.sort_by_key(|r| r.0);
@@ -270,64 +443,67 @@ fn build_snippet(
 
     // If the span is small enough, emit one contiguous snippet.
     if global_end - global_start <= MAX_CONTIGUOUS_SNIPPET {
-        return format_hashline_content(
-            new_content,
-            Some(global_start + 1),
-            Some(global_end - global_start),
-            scheme,
-        );
+        let region = global_start..global_end;
+        let index = snippet_index(new_content, std::slice::from_ref(&region), scheme);
+        let mut out = String::new();
+        render_region(&index, scheme, region, &mut out);
+        return out;
     }
 
     // Merge overlapping/adjacent regions (with context).
-    let mut merged: Vec<(usize, usize)> = Vec::new();
+    let mut merged: Vec<Range<usize>> = Vec::new();
     for &(start, end) in edit_regions {
         let ctx_start = start.saturating_sub(SNIPPET_CONTEXT);
         let ctx_end = (end + SNIPPET_CONTEXT).min(total_new_lines);
         if let Some(last_region) = merged.last_mut()
-            && ctx_start <= last_region.1
+            && ctx_start <= last_region.end
         {
-            last_region.1 = last_region.1.max(ctx_end);
+            last_region.end = last_region.end.max(ctx_end);
             continue;
         }
-        merged.push((ctx_start, ctx_end));
+        merged.push(ctx_start..ctx_end);
     }
 
-    // Build per-region snippets separated by gap markers.
-    let mut parts: Vec<String> = Vec::new();
+    // One index for every region: each is hashed once, none of the file
+    // between them is hashed at all.
+    let index = snippet_index(new_content, &merged, scheme);
+
+    // Build per-region snippets separated by gap markers. Parts are joined
+    // with '\n', including empty ones from regions that clamp away.
+    let mut out = String::new();
+    let mut written = false;
     let mut prev_end: usize = 0;
 
-    for (i, &(start, end)) in merged.iter().enumerate() {
+    for (i, region) in merged.iter().enumerate() {
+        let (start, end) = (region.start, region.end);
         if i > 0 {
-            let gap = start.saturating_sub(prev_end);
-            parts.push(format!("... {gap} lines not shown ..."));
+            push_part_separator(&mut out, &mut written);
+            push_gap_marker(&mut out, start.saturating_sub(prev_end));
         } else if start > 0 {
-            parts.push(format!("... {start} lines not shown ..."));
+            push_part_separator(&mut out, &mut written);
+            push_gap_marker(&mut out, start);
         }
 
-        parts.push(format_hashline_content(
-            new_content,
-            Some(start + 1),
-            Some(end - start),
-            scheme,
-        ));
+        push_part_separator(&mut out, &mut written);
+        render_region(&index, scheme, region.clone(), &mut out);
         prev_end = end;
     }
 
     if prev_end < total_new_lines {
-        let remaining = total_new_lines - prev_end;
-        parts.push(format!("... {remaining} lines not shown ..."));
+        push_part_separator(&mut out, &mut written);
+        push_gap_marker(&mut out, total_new_lines - prev_end);
     }
 
-    parts.join("\n")
+    out
 }
 
 /// Resolve a single [`HashlineOp`] into a `ResolvedOp`, validating anchors.
-fn resolve_op(
-    op: &HashlineOp,
+fn resolve_op<'a>(
+    op: &'a HashlineOp,
     original_idx: usize,
     index: &FileIndex<'_>,
     scheme: Scheme,
-) -> Result<ResolvedOp, HashlineEditError> {
+) -> Result<ResolvedOp<'a>, HashlineEditError> {
     match op {
         HashlineOp::Replace {
             anchor,
@@ -356,10 +532,10 @@ fn resolve_op(
             if let Some(line_num) = detect_anchor_prefix_in_content(content) {
                 return Err(anchor_content_error("replace", content, line_num));
             }
-            let new_lines: Vec<String> = if content.is_empty() {
-                vec![] // delete
+            let new_lines: Vec<&str> = if content.is_empty() {
+                Vec::new() // delete
             } else {
-                content.lines().map(str::to_owned).collect()
+                content.lines().collect()
             };
 
             Ok(ResolvedOp {
@@ -391,10 +567,10 @@ fn resolve_op(
             if let Some(line_num) = detect_anchor_prefix_in_content(content) {
                 return Err(anchor_content_error("insert_after", content, line_num));
             }
-            let new_lines: Vec<String> = if content.is_empty() {
-                vec![String::new()] // blank line
+            let new_lines: Vec<&str> = if content.is_empty() {
+                vec![""] // blank line
             } else {
-                content.lines().map(str::to_owned).collect()
+                content.lines().collect()
             };
 
             Ok(ResolvedOp {
@@ -422,7 +598,10 @@ fn resolve_op(
 /// (no line number).
 ///
 /// Generates anchors for the file and returns `Some` only if exactly one
-/// line's suffix matches, avoiding ambiguity.
+/// line's suffix matches, avoiding ambiguity. Detecting a second match is what
+/// makes the result trustworthy, so the scan cannot stop early and `index`
+/// must be a full [`FileIndex`] — [`pre_edit_index`] builds one whenever a
+/// batch contains an anchor that might land here.
 fn recover_anchor_by_suffix(
     suffix: &str,
     index: &FileIndex<'_>,
@@ -452,10 +631,7 @@ fn validate_anchor(
 ) -> Result<usize, HashlineEditError> {
     // Strip trailing arrow + content that the model copies from hashline_read
     // output (e.g. `22:abc:rst→code` or `22:abc:rst->code`).
-    let anchor_str = anchor_str
-        .split_once('\u{2192}')
-        .or_else(|| anchor_str.split_once("->"))
-        .map_or(anchor_str, |(pre, _)| pre);
+    let anchor_str = strip_anchor_suffix(anchor_str);
 
     let parsed = match ParsedAnchor::parse(anchor_str) {
         Some(p) => p,
@@ -497,21 +673,24 @@ fn validate_anchor(
 
         ValidationResult::Stale => {
             let shift = scheme.find_shifted(&parsed, index, DEFAULT_SEARCH_RADIUS);
-            let anchors: Vec<Anchor> = scheme.anchors_for_range(index, 0..index.len()).collect();
 
             // Wider context for recovery (±5 lines).
-            let recovery_ctx = 5;
-            let ctx_start = parsed.line.saturating_sub(1).saturating_sub(recovery_ctx);
-            let ctx_end = (parsed.line + recovery_ctx).min(index.len());
+            let ctx_start = parsed
+                .line
+                .saturating_sub(1)
+                .saturating_sub(RECOVERY_CONTEXT);
+            let ctx_end = (parsed.line + RECOVERY_CONTEXT).min(index.len());
 
-            let context: String = (ctx_start..ctx_end)
-                .map(|i| render_anchored_line(&anchors[i], index.line(i).unwrap_or_default()))
-                .collect::<Vec<_>>()
-                .join("\n");
+            let mut context = String::new();
+            render_region(index, scheme, ctx_start..ctx_end, &mut context);
 
             let (shifted_anchor, error_kind, message) = match shift {
                 ShiftResult::Found { new_line } => {
-                    let fresh = anchors[new_line - 1].render();
+                    // `find_shifted` only reports lines it read out of `index`.
+                    let fresh = scheme
+                        .anchor_at(index, new_line - 1)
+                        .expect("find_shifted reported an indexed line")
+                        .render();
                     let msg = format!(
                         "Anchor stale at line {}. \
                          Content appears to have shifted to line {new_line}. \
@@ -549,7 +728,7 @@ fn validate_anchor(
     }
 }
 
-fn check_overlaps(ops: &[ResolvedOp]) -> Option<HashlineEditError> {
+fn check_overlaps(ops: &[ResolvedOp<'_>]) -> Option<HashlineEditError> {
     let mut ranges: Vec<(usize, usize, usize)> = ops
         .iter()
         .filter(|op| op.start != op.end)
@@ -621,9 +800,11 @@ fn overlap_error(
 }
 
 fn build_write_result(new_content: &str, scheme: Scheme) -> HashlineEditOutput {
-    let total = split_lines(new_content).len();
-    let snippet_end = (SNIPPET_CONTEXT * 2).min(total);
-    let snippet = format_hashline_content(new_content, Some(1), Some(snippet_end), scheme);
+    // `render_region` clamps to the file, so a short file needs no line count.
+    let region = 0..SNIPPET_CONTEXT * 2;
+    let index = snippet_index(new_content, std::slice::from_ref(&region), scheme);
+    let mut snippet = String::new();
+    render_region(&index, scheme, region, &mut snippet);
 
     HashlineEditOutput::EditsApplied(HashlineEditsApplied {
         applied: 1,
@@ -638,6 +819,7 @@ fn build_write_result(new_content: &str, scheme: Scheme) -> HashlineEditOutput {
 mod tests {
     use super::*;
     use crate::config::{SchemeConfig, SchemeKind};
+    use crate::testutil::corpus;
 
     fn scheme() -> Scheme {
         SchemeConfig::default().build_scheme().unwrap()
@@ -646,6 +828,15 @@ mod tests {
     fn content_only() -> Scheme {
         SchemeConfig {
             kind: SchemeKind::ContentOnly,
+            ..Default::default()
+        }
+        .build_scheme()
+        .unwrap()
+    }
+
+    fn checkpoint() -> Scheme {
+        SchemeConfig {
+            kind: SchemeKind::Checkpoint,
             ..Default::default()
         }
         .build_scheme()
@@ -1131,5 +1322,287 @@ mod tests {
             result.new_content.as_deref(),
             Some("target\nfirst\nsecond\n")
         );
+    }
+
+    // ── partial pre-edit index: span coverage ────────────────────────────────
+
+    /// Render the fresh-anchor context a stale anchor at 1-based `line` must
+    /// produce, derived independently from a **full** index.
+    ///
+    /// Returns the context text and its 1-based start line.
+    fn reference_context(content: &str, line: usize, scheme: Scheme) -> (String, usize) {
+        let index = FileIndex::new(content);
+        let ctx_start = line.saturating_sub(1).saturating_sub(RECOVERY_CONTEXT);
+        let ctx_end = (line + RECOVERY_CONTEXT).min(index.len());
+        let text = scheme
+            .anchors_for_range(&index, ctx_start..ctx_end)
+            .map(|a| format!("{a}\u{2192}{}", index.line(a.line - 1).unwrap_or_default()))
+            .collect::<Vec<_>>()
+            .join("\n");
+        (text, ctx_start + 1)
+    }
+
+    /// Assert that a stale-anchor error rendered off the partial pre-edit index
+    /// matches what a full index would have produced.
+    fn assert_stale_error_matches_full_index(
+        current: &str,
+        line: usize,
+        scheme: Scheme,
+        err: &HashlineEditError,
+    ) {
+        let (expected_ctx, expected_start) = reference_context(current, line, scheme);
+        assert_eq!(err.context.as_deref(), Some(expected_ctx.as_str()));
+        assert_eq!(err.context_start_line, Some(expected_start));
+
+        // A suggested anchor must be the real anchor of the shifted line.
+        if let Some(ref suggested) = err.shifted_anchor {
+            let index = FileIndex::new(current);
+            let parsed = ParsedAnchor::parse(suggested).expect("suggested anchor parses");
+            assert_eq!(
+                scheme.validate(&parsed, &index),
+                ValidationResult::Valid,
+                "suggested anchor {suggested} must be fresh"
+            );
+        }
+    }
+
+    /// Every stale-anchor recovery path — validate, `find_shifted`, and the
+    /// ±[`RECOVERY_CONTEXT`] context render — must stay inside the padded spans
+    /// the partial pre-edit index hashes, for every scheme and at every block
+    /// boundary. Anything short of that panics in `FileIndex`, so reaching the
+    /// assertions at all is half the test; the other half is that the rendered
+    /// error is byte-identical to a full index's.
+    #[test]
+    fn padded_spans_cover_validate_shift_and_context() {
+        // Chunk boundaries fall every 8 lines and checkpoints every 32 under
+        // the default config, so these targets sit on, just before, and just
+        // after both kinds of boundary.
+        const TARGETS: &[usize] = &[1, 7, 8, 9, 16, 17, 31, 32, 33, 64, 65, 96, 129, 160, 195];
+        let mut stale_paths = 0usize;
+
+        for s in [scheme(), content_only(), checkpoint()] {
+            for seed in 0..6u32 {
+                let original = corpus(200, 0x57A1_0000 + seed, true);
+                let total = FileIndex::new(&original).len();
+
+                for &target in TARGETS {
+                    if target > total {
+                        continue;
+                    }
+                    let anchor = anchor_for(&original, target, s);
+
+                    // (a) Content shifted down by one line.
+                    let shifted = format!("// shift marker\n{original}");
+                    // (b) The anchored line itself rewritten in place.
+                    let mut lines: Vec<&str> = FileIndex::new(&original).lines().to_vec();
+                    lines[target - 1] = "@@ rewritten sentinel line @@";
+                    let rewritten = lines.join("\n");
+
+                    for current in [shifted, rewritten] {
+                        let result = apply_edits(&current, &[replace(&anchor, "X")], s);
+                        // A corpus line can coincidentally re-validate; only the
+                        // stale outcomes carry the recovery context.
+                        if let HashlineEditOutput::Error(ref err) = result.output
+                            && err.context.is_some()
+                        {
+                            stale_paths += 1;
+                            assert_stale_error_matches_full_index(&current, target, s, err);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Guard against the loop silently never reaching the stale branch.
+        assert!(
+            stale_paths > 100,
+            "only {stale_paths} stale paths exercised"
+        );
+    }
+
+    #[test]
+    fn ambiguous_stale_anchor_at_chunk_boundary_renders_context() {
+        let s = content_only();
+        let original: String = (0..80).map(|i| format!("line {i}\n")).collect();
+        // 1-based line 65 is a chunk boundary (0-based 64) under 8-line chunks.
+        let target = 65;
+        let anchor = anchor_for(&original, target, s);
+
+        let mut lines: Vec<&str> = FileIndex::new(&original).lines().to_vec();
+        let original_text = lines[target - 1];
+        // Two nearby duplicates of the anchored text, and the line itself
+        // rewritten, so `find_shifted` sees exactly two candidates.
+        lines[target - 3] = original_text;
+        lines[target + 1] = original_text;
+        lines[target - 1] = "@@ rewritten @@";
+        let current = lines.join("\n");
+
+        let result = apply_edits(&current, &[replace(&anchor, "X")], s);
+        let err = expect_error(&result);
+        assert_eq!(err.error, HashlineEditErrorKind::AmbiguousAnchor);
+        assert!(
+            err.message.contains("Multiple candidates"),
+            "{}",
+            err.message
+        );
+        assert_stale_error_matches_full_index(&current, target, s, err);
+    }
+
+    #[test]
+    fn suffix_recovery_falls_back_to_full_index() {
+        // The match sits far outside any window a padded anchor span would
+        // cover, so recovery only works if the missing line number forced a
+        // full index.
+        let content: String = (0..400).map(|i| format!("distinct line {i};\n")).collect();
+        for s in [scheme(), content_only(), checkpoint()] {
+            let full = anchor_for(&content, 301, s);
+            // Drop the leading "301:", leaving just the hash suffix.
+            let suffix = full.split_once(':').expect("anchor has a line number").1;
+
+            let result = apply_edits(&content, &[replace(suffix, "RECOVERED")], s);
+            expect_applied(&result);
+            let new_content = result.new_content.expect("applied");
+            assert_eq!(
+                new_content.lines().nth(300),
+                Some("RECOVERED"),
+                "scheme {}",
+                s.name()
+            );
+            // Every other line is untouched.
+            assert_eq!(new_content.lines().nth(299), Some("distinct line 299;"));
+            assert_eq!(new_content.lines().nth(301), Some("distinct line 301;"));
+        }
+    }
+
+    // ── splice and capacity ─────────────────────────────────────────────────
+
+    #[test]
+    fn batch_splice_handles_adjacent_and_distant_regions() {
+        let content: String = (1..=200).map(|i| format!("line number {i}\n")).collect();
+        let s = scheme();
+
+        // Adjacent edits: their ±SNIPPET_CONTEXT regions overlap and merge.
+        let adjacent = [
+            replace(&anchor_for(&content, 20, s), "A1\nA2"),
+            replace(&anchor_for(&content, 22, s), "B1"),
+            HashlineOp::InsertAfter {
+                anchor: anchor_for(&content, 24, s),
+                content: "C1\nC2".to_owned(),
+            },
+        ];
+        let result = apply_edits(&content, &adjacent, s);
+        let applied = expect_applied(&result);
+        let new_content = result.new_content.as_deref().expect("applied");
+        let lines: Vec<&str> = new_content.lines().collect();
+        assert_eq!(
+            &lines[18..27],
+            &[
+                "line number 19",
+                "A1",
+                "A2",
+                "line number 21",
+                "B1",
+                "line number 23",
+                "line number 24",
+                "C1",
+                "C2",
+            ]
+        );
+        // +1 line from the two-line replace, +2 from the insert.
+        assert_eq!(lines.len(), 200 + 3);
+        // One merged region, so no gap markers.
+        assert!(
+            !applied.snippet.contains("lines not shown"),
+            "{}",
+            applied.snippet
+        );
+
+        // Distant edits: separate regions, gap markers between them.
+        let distant = [
+            replace(&anchor_for(&content, 5, s), "EDIT-A"),
+            replace(&anchor_for(&content, 180, s), "EDIT-B"),
+        ];
+        let result = apply_edits(&content, &distant, s);
+        let applied = expect_applied(&result);
+        let snippet = &applied.snippet;
+        assert!(snippet.contains("... 1 lines not shown ..."), "{snippet}");
+        assert!(
+            snippet.contains("EDIT-A") && snippet.contains("EDIT-B"),
+            "{snippet}"
+        );
+        // Every anchor in a gapped snippet still validates against the result.
+        let new_content = result.new_content.as_deref().expect("applied");
+        let new_index = FileIndex::new(new_content);
+        for line in snippet.lines().filter(|l| !l.starts_with("... ")) {
+            let anchor_part = line.split('\u{2192}').next().expect("anchor prefix");
+            let parsed = ParsedAnchor::parse(anchor_part).expect("snippet anchor parses");
+            assert_eq!(s.validate(&parsed, &new_index), ValidationResult::Valid);
+        }
+    }
+
+    #[test]
+    fn splice_preserves_crlf_normalization_and_line_count() {
+        // The corpus mixes `\r`-terminated lines, so the pre-edit join is
+        // shorter than the file — the case the capacity bound must survive.
+        let content = corpus(60, 0xC12F_0001, true);
+        let s = scheme();
+        let result = apply_edits(&content, &[replace(&anchor_for(&content, 30, s), "X")], s);
+        let produced = result.new_content.expect("applied");
+
+        let mut expected: Vec<&str> = FileIndex::new(&content).lines().to_vec();
+        expected[29] = "X";
+        assert_eq!(produced, expected.join("\n"));
+    }
+
+    #[test]
+    fn splice_capacity_never_under_reserves() {
+        for seed in 0..8u32 {
+            for &trailing in &[true, false] {
+                let content = corpus(120, 0x5CA9_0000 + seed, trailing);
+                let joined = FileIndex::new(&content).lines().join("\n");
+                // The load-bearing bound: joining a file's own lines never
+                // exceeds its byte length, because a `\r\n` terminator
+                // collapses to a bare `\n`.
+                assert!(joined.len() <= content.len(), "seed {seed}");
+
+                let s = scheme();
+                let target = 40usize;
+                let replacement = "REPLACED\nWITH\nTHREE LINES";
+                let op = replace(&anchor_for(&content, target, s), replacement);
+                let produced = apply_edits(&content, &[op], s)
+                    .new_content
+                    .expect("applied");
+
+                let removed = line_bytes(&FileIndex::new(&content).lines()[target - 1..target]);
+                let inserted = line_bytes(&replacement.lines().collect::<Vec<_>>());
+                let reserved = content.len() + inserted - removed;
+
+                assert!(
+                    reserved >= produced.len(),
+                    "reserved {reserved} < produced {} (seed {seed})",
+                    produced.len()
+                );
+                // And it over-reserves by exactly the terminator bytes the join
+                // drops — never more.
+                assert_eq!(reserved - produced.len(), content.len() - joined.len());
+            }
+        }
+    }
+
+    #[test]
+    fn deleting_every_line_yields_an_empty_file() {
+        // The splice can empty the line vector, but a file still has one
+        // (empty) line — the snippet must render it rather than nothing.
+        let content = "only\n";
+        let s = scheme();
+        let op = HashlineOp::Replace {
+            anchor: anchor_for(content, 1, s),
+            end_anchor: Some(anchor_for(content, 2, s)),
+            content: String::new(),
+        };
+        let result = apply_edits(content, &[op], s);
+        let applied = expect_applied(&result);
+        assert_eq!(result.new_content.as_deref(), Some(""));
+        assert!(applied.snippet.ends_with('\u{2192}'), "{}", applied.snippet);
     }
 }

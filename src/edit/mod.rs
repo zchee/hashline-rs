@@ -13,9 +13,21 @@ use std::path::Path;
 
 pub use types::{HashlineEditInput, HashlineEditOutput, HashlineOp};
 
+use crate::read::SPAWN_BLOCKING_THRESHOLD_BYTES;
 use crate::scheme::Scheme;
 use crate::util::{ToolOutcome, Workspace};
 use types::{HashlineEditError, HashlineEditErrorKind, HashlineEditsApplied};
+
+/// Decode file bytes as UTF-8, moving the buffer when it is already valid.
+///
+/// Valid UTF-8 is the overwhelmingly common case and costs no copy; only
+/// genuinely invalid input pays for the lossy rebuild.
+fn decode_utf8(bytes: Vec<u8>) -> String {
+    match String::from_utf8(bytes) {
+        Ok(text) => text,
+        Err(e) => String::from_utf8_lossy(e.as_bytes()).into_owned(),
+    }
+}
 
 /// Render a successful edit application as model-facing text.
 fn render_applied(applied: &HashlineEditsApplied, path: &Path) -> String {
@@ -73,7 +85,7 @@ pub async fn run_edit(
     };
 
     let old_content = match tokio::fs::read(&path).await {
-        Ok(bytes) => Some(String::from_utf8_lossy(&bytes).into_owned()),
+        Ok(bytes) => Some(decode_utf8(bytes)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
         Err(e) => {
             return ToolOutcome::error(format!("Failed to read {}: {e}", path.display()));
@@ -94,7 +106,7 @@ pub async fn run_edit(
                     path.display()
                 ));
             }
-            return write_and_render("", input, &path, scheme).await;
+            return write_and_render(String::new(), input, &path, scheme).await;
         }
         return ToolOutcome::error(format!(
             "File not found: {}. Only a single \"write\" op can create a new file.",
@@ -102,17 +114,36 @@ pub async fn run_edit(
         ));
     };
 
-    write_and_render(&old_content, input, &path, scheme).await
+    write_and_render(old_content, input, &path, scheme).await
 }
 
 /// Apply the edits to `old_content`, persist on success, and render text.
+///
+/// All anchors are validated before any edit is applied, so the file is either
+/// fully updated or left untouched.
 async fn write_and_render(
-    old_content: &str,
+    old_content: String,
     input: &HashlineEditInput,
     path: &Path,
     scheme: Scheme,
 ) -> ToolOutcome {
-    let result = apply::apply_edits(old_content, &input.edits, scheme);
+    // Splicing and anchoring a large file would stall the reactor, so hand the
+    // CPU-bound step to a blocking thread once it is big enough to matter. The
+    // task needs `'static` data, so the (request-sized) op list is cloned; the
+    // file content moves.
+    let result = if old_content.len() > SPAWN_BLOCKING_THRESHOLD_BYTES {
+        let edits = input.edits.clone();
+        let task =
+            tokio::task::spawn_blocking(move || apply::apply_edits(&old_content, &edits, scheme));
+        match task.await {
+            Ok(result) => result,
+            Err(e) => {
+                return ToolOutcome::error(format!("Failed to edit {}: {e}", path.display()));
+            }
+        }
+    } else {
+        apply::apply_edits(&old_content, &input.edits, scheme)
+    };
 
     if let Some(ref new_content) = result.new_content
         && let Err(e) = tokio::fs::write(path, new_content.as_bytes()).await
@@ -248,5 +279,62 @@ mod tests {
         assert!(outcome.is_error);
         assert!(outcome.text.contains("retry your edit"));
         assert_eq!(std::fs::read_to_string(&file).unwrap(), original);
+    }
+
+    #[tokio::test]
+    async fn large_file_edit_runs_on_a_blocking_thread() {
+        // Comfortably past SPAWN_BLOCKING_THRESHOLD_BYTES, so the apply step
+        // takes the spawn_blocking branch rather than running on the reactor.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let file = tmp.path().join("big.rs");
+        let content: String = (0..30_000)
+            .map(|i| format!("let value_{i} = {i};\n"))
+            .collect();
+        assert!(content.len() > SPAWN_BLOCKING_THRESHOLD_BYTES);
+        std::fs::write(&file, &content).unwrap();
+
+        let s = scheme();
+        let input = HashlineEditInput {
+            file_path: "big.rs".to_owned(),
+            edits: vec![HashlineOp::Replace {
+                anchor: anchor_for(&content, 20_000, s),
+                end_anchor: None,
+                content: "let value_19999 = EDITED;".to_owned(),
+            }],
+        };
+        let outcome = run_edit(&ws(tmp.path()), &input, s).await;
+        assert!(!outcome.is_error, "{}", outcome.text);
+
+        let written = std::fs::read_to_string(&file).unwrap();
+        let lines: Vec<&str> = written.lines().collect();
+        assert_eq!(lines[19_999], "let value_19999 = EDITED;");
+        assert_eq!(lines[19_998], "let value_19998 = 19998;");
+        assert_eq!(lines.len(), 30_000);
+    }
+
+    #[tokio::test]
+    async fn invalid_utf8_falls_back_to_lossy_decoding() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let file = tmp.path().join("bad.txt");
+        // A lone 0xFF byte is not valid UTF-8; decoding must not fail the call.
+        std::fs::write(&file, b"alpha\n\xffbeta\n").unwrap();
+
+        let lossy = String::from_utf8_lossy(b"alpha\n\xffbeta\n").into_owned();
+        let s = scheme();
+        let input = HashlineEditInput {
+            file_path: "bad.txt".to_owned(),
+            edits: vec![HashlineOp::Replace {
+                anchor: anchor_for(&lossy, 1, s),
+                end_anchor: None,
+                content: "ALPHA".to_owned(),
+            }],
+        };
+        let outcome = run_edit(&ws(tmp.path()), &input, s).await;
+        assert!(!outcome.is_error, "{}", outcome.text);
+        assert!(
+            std::fs::read_to_string(&file)
+                .unwrap()
+                .starts_with("ALPHA\n")
+        );
     }
 }
