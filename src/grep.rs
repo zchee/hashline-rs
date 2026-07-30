@@ -1,27 +1,47 @@
 //! `hashline_grep` — anchor-annotated content search.
 //!
-//! Self-contained reimplementation of ripgrep-style content search using the
-//! `regex` and `ignore` crates. Match lines carry scheme-aware anchors so a
+//! Self-contained reimplementation of ripgrep-style content search: the
+//! `ignore` crate walks the tree and ripgrep's own engine (`grep-searcher`
+//! driving a `grep-regex` matcher) searches each file as a single haystack, so
+//! the regex engine's SIMD literal prefilters run across whole files instead of
+//! being restarted per line. Match lines carry scheme-aware anchors so a
 //! grep → edit workflow needs no intermediate file read.
 //!
 //! Output format per line: `LINE:ANCHOR:CONTENT` for matches and
 //! `LINE:ANCHOR-CONTENT` for context lines (grep-style separators).
+//!
+//! Only the lines that are actually rendered (matches plus their context) are
+//! anchored: spans are merged first and [`Scheme::anchors_for_range`] is called
+//! per span, so a single match in a 100,000-line file costs a handful of
+//! anchors rather than a full-file sweep.
 
+use std::io;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use ignore::{WalkBuilder, WalkState, overrides::OverrideBuilder};
-use regex::{Regex, RegexBuilder};
+use grep_matcher::LineTerminator;
+use grep_regex::{RegexMatcher, RegexMatcherBuilder};
+use grep_searcher::{BinaryDetection, Searcher, SearcherBuilder, Sink, SinkFinish, SinkMatch};
+use ignore::{
+    DirEntry, ParallelVisitor, ParallelVisitorBuilder, WalkBuilder, WalkState,
+    overrides::OverrideBuilder,
+};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::index::FileIndex;
-use crate::scheme::{Anchor, Scheme};
+use crate::scheme::Scheme;
 use crate::util::{ToolOutcome, Workspace};
 
 /// Default cap on reported match lines.
 pub const DEFAULT_MAX_MATCHES: usize = 200;
+
+/// Bytes reserved per rendered line for its anchor and separators, on top of
+/// the line's own text: line number, up to two 4-letter hashes, three
+/// separators and the newline.
+const ANCHOR_RENDER_OVERHEAD: usize = 16;
 
 /// Input for the `hashline_grep` tool.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -60,76 +80,289 @@ pub struct HashlineGrepInput {
     pub max_matches: Option<usize>,
 }
 
-/// One rendered line of a file section: `(line_number, is_match, text)`.
-type RenderedLine = (usize, bool, String);
-
-/// Per-file search result.
+/// Per-file search result: the fully rendered hit section plus its match count.
 struct FileHit {
+    /// Path relative to the search root, as rendered in the section header.
     rel: PathBuf,
-    lines: Vec<RenderedLine>,
+    /// Rendered `LINE:ANCHOR:CONTENT` lines and `--` gap markers, newline
+    /// terminated, ready to be appended verbatim to the output.
+    body: String,
+    /// Number of match lines (context lines excluded) in `body`.
     matches: usize,
+}
+
+/// Collects the 1-based line numbers of matching lines from a searcher run.
+///
+/// The searcher is configured without context, so every callback is a match
+/// line; line numbers arrive in ascending order.
+#[derive(Debug, Default)]
+struct MatchLineSink {
+    /// 1-based match line numbers, ascending and deduplicated.
+    lines: Vec<usize>,
+    /// Whether the searcher classified the content as binary and quit.
+    binary: bool,
+}
+
+impl Sink for MatchLineSink {
+    type Error = io::Error;
+
+    fn matched(&mut self, _searcher: &Searcher, mat: &SinkMatch<'_>) -> Result<bool, io::Error> {
+        if let Some(number) = mat.line_number()
+            && let Ok(number) = usize::try_from(number)
+        {
+            // A single match callback covers one whole line, but guard against
+            // repeats so the caller can rely on a strictly ascending list.
+            if self.lines.last() != Some(&number) {
+                self.lines.push(number);
+            }
+        }
+        Ok(true)
+    }
+
+    fn finish(&mut self, _searcher: &Searcher, finish: &SinkFinish) -> Result<(), io::Error> {
+        self.binary = finish.binary_byte_offset().is_some();
+        Ok(())
+    }
+}
+
+/// Build the regex matcher backing a search.
+///
+/// `multi_line` makes `^`/`$` line anchors so the pattern keeps its per-line
+/// meaning while matching over a whole-file haystack, and `crlf` extends those
+/// anchors across `\r\n` and bans the line terminator from character classes —
+/// together they reproduce "run the pattern against each `str::lines()` line"
+/// semantics exactly, including on CRLF files.
+fn build_matcher(pattern: &str, ignore_case: bool) -> Result<RegexMatcher, grep_regex::Error> {
+    RegexMatcherBuilder::new()
+        .case_insensitive(ignore_case)
+        .multi_line(true)
+        .crlf(true)
+        .build(pattern)
+}
+
+/// Build a searcher configured for line-numbered, context-free matching.
+///
+/// Context is expanded by this module (spans are merged before anchoring), and
+/// binary files are detected by the searcher itself: a NUL byte stops the
+/// search and is reported through [`SinkFinish::binary_byte_offset`].
+fn build_searcher() -> Searcher {
+    SearcherBuilder::new()
+        .line_terminator(LineTerminator::crlf())
+        .line_number(true)
+        .binary_detection(BinaryDetection::quit(0))
+        .bom_sniffing(false)
+        .build()
+}
+
+/// Collect the 1-based line numbers of every matching line in `content`.
+///
+/// Returns `None` if the content was classified as binary or the search
+/// failed.
+fn match_lines(
+    matcher: &RegexMatcher,
+    searcher: &mut Searcher,
+    content: &str,
+) -> Option<Vec<usize>> {
+    let mut sink = MatchLineSink::default();
+    searcher
+        .search_slice(matcher, content.as_bytes(), &mut sink)
+        .ok()?;
+    if sink.binary {
+        return None;
+    }
+    Some(sink.lines)
+}
+
+/// Merge each match's `±context` window into a minimal set of ascending,
+/// non-adjacent 0-based line spans.
+///
+/// Adjacent windows are merged as well as overlapping ones, so the gap between
+/// two returned spans is always at least one unrendered line — exactly where a
+/// `--` marker belongs.
+fn included_spans(
+    match_lines: &[usize],
+    before: usize,
+    after: usize,
+    line_count: usize,
+) -> Vec<Range<usize>> {
+    let mut spans: Vec<Range<usize>> = Vec::new();
+    for &line_no in match_lines {
+        let idx = line_no - 1;
+        let start = idx.saturating_sub(before);
+        let end = idx.saturating_add(after).saturating_add(1).min(line_count);
+        match spans.last_mut() {
+            Some(last) if start <= last.end => last.end = last.end.max(end),
+            _ => spans.push(start..end),
+        }
+    }
+    spans
 }
 
 /// Search a single file, returning its anchored hit section (if any match).
 fn search_file(
     path: &Path,
     rel: PathBuf,
-    re: &Regex,
+    matcher: &RegexMatcher,
+    searcher: &mut Searcher,
     before: usize,
     after: usize,
     scheme: Scheme,
 ) -> Option<FileHit> {
     let bytes = std::fs::read(path).ok()?;
-    if bytes.contains(&0) {
-        return None; // binary
-    }
+    // Borrows for valid UTF-8, which is the overwhelmingly common case.
     let content = String::from_utf8_lossy(&bytes);
-    let lines: Vec<&str> = content.lines().collect();
 
-    let match_idxs: Vec<usize> = lines
-        .iter()
-        .enumerate()
-        .filter(|(_, line)| re.is_match(line))
-        .map(|(i, _)| i)
-        .collect();
-    if match_idxs.is_empty() {
+    let matched = match_lines(matcher, searcher, &content)?;
+    if matched.is_empty() {
         return None;
     }
 
-    // Anchors are generated from the full FileIndex view so contextual
-    // fingerprints match what hashline_read/hashline_edit compute.
+    // Anchors are generated from the same FileIndex view hashline_read and
+    // hashline_edit use, so a grep anchor can be passed straight to an edit.
     let index = FileIndex::new(&content);
-    let anchors: Vec<Anchor> = scheme.anchors_for_range(&index, 0..index.len()).collect();
+    // `FileIndex` appends the synthetic trailing empty line hashline's 1-based
+    // numbering needs; grep numbers lines like `str::lines()` and never renders
+    // that line, so searchable lines stop one short of the index for content
+    // ending in a newline.
+    let line_count = if content.is_empty() || content.ends_with('\n') {
+        index.len() - 1
+    } else {
+        index.len()
+    };
 
-    let mut is_match = vec![false; lines.len()];
-    let mut included = vec![false; lines.len()];
-    for &m in &match_idxs {
-        is_match[m] = true;
-        let start = m.saturating_sub(before);
-        let end = (m + after).min(lines.len() - 1);
-        for flag in &mut included[start..=end] {
-            *flag = true;
+    let spans = included_spans(&matched, before, after, line_count);
+    let rendered_lines: usize = spans.iter().map(Range::len).sum();
+    let avg_line_bytes = content.len() / line_count.max(1);
+    let mut body = String::with_capacity(
+        rendered_lines
+            .saturating_mul(avg_line_bytes.saturating_add(ANCHOR_RENDER_OVERHEAD))
+            .saturating_add(spans.len().saturating_mul(3)),
+    );
+
+    // Match lines and rendered lines both ascend, so one forward cursor over
+    // `matched` decides the `:`/`-` separator without a per-line lookup table.
+    let mut cursor = 0usize;
+    for (span_position, span) in spans.iter().enumerate() {
+        if span_position > 0 {
+            body.push_str("--\n");
+        }
+        for (offset, anchor) in scheme.anchors_for_range(&index, span.clone()).enumerate() {
+            let idx = span.start + offset;
+            let line_no = idx + 1;
+            while matched.get(cursor).is_some_and(|&m| m < line_no) {
+                cursor += 1;
+            }
+            anchor.render_into(&mut body);
+            body.push(if matched.get(cursor) == Some(&line_no) {
+                ':'
+            } else {
+                '-'
+            });
+            body.push_str(index.lines()[idx]);
+            body.push('\n');
         }
     }
 
-    let rendered: Vec<RenderedLine> = included
-        .iter()
-        .enumerate()
-        .filter(|&(_, inc)| *inc)
-        .map(|(i, _)| {
-            let mut text = String::new();
-            anchors[i].render_into(&mut text);
-            text.push(if is_match[i] { ':' } else { '-' });
-            text.push_str(lines[i]);
-            (i + 1, is_match[i], text)
-        })
-        .collect();
-
     Some(FileHit {
         rel,
-        lines: rendered,
-        matches: match_idxs.len(),
+        body,
+        matches: matched.len(),
     })
+}
+
+/// Read-only state shared by every worker of one grep request's walk.
+struct SearchContext<'a> {
+    /// Compiled pattern; `RegexMatcher` is `Sync`, so all workers share one.
+    matcher: &'a RegexMatcher,
+    /// Search root, used to render section headers as relative paths.
+    root: &'a Path,
+    /// Context lines before each match.
+    before: usize,
+    /// Context lines after each match.
+    after: usize,
+    /// Anchor scheme (`Copy`, built once per server).
+    scheme: Scheme,
+    /// Running match total across all workers.
+    total: AtomicUsize,
+    /// The walk stops once `total` exceeds this.
+    quit_threshold: usize,
+}
+
+/// Per-worker visitor: accumulates hits thread-locally and hands the whole
+/// batch to the shared collector exactly once, when the worker finishes.
+struct GrepVisitor<'a> {
+    ctx: &'a SearchContext<'a>,
+    collected: &'a Mutex<Vec<Vec<FileHit>>>,
+    searcher: Searcher,
+    hits: Vec<FileHit>,
+}
+
+impl ParallelVisitor for GrepVisitor<'_> {
+    fn visit(&mut self, entry: Result<DirEntry, ignore::Error>) -> WalkState {
+        let Ok(entry) = entry else {
+            return WalkState::Continue;
+        };
+        if !entry.file_type().is_some_and(|t| t.is_file()) {
+            return WalkState::Continue;
+        }
+        let rel = entry
+            .path()
+            .strip_prefix(self.ctx.root)
+            .unwrap_or(entry.path())
+            .to_path_buf();
+        if let Some(hit) = search_file(
+            entry.path(),
+            rel,
+            self.ctx.matcher,
+            &mut self.searcher,
+            self.ctx.before,
+            self.ctx.after,
+            self.ctx.scheme,
+        ) {
+            let found = self.ctx.total.fetch_add(hit.matches, Ordering::Relaxed) + hit.matches;
+            self.hits.push(hit);
+            if found > self.ctx.quit_threshold {
+                return WalkState::Quit;
+            }
+        }
+        WalkState::Continue
+    }
+}
+
+impl Drop for GrepVisitor<'_> {
+    /// Merge this worker's batch into the shared collector.
+    ///
+    /// The walker drops every visitor once its worker thread is done — both on
+    /// normal completion and after a [`WalkState::Quit`] — so this is the
+    /// single point of cross-thread synchronization per worker rather than per
+    /// matching file.
+    fn drop(&mut self) {
+        if self.hits.is_empty() {
+            return;
+        }
+        let batch = std::mem::take(&mut self.hits);
+        self.collected
+            .lock()
+            .expect("grep collector mutex poisoned")
+            .push(batch);
+    }
+}
+
+/// Builds one [`GrepVisitor`] per worker thread of the parallel walk.
+struct GrepVisitorBuilder<'a> {
+    ctx: &'a SearchContext<'a>,
+    collected: &'a Mutex<Vec<Vec<FileHit>>>,
+}
+
+impl<'a> ParallelVisitorBuilder<'a> for GrepVisitorBuilder<'a> {
+    fn build(&mut self) -> Box<dyn ParallelVisitor + 'a> {
+        Box::new(GrepVisitor {
+            ctx: self.ctx,
+            collected: self.collected,
+            searcher: build_searcher(),
+            hits: Vec::new(),
+        })
+    }
 }
 
 /// Assemble the final output text from sorted per-file hits.
@@ -145,23 +378,14 @@ fn assemble_output(hits: &[FileHit], max_matches: usize) -> String {
             truncated = true;
             break;
         }
+        let header = hit.rel.to_string_lossy();
+        out.reserve(header.len() + hit.body.len() + 2);
         if !out.is_empty() {
             out.push('\n');
         }
-        out.push_str(&hit.rel.display().to_string());
+        out.push_str(&header);
         out.push('\n');
-
-        let mut prev_line: Option<usize> = None;
-        for (line_no, _, text) in &hit.lines {
-            if let Some(prev) = prev_line
-                && *line_no > prev + 1
-            {
-                out.push_str("--\n");
-            }
-            out.push_str(text);
-            out.push('\n');
-            prev_line = Some(*line_no);
-        }
+        out.push_str(&hit.body);
         shown_matches += hit.matches;
         shown_files += 1;
     }
@@ -187,11 +411,8 @@ fn assemble_output(hits: &[FileHit], max_matches: usize) -> String {
 /// This is a blocking function — call it via `spawn_blocking` from async
 /// contexts.
 pub fn run_grep(workspace: &Workspace, input: &HashlineGrepInput, scheme: Scheme) -> ToolOutcome {
-    let re = match RegexBuilder::new(&input.pattern)
-        .case_insensitive(input.ignore_case.unwrap_or(false))
-        .build()
-    {
-        Ok(re) => re,
+    let matcher = match build_matcher(&input.pattern, input.ignore_case.unwrap_or(false)) {
+        Ok(matcher) => matcher,
         Err(e) => {
             return ToolOutcome::error(format!("Invalid regex pattern \"{}\": {e}", input.pattern));
         }
@@ -222,9 +443,18 @@ pub fn run_grep(workspace: &Workspace, input: &HashlineGrepInput, scheme: Scheme
         let rel = search_root
             .file_name()
             .map_or_else(|| search_root.clone(), PathBuf::from);
-        let hits: Vec<FileHit> = search_file(&search_root, rel, &re, before, after, scheme)
-            .into_iter()
-            .collect();
+        let mut searcher = build_searcher();
+        let hits: Vec<FileHit> = search_file(
+            &search_root,
+            rel,
+            &matcher,
+            &mut searcher,
+            before,
+            after,
+            scheme,
+        )
+        .into_iter()
+        .collect();
         if hits.is_empty() {
             return ToolOutcome::success("No matches found.".to_owned());
         }
@@ -247,37 +477,29 @@ pub fn run_grep(workspace: &Workspace, input: &HashlineGrepInput, scheme: Scheme
         }
     }
 
-    let hits: Mutex<Vec<FileHit>> = Mutex::new(Vec::new());
-    let total: AtomicUsize = AtomicUsize::new(0);
-    // Stop walking once we have gathered far more than the cap — enough that
-    // path-sorted truncation stays deterministic for any realistic layout.
-    let quit_threshold = max_matches.saturating_mul(50);
+    let ctx = SearchContext {
+        matcher: &matcher,
+        root: &search_root,
+        before,
+        after,
+        scheme,
+        total: AtomicUsize::new(0),
+        // Stop walking once we have gathered far more than the cap — enough
+        // that path-sorted truncation stays deterministic for any realistic
+        // layout.
+        quit_threshold: max_matches.saturating_mul(50),
+    };
+    let collected: Mutex<Vec<Vec<FileHit>>> = Mutex::new(Vec::new());
 
-    builder.build_parallel().run(|| {
-        Box::new(|entry| {
-            let Ok(entry) = entry else {
-                return WalkState::Continue;
-            };
-            if !entry.file_type().is_some_and(|t| t.is_file()) {
-                return WalkState::Continue;
-            }
-            let rel = entry
-                .path()
-                .strip_prefix(&search_root)
-                .unwrap_or(entry.path())
-                .to_path_buf();
-            if let Some(hit) = search_file(entry.path(), rel, &re, before, after, scheme) {
-                let found = total.fetch_add(hit.matches, Ordering::Relaxed) + hit.matches;
-                hits.lock().expect("grep hits mutex poisoned").push(hit);
-                if found > quit_threshold {
-                    return WalkState::Quit;
-                }
-            }
-            WalkState::Continue
-        })
+    builder.build_parallel().visit(&mut GrepVisitorBuilder {
+        ctx: &ctx,
+        collected: &collected,
     });
 
-    let mut hits = hits.into_inner().expect("grep hits mutex poisoned");
+    let batches = collected
+        .into_inner()
+        .expect("grep collector mutex poisoned");
+    let mut hits: Vec<FileHit> = batches.into_iter().flatten().collect();
     if hits.is_empty() {
         return ToolOutcome::success("No matches found.".to_owned());
     }
@@ -310,6 +532,21 @@ mod tests {
             context: None,
             max_matches: None,
         }
+    }
+
+    /// Naive per-line reference implementation — the pre-haystack matching
+    /// strategy, kept as the differential oracle for the searcher engine.
+    fn reference_match_lines(content: &str, pattern: &str, ignore_case: bool) -> Vec<usize> {
+        let re = regex::RegexBuilder::new(pattern)
+            .case_insensitive(ignore_case)
+            .build()
+            .expect("reference regex builds");
+        content
+            .lines()
+            .enumerate()
+            .filter(|(_, line)| re.is_match(line))
+            .map(|(i, _)| i + 1)
+            .collect()
     }
 
     #[test]
@@ -474,5 +711,100 @@ mod tests {
         let read_text = crate::read::format_hashline_content(content, Some(2), Some(1), s);
         let read_anchor = read_text.split('→').next().unwrap();
         assert_eq!(anchor, read_anchor);
+    }
+
+    #[test]
+    fn haystack_matching_agrees_with_per_line_reference() {
+        // The searcher matches whole files at once; every pattern class whose
+        // meaning could shift (line anchors, word boundaries, alternation,
+        // CRLF line endings, files without a trailing newline) must still
+        // produce exactly the per-line match set.
+        let lf = "fn alpha() {\n    let value = 1;\n}\n\nfn beta() {\n    value += 2;\n}\n";
+        let corpus: [(&str, &str); 6] = [
+            ("lf", lf),
+            (
+                "crlf",
+                "fn alpha() {\r\n    let value = 1;\r\n}\r\n\r\nfn beta() {\r\n",
+            ),
+            ("no_trailing_newline", "fn alpha() {\n    let value = 1;\n}"),
+            ("single_line", "solitary value;"),
+            ("blank_lines_only", "\n\n\n"),
+            ("unicode", "let π = 3;\n// ναι — value\nfn γ() {}\n"),
+        ];
+        let patterns = [
+            "value",
+            "^fn ",
+            ";$",
+            r"\bvalue\b",
+            "alpha|beta|gamma",
+            r"fn\s+\w+",
+            "^$",
+            "^",
+            "$",
+            "[0-9]*",
+            "VALUE",
+        ];
+
+        let mut searcher = build_searcher();
+        for (label, content) in corpus {
+            for pattern in patterns {
+                for ignore_case in [false, true] {
+                    let matcher = build_matcher(pattern, ignore_case).expect("matcher builds");
+                    let actual = match_lines(&matcher, &mut searcher, content)
+                        .expect("text content is not binary");
+                    let expected = reference_match_lines(content, pattern, ignore_case);
+                    assert_eq!(
+                        actual, expected,
+                        "corpus={label} pattern={pattern:?} ignore_case={ignore_case}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn crlf_file_renders_stripped_lines_with_anchors() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let content = "alpha\r\nbeta target\r\ngamma\r\n";
+        std::fs::write(tmp.path().join("crlf.txt"), content).unwrap();
+
+        let mut inp = input("target$");
+        inp.context = Some(1);
+        let outcome = run_grep(&ws(tmp.path()), &inp, scheme());
+        assert!(!outcome.is_error, "{}", outcome.text);
+        assert!(
+            outcome.text.contains("Found 1 match(es) in 1 file(s)."),
+            "{}",
+            outcome.text
+        );
+        // The carriage return is stripped exactly as `str::lines()` does, so
+        // rendered content matches what hashline_read would emit.
+        let match_line = outcome
+            .text
+            .lines()
+            .find(|l| l.contains("beta target"))
+            .unwrap();
+        assert!(match_line.ends_with("beta target"), "{match_line:?}");
+        assert!(match_line.starts_with("2:"), "{match_line}");
+
+        // And the anchor is byte-identical to hashline_read's for line 2.
+        let anchor: String = match_line
+            .splitn(4, ':')
+            .take(3)
+            .collect::<Vec<_>>()
+            .join(":");
+        let read_text = crate::read::format_hashline_content(content, Some(2), Some(1), scheme());
+        assert_eq!(anchor, read_text.split('→').next().unwrap());
+    }
+
+    #[test]
+    fn context_windows_merge_into_minimal_spans() {
+        // Overlapping and merely adjacent windows both collapse, so a `--`
+        // marker is only ever emitted across a genuinely skipped line.
+        assert_eq!(included_spans(&[5], 2, 2, 100), vec![2..7]);
+        assert_eq!(included_spans(&[5, 7], 1, 1, 100), vec![3..8]);
+        assert_eq!(included_spans(&[1, 3], 0, 1, 100), vec![0..4]);
+        assert_eq!(included_spans(&[1, 5], 0, 0, 100), vec![0..1, 4..5]);
+        assert_eq!(included_spans(&[1], 5, 5, 3), vec![0..3]);
     }
 }
