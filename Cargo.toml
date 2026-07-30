@@ -1,0 +1,40 @@
+[package]
+name = "hashline-rs"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "Standalone MCP server for hashline anchor-based file reading, editing, and searching"
+license = "Apache-2.0"
+repository = "https://github.com/zchee/hashline-rs"
+keywords = ["mcp", "hashline", "editing", "anchors"]
+categories = ["development-tools"]
+
+[[bin]]
+name = "hashline-mcp"
+path = "src/main.rs"
+
+[lib]
+name = "hashline"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive", "env"] }
+ignore = "0.4"
+regex = "1"
+rmcp = { version = "3.0.1", features = ["server", "macros", "transport-io"] }
+schemars = "1.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["fs", "io-std", "macros", "rt-multi-thread"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
