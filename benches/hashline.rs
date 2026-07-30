@@ -19,10 +19,11 @@ use hashline::edit::HashlineOp;
 use hashline::edit::apply::apply_edits;
 use hashline::grep::{HashlineGrepInput, run_grep};
 use hashline::hash::{encode_hash, fnv1a_32, line_hash};
-use hashline::index::FileIndex;
+use hashline::index::{FileIndex, split_lines};
 use hashline::read::format_hashline_content;
 use hashline::scheme::{Anchor, Scheme};
 use hashline::util::Workspace;
+use memchr::{memchr_iter, memchr3_iter};
 
 /// Deterministic xorshift32 PRNG for reproducible synthetic corpora.
 ///
@@ -99,6 +100,33 @@ fn generate_corpus(num_lines: usize, seed: u32) -> String {
     let mut out = String::with_capacity(num_lines * 24);
     for i in 0..num_lines {
         out.push_str(&generate_line(&mut rng, i));
+        out.push('\n');
+    }
+    out
+}
+
+/// Share of lines that are ~2 KiB long in the long-line-heavy corpus.
+const LONG_LINE_PERCENT: u32 = 85;
+
+/// Generate a deterministic long-line-heavy corpus (a minified-bundle shape):
+/// [`LONG_LINE_PERCENT`] of the lines are ~2 KiB, the rest are ordinary
+/// code-like lines.
+///
+/// The realistic corpus ([`generate_corpus`]) already carries the ~0.5 % long
+/// -line tail real source files have; this one inverts the distribution so the
+/// hash bench-off can see the bulk-throughput end of the range too.
+fn generate_long_line_corpus(num_lines: usize, seed: u32) -> String {
+    let mut rng = Xorshift32::new(seed);
+    let mut out = String::with_capacity(num_lines * 1_800);
+    for i in 0..num_lines {
+        if rng.next_range(100) < LONG_LINE_PERCENT {
+            let word = IDENTIFIERS[rng.next_range(IDENTIFIERS.len() as u32) as usize];
+            let n = rng.next_range(1000);
+            out.push_str(&format!("const {word}_{i}={};", word.repeat(250)));
+            out.push_str(&format!("//{n}"));
+        } else {
+            out.push_str(&generate_line(&mut rng, i));
+        }
         out.push('\n');
     }
     out
@@ -363,6 +391,296 @@ fn bench_grep(c: &mut Criterion) {
     group.finish();
 }
 
+/// Lines in the single-file grep fixture (~1.6 MB of code-like text).
+const GREP_LARGE_LINES: usize = 50_000;
+
+/// File name of the single-file grep fixture, relative to its workspace root.
+const GREP_LARGE_FILE: &str = "large.rs";
+
+/// Lazily-built single-file grep fixture: one ~1.6 MB, 50,000-line file.
+///
+/// The 2,000-file tree fixture is filesystem-bound (directory walk plus 2,000
+/// opens dominate its wall time), so it cannot show a matching-engine or
+/// anchoring win. This one file isolates exactly that: read once, search once,
+/// anchor only what is rendered.
+static GREP_LARGE_FIXTURE: OnceLock<(tempfile::TempDir, PathBuf)> = OnceLock::new();
+
+/// Root path of the (lazily-built) single-file grep fixture.
+fn grep_large_fixture_root() -> &'static Path {
+    let (_tmp, root) = GREP_LARGE_FIXTURE.get_or_init(|| {
+        let tmp = tempfile::TempDir::new().expect("tempdir for large grep fixture");
+        let root = tmp.path().to_path_buf();
+        let mut content = generate_corpus(GREP_LARGE_LINES, 0x1A26_F11E);
+        content.push_str(GREP_RARE_TOKEN);
+        content.push('\n');
+        std::fs::write(root.join(GREP_LARGE_FILE), &content).expect("write large grep fixture");
+        (tmp, root)
+    });
+    root.as_path()
+}
+
+/// `run_grep` over the single 50,000-line file: a rare literal, a common
+/// literal, and a `^`-anchored regex.
+///
+/// This is acceptance criterion 4(b)'s match-bound bench. The search path is
+/// the file itself, which takes `run_grep`'s single-file short circuit — the
+/// directory walker's thread-pool startup is several milliseconds and would
+/// bury exactly the read/search/anchor work this bench exists to measure.
+fn bench_grep_large_file(c: &mut Criterion) {
+    let root = grep_large_fixture_root();
+    let ws = Workspace::new(root.to_path_buf(), false);
+    let scheme = SchemeConfig::default()
+        .build_scheme()
+        .expect("build scheme");
+
+    let mut group = c.benchmark_group("grep_large_file");
+    group.sample_size(30);
+    group.measurement_time(Duration::from_secs(6));
+
+    for (label, pattern) in [
+        ("rare_literal", GREP_RARE_TOKEN),
+        ("common_literal", GREP_COMMON_TOKEN),
+        ("anchored_regex", "^fn "),
+    ] {
+        let mut input = grep_input(pattern);
+        input.path = Some(GREP_LARGE_FILE.to_owned());
+        group.bench_function(label, |b| {
+            b.iter(|| black_box(run_grep(&ws, &input, scheme)));
+        });
+    }
+    group.finish();
+}
+
+/// Line-splitting cost of a partial index, against the floor a pure
+/// newline-count scan sets.
+///
+/// A partial index only needs *hashes* for the spans its caller declared, but
+/// it still has to know the file's line count. `count_lines_only` is the
+/// irreducible part of that; the gap between it and `new_partial_one_span` is
+/// what materializing the untouched lines costs.
+fn bench_index_partial(c: &mut Criterion) {
+    let content = generate_corpus(50_000, 0x1DEC_0000);
+    let span = 24_000..24_064;
+
+    let mut group = c.benchmark_group("index");
+    group.sample_size(50);
+
+    group.bench_function("new_partial_one_span_50k", |b| {
+        b.iter(|| {
+            let index = FileIndex::new_partial(black_box(&content), std::slice::from_ref(&span));
+            black_box(index.len())
+        });
+    });
+
+    group.bench_function("count_lines_only_50k", |b| {
+        b.iter(|| black_box(memchr_iter(b'\n', black_box(content.as_bytes())).count()));
+    });
+
+    // `Iterator::count` on `memchr_iter` is a specialized popcount loop that
+    // never materializes a position. Visiting each newline position is a
+    // different — and much more expensive — operation, and it is the one a
+    // line index actually needs.
+    group.bench_function("visit_newlines_50k", |b| {
+        b.iter(|| {
+            let mut last = 0usize;
+            for pos in memchr_iter(b'\n', black_box(content.as_bytes())) {
+                last = pos;
+            }
+            black_box(last)
+        });
+    });
+
+    group.bench_function("full_new_50k", |b| {
+        b.iter(|| {
+            let index = FileIndex::new(black_box(&content));
+            black_box(index.len())
+        });
+    });
+
+    group.finish();
+}
+
+/// Reimplementation of the production fused normalize+FNV loop
+/// (`hashline::hash::line_hash`), kept here as the bench-off's variant (a)
+/// reference so the baseline cell measures the same code shape the crate ships
+/// rather than a cross-crate call.
+fn fused_fnv(line: &str) -> u32 {
+    const FNV_OFFSET: u32 = 2_166_136_261;
+    const FNV_PRIME: u32 = 16_777_619;
+
+    let mut h: u32 = FNV_OFFSET;
+    let mut prev_ws = false;
+    for byte in line.trim().bytes() {
+        if byte.is_ascii_whitespace() {
+            if !prev_ws {
+                h ^= u32::from(b' ');
+                h = h.wrapping_mul(FNV_PRIME);
+                prev_ws = true;
+            }
+        } else {
+            h ^= u32::from(byte);
+            h = h.wrapping_mul(FNV_PRIME);
+            prev_ws = false;
+        }
+    }
+    h
+}
+
+/// Variant (b): branchy normalization into a reusable scratch buffer.
+///
+/// Byte-for-byte the same output as the fused loop's hash input: trim, then
+/// collapse every run of ASCII whitespace to one space.
+fn normalize_branchy(line: &str, scratch: &mut Vec<u8>) {
+    scratch.clear();
+    let mut prev_ws = false;
+    for byte in line.trim().bytes() {
+        if byte.is_ascii_whitespace() {
+            if !prev_ws {
+                scratch.push(b' ');
+                prev_ws = true;
+            }
+        } else {
+            scratch.push(byte);
+            prev_ws = false;
+        }
+    }
+}
+
+/// Variant (c): segment-scan normalization driven by `memchr3`.
+///
+/// Copies whole non-whitespace segments and writes one space between them,
+/// so the per-byte branch of variant (b) is replaced by a SIMD search plus a
+/// `memcpy` per segment.
+///
+/// The scan looks for space, tab, and CR — the ASCII whitespace bytes that
+/// occur inside real source lines. `str::trim` has already removed any leading
+/// or trailing whitespace (including form feed), so the only input on which
+/// this would diverge from variants (a)/(b) is a line with an *interior* form
+/// feed. `assert_normalization_agrees` proves the corpora contain none; a
+/// production adoption of this variant would need to handle that byte too.
+fn normalize_segments(line: &str, scratch: &mut Vec<u8>) {
+    scratch.clear();
+    let trimmed = line.trim().as_bytes();
+    let mut start = 0usize;
+    let mut wrote = false;
+    for pos in memchr3_iter(b' ', b'\t', b'\r', trimmed) {
+        if pos > start {
+            if wrote {
+                scratch.push(b' ');
+            }
+            scratch.extend_from_slice(&trimmed[start..pos]);
+            wrote = true;
+        }
+        start = pos + 1;
+    }
+    if start < trimmed.len() {
+        if wrote {
+            scratch.push(b' ');
+        }
+        scratch.extend_from_slice(&trimmed[start..]);
+    }
+}
+
+/// Prove every normalization variant feeds the hash the same bytes.
+///
+/// Run once per corpus (not per iteration): variants (b) and (c) must produce
+/// identical buffers, and FNV over that buffer must equal the fused loop's
+/// result — which is what makes the matrix cells comparable at all.
+fn assert_normalization_agrees(lines: &[&str], label: &str) {
+    let mut branchy = Vec::with_capacity(4_096);
+    let mut segments = Vec::with_capacity(4_096);
+    for (idx, line) in lines.iter().enumerate() {
+        normalize_branchy(line, &mut branchy);
+        normalize_segments(line, &mut segments);
+        assert_eq!(branchy, segments, "{label} line {idx}: variants (b) vs (c)");
+        assert_eq!(
+            fnv1a_32(&branchy),
+            fused_fnv(line),
+            "{label} line {idx}: normalized bytes vs fused loop"
+        );
+        assert_eq!(fused_fnv(line), line_hash(line), "{label} line {idx}");
+    }
+}
+
+/// Phase 6 hash bench-off: normalization strategy × hash function.
+///
+/// Measurement only — nothing here is wired into the crate. Each cell hashes
+/// every line of a 10,000-line corpus, so a cell's median divided by 10,000 is
+/// its ns/line.
+///
+/// Variant (a) (fused normalize+hash in one pass) exists only for a streaming
+/// byte-at-a-time hash, so it pairs with FNV alone; `gxhash32` and
+/// `rapidhash` are block hashes and structurally require the two-pass
+/// normalize-then-hash shape of variants (b) and (c). The (b)/(c) + FNV cells
+/// are the controls that separate the two-pass penalty from the hash's own
+/// speed.
+fn bench_hash_matrix(c: &mut Criterion) {
+    let realistic = generate_corpus(10_000, 0x4A54_0001);
+    let long_line = generate_long_line_corpus(10_000, 0x4A54_0002);
+
+    for (corpus_label, content) in [("realistic", &realistic), ("long_line", &long_line)] {
+        let lines = split_lines(content);
+        assert_normalization_agrees(&lines, corpus_label);
+
+        let mut group = c.benchmark_group(format!("hash_matrix/{corpus_label}"));
+        group.sample_size(20);
+        group.measurement_time(Duration::from_secs(6));
+
+        group.bench_function("a_fused+fnv", |b| {
+            b.iter(|| {
+                let mut acc = 0u32;
+                for line in &lines {
+                    acc ^= fused_fnv(black_box(line));
+                }
+                black_box(acc)
+            });
+        });
+
+        for (norm_label, normalize) in [
+            ("b_branchy", normalize_branchy as fn(&str, &mut Vec<u8>)),
+            ("c_segments", normalize_segments),
+        ] {
+            group.bench_function(format!("{norm_label}+fnv"), |b| {
+                let mut scratch = Vec::with_capacity(8_192);
+                b.iter(|| {
+                    let mut acc = 0u32;
+                    for line in &lines {
+                        normalize(black_box(line), &mut scratch);
+                        acc ^= fnv1a_32(&scratch);
+                    }
+                    black_box(acc)
+                });
+            });
+
+            group.bench_function(format!("{norm_label}+gxhash32"), |b| {
+                let mut scratch = Vec::with_capacity(8_192);
+                b.iter(|| {
+                    let mut acc = 0u32;
+                    for line in &lines {
+                        normalize(black_box(line), &mut scratch);
+                        acc ^= gxhash::gxhash32(&scratch, 0);
+                    }
+                    black_box(acc)
+                });
+            });
+
+            group.bench_function(format!("{norm_label}+rapidhash"), |b| {
+                let mut scratch = Vec::with_capacity(8_192);
+                b.iter(|| {
+                    let mut acc = 0u32;
+                    for line in &lines {
+                        normalize(black_box(line), &mut scratch);
+                        acc ^= rapidhash::v3::rapidhash_v3(&scratch) as u32;
+                    }
+                    black_box(acc)
+                });
+            });
+        }
+
+        group.finish();
+    }
+}
+
 /// End-to-end `HashlineServer::dispatch` bench: a realistic 300-line file
 /// through the read path, and a single-op edit — answers the plan's
 /// pre-mortem question of whether hot paths are already sub-millisecond at
@@ -424,6 +742,9 @@ criterion_group!(
     bench_format_hashline_content,
     bench_apply_edits,
     bench_grep,
+    bench_grep_large_file,
+    bench_index_partial,
+    bench_hash_matrix,
     bench_dispatch,
 );
 criterion_main!(benches);

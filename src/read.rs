@@ -15,7 +15,7 @@ use serde::Deserialize;
 
 use crate::index::FileIndex;
 use crate::scheme::Scheme;
-use crate::util::{ToolOutcome, Workspace};
+use crate::util::{ToolOutcome, Workspace, decode_utf8};
 
 /// Maximum number of lines returned by a single read.
 pub const MAX_LINES_READ: usize = 2000;
@@ -98,14 +98,19 @@ fn windowed_index<'a>(content: &'a str, window: Range<usize>, scheme: Scheme) ->
 fn render_window(index: &FileIndex<'_>, scheme: Scheme, window: Range<usize>) -> String {
     let end = window.end.min(index.len());
     let start = window.start.min(end);
-    let lines = &index.lines()[start..end];
 
-    let content_bytes: usize = lines.iter().map(|line| line.len()).sum();
+    // Reading the window line by line — rather than slicing the whole-file line
+    // vector — is what lets a partial index leave the rest of the file
+    // unmaterialized.
+    let content_bytes: usize = (start..end)
+        .filter_map(|idx| index.line(idx))
+        .map(str::len)
+        .sum();
     let overhead = per_line_overhead(scheme, end);
-    let mut out = String::with_capacity(content_bytes + lines.len() * overhead);
+    let mut out = String::with_capacity(content_bytes + (end - start) * overhead);
 
     let mut first = true;
-    for (anchor, line) in scheme.anchors_for_range(index, start..end).zip(lines) {
+    for (offset, anchor) in scheme.anchors_for_range(index, start..end).enumerate() {
         if first {
             first = false;
         } else {
@@ -113,7 +118,7 @@ fn render_window(index: &FileIndex<'_>, scheme: Scheme, window: Range<usize>) ->
         }
         anchor.render_into(&mut out);
         out.push(CONTENT_SEPARATOR);
-        out.push_str(line);
+        out.push_str(index.line(start + offset).unwrap_or_default());
     }
 
     out
@@ -201,21 +206,16 @@ pub async fn run_read(
         return ToolOutcome::success(format!("The file {} exists but is empty.", path.display()));
     }
 
-    // Valid UTF-8 — the overwhelmingly common case — moves the buffer instead
-    // of copying it; only invalid input pays for the lossy rewrite.
-    let content = match String::from_utf8(bytes) {
-        Ok(content) => content,
-        Err(e) => String::from_utf8_lossy(e.as_bytes()).into_owned(),
-    };
-
     let offset = input.offset.unwrap_or(1);
     let effective_limit = input.limit.unwrap_or(usize::MAX).min(MAX_LINES_READ);
 
     // Splitting and hashing a large file would stall the reactor, so hand the
-    // CPU-bound step to a blocking thread once it is big enough to matter.
+    // CPU-bound step to a blocking thread once it is big enough to matter. The
+    // byte buffer moves into the task and the decoded text borrows from it
+    // there, so validation happens on the blocking thread too.
     let window = if size > SPAWN_BLOCKING_THRESHOLD_BYTES {
         let task = tokio::task::spawn_blocking(move || {
-            read_window(&content, offset, effective_limit, scheme)
+            read_window(&decode_utf8(&bytes), offset, effective_limit, scheme)
         });
         match task.await {
             Ok(window) => window,
@@ -224,7 +224,7 @@ pub async fn run_read(
             }
         }
     } else {
-        read_window(&content, offset, effective_limit, scheme)
+        read_window(&decode_utf8(&bytes), offset, effective_limit, scheme)
     };
     let ReadWindow {
         mut text,

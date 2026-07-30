@@ -15,19 +15,8 @@ pub use types::{HashlineEditInput, HashlineEditOutput, HashlineOp};
 
 use crate::read::SPAWN_BLOCKING_THRESHOLD_BYTES;
 use crate::scheme::Scheme;
-use crate::util::{ToolOutcome, Workspace};
+use crate::util::{ToolOutcome, Workspace, decode_utf8};
 use types::{HashlineEditError, HashlineEditErrorKind, HashlineEditsApplied};
-
-/// Decode file bytes as UTF-8, moving the buffer when it is already valid.
-///
-/// Valid UTF-8 is the overwhelmingly common case and costs no copy; only
-/// genuinely invalid input pays for the lossy rebuild.
-fn decode_utf8(bytes: Vec<u8>) -> String {
-    match String::from_utf8(bytes) {
-        Ok(text) => text,
-        Err(e) => String::from_utf8_lossy(e.as_bytes()).into_owned(),
-    }
-}
 
 /// Render a successful edit application as model-facing text.
 fn render_applied(applied: &HashlineEditsApplied, path: &Path) -> String {
@@ -84,15 +73,15 @@ pub async fn run_edit(
         Err(reason) => return ToolOutcome::error(reason),
     };
 
-    let old_content = match tokio::fs::read(&path).await {
-        Ok(bytes) => Some(decode_utf8(bytes)),
+    let old_bytes = match tokio::fs::read(&path).await {
+        Ok(bytes) => Some(bytes),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
         Err(e) => {
             return ToolOutcome::error(format!("Failed to read {}: {e}", path.display()));
         }
     };
 
-    let Some(old_content) = old_content else {
+    let Some(old_bytes) = old_bytes else {
         // A sole `write` op may create a new file; anything else needs an
         // existing file to anchor against.
         if input.edits.len() == 1
@@ -106,7 +95,7 @@ pub async fn run_edit(
                     path.display()
                 ));
             }
-            return write_and_render(String::new(), input, &path, scheme).await;
+            return write_and_render(Vec::new(), input, &path, scheme).await;
         }
         return ToolOutcome::error(format!(
             "File not found: {}. Only a single \"write\" op can create a new file.",
@@ -114,15 +103,16 @@ pub async fn run_edit(
         ));
     };
 
-    write_and_render(old_content, input, &path, scheme).await
+    write_and_render(old_bytes, input, &path, scheme).await
 }
 
-/// Apply the edits to `old_content`, persist on success, and render text.
+/// Apply the edits to the pre-edit file bytes, persist on success, and render
+/// text.
 ///
 /// All anchors are validated before any edit is applied, so the file is either
 /// fully updated or left untouched.
 async fn write_and_render(
-    old_content: String,
+    old_bytes: Vec<u8>,
     input: &HashlineEditInput,
     path: &Path,
     scheme: Scheme,
@@ -130,11 +120,12 @@ async fn write_and_render(
     // Splicing and anchoring a large file would stall the reactor, so hand the
     // CPU-bound step to a blocking thread once it is big enough to matter. The
     // task needs `'static` data, so the (request-sized) op list is cloned; the
-    // file content moves.
-    let result = if old_content.len() > SPAWN_BLOCKING_THRESHOLD_BYTES {
+    // file bytes move, and the decoded text borrows from them on that thread.
+    let result = if old_bytes.len() > SPAWN_BLOCKING_THRESHOLD_BYTES {
         let edits = input.edits.clone();
-        let task =
-            tokio::task::spawn_blocking(move || apply::apply_edits(&old_content, &edits, scheme));
+        let task = tokio::task::spawn_blocking(move || {
+            apply::apply_edits(&decode_utf8(&old_bytes), &edits, scheme)
+        });
         match task.await {
             Ok(result) => result,
             Err(e) => {
@@ -142,7 +133,7 @@ async fn write_and_render(
             }
         }
     } else {
-        apply::apply_edits(&old_content, &input.edits, scheme)
+        apply::apply_edits(&decode_utf8(&old_bytes), &input.edits, scheme)
     };
 
     if let Some(ref new_content) = result.new_content

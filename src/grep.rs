@@ -35,7 +35,7 @@ use serde::Deserialize;
 
 use crate::index::FileIndex;
 use crate::scheme::Scheme;
-use crate::util::{ToolOutcome, Workspace};
+use crate::util::{ToolOutcome, Workspace, decode_utf8};
 
 /// Default cap on reported match lines.
 pub const DEFAULT_MAX_MATCHES: usize = 200;
@@ -211,8 +211,9 @@ fn search_file(
     scheme: Scheme,
 ) -> Option<FileHit> {
     let bytes = std::fs::read(path).ok()?;
-    // Borrows for valid UTF-8, which is the overwhelmingly common case.
-    let content = String::from_utf8_lossy(&bytes);
+    // SIMD-validated, and borrows for valid UTF-8 — the overwhelmingly common
+    // case — so a matched file is never copied just to be searched.
+    let content = decode_utf8(&bytes);
 
     let matched = match_lines(matcher, searcher, &content)?;
     if matched.is_empty() {
@@ -276,7 +277,7 @@ fn search_file(
             } else {
                 '-'
             });
-            body.push_str(index.lines()[idx]);
+            body.push_str(index.line(idx).unwrap_or_default());
             body.push('\n');
         }
     }

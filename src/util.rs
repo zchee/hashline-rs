@@ -1,6 +1,24 @@
 //! Small shared helpers for the hashline tools.
 
+use std::borrow::Cow;
 use std::path::{Component, Path, PathBuf};
+
+/// Decode file bytes as UTF-8, borrowing the buffer when it is already valid.
+///
+/// Every tool reads whole files, so UTF-8 validation runs over every byte of
+/// every request. `simdutf8` validates with SIMD — several times faster than
+/// the standard library's scalar check on the valid input that dominates real
+/// workloads — and hands back a `&str` borrowed from `bytes`, so the happy path
+/// neither copies nor allocates.
+///
+/// Only genuinely invalid input pays for the lossy rebuild, which re-scans with
+/// [`String::from_utf8_lossy`] to place the replacement characters.
+pub fn decode_utf8(bytes: &[u8]) -> Cow<'_, str> {
+    match simdutf8::basic::from_utf8(bytes) {
+        Ok(text) => Cow::Borrowed(text),
+        Err(_) => Cow::Owned(String::from_utf8_lossy(bytes).into_owned()),
+    }
+}
 
 /// Model-facing result of a tool invocation: rendered text plus an error flag.
 ///

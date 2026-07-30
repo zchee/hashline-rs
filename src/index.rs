@@ -14,11 +14,14 @@
 //! and a windowed read pays only for the chunks it actually renders.
 //!
 //! [`FileIndex::new_partial`] takes this one step further for windowed reads:
-//! it splits every line (so line numbering and totals stay whole-file correct)
-//! but hashes only the caller-declared spans, which is what makes a 2,000-line
+//! it hashes only the caller-declared spans, which is what makes a 2,000-line
 //! window of a 100,000-line file cost `O(window)` hashing instead of `O(file)`.
 //! Reading a hash outside those spans is a programmer error and panics.
+//! Line numbering and totals stay whole-file correct, but only the spans' line
+//! slices are materialized: outside them the scan just counts newlines, and the
+//! skipped slices are rebuilt on demand if a caller ever asks for one.
 
+use std::cell::OnceCell;
 use std::ops::Range;
 
 use memchr::memchr_iter;
@@ -117,6 +120,156 @@ fn normalize_spans(spans: &[Range<usize>], len: usize) -> Vec<Range<usize>> {
     merged
 }
 
+/// Bytes examined per step while the span scan skips toward its next span.
+///
+/// Counting the newlines in a block is a SIMD popcount that never materializes
+/// a position; visiting each position instead costs roughly an order of
+/// magnitude more per byte (measured ~46 µs vs ~406 µs over 1.6 MB). The scan
+/// therefore counts its way to the next span a block at a time and pays the
+/// per-position price only inside the spans. The block size bounds how far past
+/// a span's first line the counting may overshoot before it switches modes.
+const SKIP_BLOCK_BYTES: usize = 32 * 1024;
+
+/// Line distance below which the scan walks newline positions instead of
+/// counting a whole block.
+///
+/// A block count is charged in full even when the target is a few lines away,
+/// so short hops — the common shape when a match-dense grep leaves many small
+/// gaps between spans — are cheaper walked. The break-even point is where
+/// visiting a position (~8 ns) times this many lines matches counting one block
+/// (~1 µs over 32 KB).
+const DIRECT_VISIT_LINES: usize = 128;
+
+/// Number of lines from the line starting at `pos` through the end of `bytes`,
+/// counted without materializing a single newline position.
+///
+/// `pos` at or past the end means the caller is already sitting on the
+/// synthetic trailing empty line that content ending in `\n` implies.
+fn lines_remaining(bytes: &[u8], pos: usize) -> usize {
+    if pos >= bytes.len() {
+        return 1;
+    }
+    // Every newline terminates a line, and whatever follows the last one is
+    // one more: the file's final segment, or the synthetic empty line.
+    memchr_iter(b'\n', &bytes[pos..]).count() + 1
+}
+
+/// Byte offset at which the line `count` lines after the one starting at `pos`
+/// begins, or `None` if the content ends first.
+fn advance_lines(bytes: &[u8], mut pos: usize, mut count: usize) -> Option<usize> {
+    while count > 0 {
+        if pos >= bytes.len() {
+            return None;
+        }
+        if count <= DIRECT_VISIT_LINES {
+            // Close enough that walking positions beats counting a block.
+            for rel in memchr_iter(b'\n', &bytes[pos..]) {
+                count -= 1;
+                if count == 0 {
+                    return Some(pos + rel + 1);
+                }
+            }
+            return None;
+        }
+        let end = pos.saturating_add(SKIP_BLOCK_BYTES).min(bytes.len());
+        let block = &bytes[pos..end];
+        let newlines = memchr_iter(b'\n', block).count();
+        if newlines < count {
+            count -= newlines;
+            pos = end;
+            continue;
+        }
+        // The target newline is in this block, so this is the one block worth
+        // paying per-position costs on.
+        let mut seen = 0usize;
+        for rel in memchr_iter(b'\n', block) {
+            seen += 1;
+            if seen == count {
+                return Some(pos + rel + 1);
+            }
+        }
+        // `newlines >= count` guarantees the loop above returned.
+        return None;
+    }
+    Some(pos)
+}
+
+/// Split `content` into lines, materializing only the lines inside `spans`.
+///
+/// `spans` must already be sorted and disjoint. Returns those lines packed in
+/// span order, together with the file's total line count — the only thing a
+/// partial index needs to stay whole-file correct about numbering. Lines
+/// outside the spans are only counted, never sliced, which is what keeps a
+/// windowed read or a single grep hit from paying for a whole file's worth of
+/// line splitting.
+///
+/// Line semantics are identical to [`for_each_line`].
+fn scan_spanned_lines<'a>(content: &'a str, spans: &[Range<usize>]) -> (Vec<&'a str>, usize) {
+    let wanted = spans.iter().fold(0usize, |acc, span| {
+        acc.saturating_add(span.end.saturating_sub(span.start))
+    });
+    // An unbounded span — a read with no limit — asks for more lines than any
+    // file can hold, so the file itself caps the estimate.
+    let mut packed = Vec::with_capacity(wanted.min(content.len() / AVG_LINE_BYTES + 2));
+
+    if content.is_empty() {
+        // Empty content is one empty line; spans are sorted, so only the first
+        // one can contain line 0.
+        if spans.first().is_some_and(|span| span.start == 0) {
+            packed.push("");
+        }
+        return (packed, 1);
+    }
+
+    let bytes = content.as_bytes();
+    // Byte offset at which the line numbered `idx` starts. Spans and line
+    // indices both only move forward, so `cursor` visits each span once.
+    let mut pos = 0usize;
+    let mut idx = 0usize;
+    let mut cursor = 0usize;
+
+    loop {
+        while spans.get(cursor).is_some_and(|span| span.end <= idx) {
+            cursor += 1;
+        }
+        let Some(span) = spans.get(cursor) else { break };
+
+        if idx < span.start {
+            let Some(next) = advance_lines(bytes, pos, span.start - idx) else {
+                // The content ends before this span begins; nothing left to
+                // materialize, only the line count still to settle.
+                return (packed, idx + lines_remaining(bytes, pos));
+            };
+            idx = span.start;
+            pos = next;
+        }
+
+        while idx < span.end {
+            if pos >= bytes.len() {
+                // Sitting on the synthetic trailing empty line.
+                packed.push("");
+                return (packed, idx + 1);
+            }
+            let Some(rel) = memchr::memchr(b'\n', &bytes[pos..]) else {
+                // Final line of content that does not end in a newline.
+                packed.push(&content[pos..]);
+                return (packed, idx + 1);
+            };
+            let newline = pos + rel;
+            let mut end = newline;
+            // `str::lines()` strips exactly one `\r` immediately before `\n`.
+            if end > pos && bytes[end - 1] == b'\r' {
+                end -= 1;
+            }
+            packed.push(&content[pos..end]);
+            pos = newline + 1;
+            idx += 1;
+        }
+    }
+
+    (packed, idx + lines_remaining(bytes, pos))
+}
+
 /// Report a hash read that falls outside a partial index's hashed spans.
 #[cold]
 #[inline(never)]
@@ -128,17 +281,54 @@ fn unhashed_access(start: usize, end: usize, spans: &[Range<usize>]) -> ! {
     );
 }
 
+/// The lines a partial index materialized during its span scan.
+///
+/// Present only when the scan skipped something: an index whose spans covered
+/// every line is indistinguishable from a whole-file one and stores its lines
+/// directly.
+#[derive(Debug, Clone)]
+struct SparseLines<'a> {
+    /// The content this index describes, kept so the skipped line slices can
+    /// still be produced if a caller asks for one.
+    content: &'a str,
+    /// The hashed spans' lines, concatenated in span order.
+    packed: Vec<&'a str>,
+    /// Offset into `packed` where each hashed span's lines begin, parallel to
+    /// the span list in [`Hashed::Spans`].
+    starts: Vec<usize>,
+    /// Every line of `content`, split on first demand and cached.
+    full: OnceCell<Vec<&'a str>>,
+}
+
+impl<'a> SparseLines<'a> {
+    /// Every line of the file, splitting the content on first use.
+    ///
+    /// The fallback for callers that reach outside the hashed spans. Nothing
+    /// on the read, grep, or edit hot paths does — they render only what they
+    /// asked to have hashed — so this stays a correctness backstop rather than
+    /// a cost anyone pays routinely.
+    fn materialize(&self) -> &[&'a str] {
+        self.full.get_or_init(|| split_lines(self.content))
+    }
+}
+
 /// A file's lines and their whitespace-normalized hashes, built once per
 /// request.
 ///
 /// Borrows the content it indexes, so no line text is copied.
 #[derive(Debug, Clone)]
 pub struct FileIndex<'a> {
+    /// Every line, in order — empty for a partial index that materialized only
+    /// its hashed spans (see `sparse`).
     lines: Vec<&'a str>,
     /// One slot per line. Slots outside the hashed spans of a partial index
     /// hold a placeholder that [`Self::assert_hashed`] refuses to hand out.
     hashes: Vec<u32>,
+    /// Total line count, always at least 1.
+    len: usize,
     hashed: Hashed,
+    /// `Some` when only the hashed spans' lines were materialized.
+    sparse: Option<SparseLines<'a>>,
 }
 
 impl<'a> FileIndex<'a> {
@@ -152,20 +342,29 @@ impl<'a> FileIndex<'a> {
             hashes.push(hash::line_hash(line));
         });
         Self {
+            len: lines.len(),
             lines,
             hashes,
             hashed: Hashed::All,
+            sparse: None,
         }
     }
 
-    /// Split every line of `content`, but hash only the lines in `hash_spans`.
+    /// Count every line of `content`, but hash — and materialize — only the
+    /// lines in `hash_spans`.
     ///
     /// `hash_spans` holds 0-based, half-open line ranges; they are clamped to
     /// the file, sorted, and merged, so overlapping, reversed, empty, and
     /// out-of-range ranges are all accepted. [`Self::len`], [`Self::lines`],
-    /// and [`Self::line`] stay whole-file correct — only hashing is skipped —
-    /// so a windowed read costs `O(file)` splitting plus `O(window)` hashing
-    /// instead of hashing the whole file.
+    /// and [`Self::line`] stay whole-file correct, so a windowed read costs
+    /// `O(file)` newline scanning plus `O(window)` hashing and line slicing
+    /// instead of `O(file)` of both.
+    ///
+    /// Outside the spans only the newline positions are examined. A caller that
+    /// does reach outside them — [`Self::lines`], or [`Self::line`] on a line
+    /// the scan skipped — gets the correct answer, paid for by splitting the
+    /// whole content once and caching it. Rendering paths ask only for lines
+    /// they declared, so they never trigger it.
     ///
     /// Callers expand each rendered window to the block boundaries their
     /// scheme needs with [`crate::scheme::Scheme::required_hash_span`].
@@ -178,9 +377,52 @@ impl<'a> FileIndex<'a> {
     /// whole-file hashes, so reaching for one that was never computed is a
     /// programmer error, not a runtime condition to recover from.
     pub fn new_partial(content: &'a str, hash_spans: &[Range<usize>]) -> Self {
-        let mut lines = Vec::with_capacity(content.len() / AVG_LINE_BYTES + 2);
-        for_each_line(content, |line| lines.push(line));
-        Self::from_lines_partial(lines, hash_spans)
+        // The line count is unknown until the scan finishes, so the spans are
+        // normalized against an unbounded file first. Clamping them afterwards
+        // can only drop lines past the end, which the scan never reached, so
+        // the two normalizations agree on every line that exists.
+        let scan_spans = normalize_spans(hash_spans, usize::MAX);
+        let (packed, len) = scan_spanned_lines(content, &scan_spans);
+        let spans = normalize_spans(hash_spans, len);
+
+        // Full coverage means the scan already materialized everything, which
+        // is exactly a whole-file index — and it keeps the span checks out of
+        // every later access.
+        if let [only] = spans.as_slice()
+            && only.start == 0
+            && only.end == len
+        {
+            return Self::from_lines_partial(packed, &spans);
+        }
+
+        // `vec![0; n]` lowers to a zeroed allocation, so the untouched slots
+        // cost pages, not a hash per line.
+        let mut hashes = vec![0u32; len];
+        let mut starts = Vec::with_capacity(spans.len());
+        let mut offset = 0usize;
+        for span in &spans {
+            starts.push(offset);
+            let count = span.end - span.start;
+            let hashed = &packed[offset..offset + count];
+            for (slot, line) in hashes[span.clone()].iter_mut().zip(hashed) {
+                *slot = hash::line_hash(line);
+            }
+            offset += count;
+        }
+        debug_assert_eq!(offset, packed.len(), "span scan and span list disagree");
+
+        Self {
+            lines: Vec::new(),
+            hashes,
+            len,
+            hashed: Hashed::Spans(spans),
+            sparse: Some(SparseLines {
+                content,
+                packed,
+                starts,
+                full: OnceCell::new(),
+            }),
+        }
     }
 
     /// Index an already-split line vector, hashing only the lines in
@@ -227,15 +469,17 @@ impl<'a> FileIndex<'a> {
             _ => Hashed::Spans(spans),
         };
         Self {
+            len: lines.len(),
             lines,
             hashes,
             hashed,
+            sparse: None,
         }
     }
 
     /// Number of indexed lines. Always at least 1.
     pub fn len(&self) -> usize {
-        self.lines.len()
+        self.len
     }
 
     /// Whether the index holds no lines.
@@ -243,12 +487,20 @@ impl<'a> FileIndex<'a> {
     /// Always `false` — even empty content indexes as a single empty line —
     /// but provided so `len` has its conventional partner.
     pub fn is_empty(&self) -> bool {
-        self.lines.is_empty()
+        self.len == 0
     }
 
     /// All indexed lines, in order.
+    ///
+    /// A partial index built by [`Self::new_partial`] materialized only its
+    /// hashed spans, so asking for every line splits the content once here and
+    /// caches the result — correct, but the reason rendering paths read
+    /// individual lines with [`Self::line`] instead.
     pub fn lines(&self) -> &[&'a str] {
-        &self.lines
+        match &self.sparse {
+            Some(sparse) => sparse.materialize(),
+            None => &self.lines,
+        }
     }
 
     /// All normalized line hashes, in order and parallel to [`Self::lines`].
@@ -267,8 +519,27 @@ impl<'a> FileIndex<'a> {
     }
 
     /// The line at 0-based `idx`, or `None` if out of range.
+    ///
+    /// On a partial index this is `O(log spans)` for a line inside a hashed
+    /// span. A line outside every span is still returned correctly, at the cost
+    /// of splitting the whole content once (cached thereafter).
     pub fn line(&self, idx: usize) -> Option<&'a str> {
-        self.lines.get(idx).copied()
+        let Some(sparse) = &self.sparse else {
+            return self.lines.get(idx).copied();
+        };
+        if idx >= self.len {
+            return None;
+        }
+        if let Hashed::Spans(spans) = &self.hashed {
+            // Spans are sorted and disjoint, so at most one can hold `idx`:
+            // the last one starting at or before it.
+            let after = spans.partition_point(|span| span.start <= idx);
+            if after > 0 && idx < spans[after - 1].end {
+                let span = &spans[after - 1];
+                return Some(sparse.packed[sparse.starts[after - 1] + (idx - span.start)]);
+            }
+        }
+        sparse.materialize().get(idx).copied()
     }
 
     /// The normalized hash of the line at 0-based `idx`, or `None` if out of
@@ -725,6 +996,123 @@ mod tests {
         assert_eq!(partial.hash(4), None);
         // Fingerprint folds that clamp to an empty range read no hash at all.
         assert_eq!(partial.chunk_fingerprint(999, 8), CHUNK_SEED);
+    }
+
+    /// The span scan must agree with a full split on the line count for every
+    /// terminator shape — it is what `len()` reports, and every anchor's line
+    /// number depends on it.
+    #[test]
+    fn partial_index_line_count_matches_a_full_split() {
+        let fixtures = [
+            "",
+            "\n",
+            "\n\n",
+            "a",
+            "a\n",
+            "a\n\n",
+            "a\nb",
+            "a\nb\n",
+            "\na",
+            "\r\n",
+            "a\r\n",
+            "a\r\nb",
+            "a\r\nb\r\n",
+            "a\r",
+            "a\r\r\n",
+            "ünïcode\nlines\n",
+        ];
+        let shapes: &[&[(usize, usize)]] = &[&[], &[(0, 1)], &[(1, 2)], &[(0, 9_999)]];
+        for fixture in fixtures {
+            let expected = split_lines(fixture).len();
+            for shape in shapes {
+                assert_eq!(
+                    partial_index(fixture, shape).len(),
+                    expected,
+                    "fixture {fixture:?} shape {shape:?}"
+                );
+            }
+        }
+    }
+
+    /// Skipping the out-of-span line slices must be invisible: every line
+    /// lookup still answers exactly what a full index would, whether it lands
+    /// inside a hashed span or on a line the scan never sliced.
+    #[test]
+    fn partial_index_line_lookups_match_a_full_index_everywhere() {
+        let span_shapes: &[&[(usize, usize)]] = &[
+            &[],
+            &[(0, 16)],
+            &[(32, 64)],
+            &[(80, 96), (0, 16)],
+            &[(119, 121)],
+            &[(0, 9_999)],
+        ];
+
+        for seed in 0..4u32 {
+            for &trailing_newline in &[true, false] {
+                let content = corpus(120, 0x5A11_0000 + seed, trailing_newline);
+                let full = FileIndex::new(&content);
+
+                for shape in span_shapes {
+                    let partial = partial_index(&content, shape);
+                    assert_eq!(partial.len(), full.len(), "{shape:?}");
+
+                    // In-span lines come straight from the scan's packed
+                    // slices — read them first, before anything can force a
+                    // full materialization.
+                    for span in normalize_spans(&spans(shape), full.len()) {
+                        for idx in span {
+                            assert_eq!(partial.line(idx), full.line(idx), "{shape:?} idx {idx}");
+                        }
+                    }
+
+                    // Out-of-span lines are recovered on demand, and the
+                    // whole-file accessor still agrees line for line.
+                    for idx in 0..full.len() {
+                        assert_eq!(partial.line(idx), full.line(idx), "{shape:?} idx {idx}");
+                    }
+                    assert_eq!(partial.line(full.len()), None);
+                    assert_eq!(partial.lines(), full.lines(), "{shape:?}");
+                }
+            }
+        }
+    }
+
+    /// The scan skips toward its next span a [`SKIP_BLOCK_BYTES`] block at a
+    /// time, so its seams only appear on content spanning several blocks. This
+    /// corpus is a few hundred kilobytes, with spans placed near the start, in
+    /// the middle, at the very end, and entirely past it.
+    #[test]
+    fn partial_index_spans_across_skip_blocks_match_a_full_index() {
+        for &trailing_newline in &[true, false] {
+            let content = corpus(4_000, 0x5B10_C000, trailing_newline);
+            assert!(
+                content.len() > 3 * SKIP_BLOCK_BYTES,
+                "corpus must cross several skip blocks (is {} bytes)",
+                content.len()
+            );
+            let full = FileIndex::new(&content);
+            let len = full.len();
+
+            let shapes: &[&[(usize, usize)]] = &[
+                &[(1, 3)],
+                &[(len / 2, len / 2 + 4)],
+                &[(len - 3, len)],
+                &[(1, 3), (len / 3, len / 3 + 2), (len - 2, len)],
+                &[(len + 10, len + 20)],
+            ];
+            for shape in shapes {
+                let partial = partial_index(&content, shape);
+                assert_eq!(partial.len(), len, "{shape:?}");
+                for span in normalize_spans(&spans(shape), len) {
+                    for idx in span {
+                        assert_eq!(partial.line(idx), full.line(idx), "{shape:?} idx {idx}");
+                        assert_eq!(partial.hash(idx), full.hash(idx), "{shape:?} idx {idx}");
+                    }
+                }
+                assert_eq!(partial.lines(), full.lines(), "{shape:?}");
+            }
+        }
     }
 
     /// `from_lines_partial` must be the splitting half of `new_partial`

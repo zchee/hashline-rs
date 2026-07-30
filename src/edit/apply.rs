@@ -10,7 +10,7 @@ use super::range_policy;
 use super::types::{
     HashlineEditError, HashlineEditErrorKind, HashlineEditOutput, HashlineEditsApplied, HashlineOp,
 };
-use crate::index::FileIndex;
+use crate::index::{FileIndex, split_lines};
 use crate::scheme::{DEFAULT_SEARCH_RADIUS, ParsedAnchor, Scheme, ShiftResult, ValidationResult};
 
 const SNIPPET_CONTEXT: usize = 3;
@@ -126,9 +126,13 @@ fn decimal_digits(value: usize) -> usize {
 fn render_region(index: &FileIndex<'_>, scheme: Scheme, region: Range<usize>, out: &mut String) {
     let end = region.end.min(index.len());
     let start = region.start.min(end);
-    let lines = &index.lines()[start..end];
 
-    let content_bytes: usize = lines.iter().map(|line| line.len()).sum();
+    // Line-by-line rather than a slice of the whole-file line vector, so a
+    // partial index never has to materialize the lines it skipped.
+    let content_bytes: usize = (start..end)
+        .filter_map(|idx| index.line(idx))
+        .map(str::len)
+        .sum();
     let hash_len = scheme.hash_len();
     let context_bytes = if scheme.has_context() {
         1 + hash_len
@@ -138,10 +142,10 @@ fn render_region(index: &FileIndex<'_>, scheme: Scheme, region: Range<usize>, ou
     // "LINE" ':' LOCAL [':' CONTEXT] CONTENT_SEPARATOR '\n'
     let per_line =
         decimal_digits(end) + 1 + hash_len + context_bytes + CONTENT_SEPARATOR.len_utf8() + 1;
-    out.reserve(content_bytes + lines.len() * per_line);
+    out.reserve(content_bytes + (end - start) * per_line);
 
     let mut first = true;
-    for (anchor, line) in scheme.anchors_for_range(index, start..end).zip(lines) {
+    for (offset, anchor) in scheme.anchors_for_range(index, start..end).enumerate() {
         if first {
             first = false;
         } else {
@@ -149,7 +153,7 @@ fn render_region(index: &FileIndex<'_>, scheme: Scheme, region: Range<usize>, ou
         }
         anchor.render_into(out);
         out.push(CONTENT_SEPARATOR);
-        out.push_str(line);
+        out.push_str(index.line(start + offset).unwrap_or_default());
     }
 }
 
@@ -208,6 +212,10 @@ fn push_gap_marker(out: &mut String, count: usize) {
 /// through to [`recover_anchor_by_suffix`], which must compare against every
 /// line in the file to detect ambiguity, so one unparseable anchor forces a
 /// full index — a rare recovery path, paid for only when it is taken.
+///
+/// Unlike the read and grep paths this one splits every line up front
+/// ([`FileIndex::from_lines_partial`]): the splice rebuilds the whole line
+/// vector, so a partial index would only have to materialize it again.
 fn pre_edit_index<'a>(content: &'a str, ops: &[HashlineOp], scheme: Scheme) -> FileIndex<'a> {
     let mut spans: Vec<Range<usize>> = Vec::with_capacity(ops.len() + 1);
 
@@ -236,7 +244,7 @@ fn pre_edit_index<'a>(content: &'a str, ops: &[HashlineOp], scheme: Scheme) -> F
         }
     }
 
-    FileIndex::new_partial(content, &spans)
+    FileIndex::from_lines_partial(split_lines(content), &spans)
 }
 
 /// A validated, resolved edit operation ready for application.
