@@ -51,6 +51,12 @@ use crate::index::FileIndex;
 use crate::scheme::Scheme;
 use crate::util::{ToolOutcome, Workspace, decode_utf8};
 
+/// Frozen incompatible-v2 request schema for the snapshot-bearing grep phase.
+///
+/// The current anchor search engine remains isolated behind HashlineGrepInput
+/// until Phase 5 replaces its renderer; this type is the only v2 wire contract.
+pub use crate::protocol::GrepRequest as HashlineGrepV2Input;
+
 /// Default cap on reported match lines.
 pub const DEFAULT_MAX_MATCHES: usize = 200;
 

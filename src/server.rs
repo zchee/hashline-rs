@@ -474,6 +474,63 @@ mod tests {
     }
 
     #[test]
+    fn frozen_v2_tool_schemas_are_strict_and_incompatible() {
+        let read = serde_json::to_value(schemars::schema_for!(crate::read::HashlineReadV2Input))
+            .expect("v2 read schema serializes");
+        let edit = serde_json::to_value(schemars::schema_for!(
+            crate::edit::types::HashlineEditV2Input
+        ))
+        .expect("v2 edit schema serializes");
+        let operation = serde_json::to_value(schemars::schema_for!(
+            crate::edit::types::HashlineEditV2Operation
+        ))
+        .expect("v2 edit operation schema serializes");
+        let grep = serde_json::to_value(schemars::schema_for!(crate::grep::HashlineGrepV2Input))
+            .expect("v2 grep schema serializes");
+
+        for schema in [&read, &edit, &grep] {
+            assert_eq!(schema["type"], "object");
+            assert_eq!(schema["additionalProperties"], false);
+        }
+        assert_eq!(read["required"], json!(["path"]));
+        assert!(read["properties"].get("cursor").is_some());
+        assert!(read["properties"].get("offset").is_none());
+
+        assert_eq!(edit["required"], json!(["file_path", "snapshot", "edits"]));
+        let edit_text = serde_json::to_string(&edit).expect("render v2 edit schema");
+        let operation_text = serde_json::to_string(&operation).expect("render v2 operation schema");
+        for legacy in [
+            "anchor",
+            "end_anchor",
+            "insert_after",
+            "\"write\"",
+            "\"scheme\"",
+        ] {
+            assert!(!edit_text.contains(legacy), "{legacy} in {edit_text}");
+            assert!(
+                !operation_text.contains(legacy),
+                "{legacy} in {operation_text}"
+            );
+        }
+        assert!(operation_text.contains("\"replace\""));
+
+        let grep_properties = grep["properties"].as_object().expect("v2 grep properties");
+        assert_eq!(grep_properties.len(), 8);
+        for field in [
+            "pattern",
+            "path",
+            "glob",
+            "ignore_case",
+            "before_context",
+            "after_context",
+            "context",
+            "max_matches",
+        ] {
+            assert!(grep_properties.contains_key(field), "missing {field}");
+        }
+    }
+
+    #[test]
     fn file_uri_to_path_variants() {
         assert_eq!(
             file_uri_to_path("file:///home/user/proj"),

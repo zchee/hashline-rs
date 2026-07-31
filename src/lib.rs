@@ -12,25 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-//! Hashline — anchor-based file reading, editing, and searching over MCP.
+//! Hashline MCP server and its incompatible v2 protocol contract.
 //!
-//! A standalone Rust implementation of the `grok_build_hashline` toolset from
-//! [xai-org/grok-build], exposed as a Model Context Protocol server.
+//! [`protocol`] is the normative interface for snapshot identities, byte
+//! positions and ranges, strict text handling, pagination, conflicts, and
+//! structured errors. Its slow reference model is intentionally independent
+//! of the optimized snapshot, read, edit, grep, persistence, and cache engines
+//! that later gated phases compare against it.
 //!
-//! Every line of a file gets a compact anchor (`LINE:HASH` or
-//! `LINE:HASH:HASH`) derived from whitespace-normalized content hashes.
-//! Models reference lines by anchor instead of raw line numbers, so edits are
-//! validated against the snapshot the model actually saw — stale or shifted
-//! anchors are rejected with recovery hints instead of silently corrupting
-//! the file.
-//!
-//! [xai-org/grok-build]: https://github.com/xai-org/grok-build
+//! The other modules retain the measured anchor engine used as the Phase 0
+//! baseline. Phase-specific v2 request aliases keep the frozen wire schemas
+//! executable without advertising later engine work before its exit gate.
 
 pub mod config;
 pub mod edit;
 pub mod grep;
 pub mod hash;
 pub mod index;
+pub mod protocol;
 pub mod read;
 mod render;
 pub mod scheme;

@@ -32,6 +32,12 @@ use crate::render::render_range;
 use crate::scheme::Scheme;
 use crate::util::{ToolOutcome, Workspace, decode_utf8};
 
+/// Frozen incompatible-v2 request schema for the snapshot-based read phase.
+///
+/// The current anchor renderer remains isolated behind HashlineReadInput until
+/// Phase 3 replaces its engine; this type is the only v2 wire contract.
+pub use crate::protocol::ReadRequest as HashlineReadV2Input;
+
 /// Maximum number of lines returned by a single read.
 pub const MAX_LINES_READ: usize = 2000;
 

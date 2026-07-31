@@ -20,33 +20,21 @@ use anyhow::Context as _;
 use clap::Parser;
 use rmcp::ServiceExt as _;
 
-use hashline::config::{SchemeConfig, SchemeKind};
+use hashline::config::SchemeConfig;
 use hashline::server::HashlineServer;
 
-/// Standalone MCP server providing hashline anchor-based file tools
-/// (hashline_read, hashline_edit, hashline_grep) over stdio.
+/// Standalone MCP server providing hashline file reading, editing, and
+/// searching tools over stdio.
 #[derive(Debug, Parser)]
-#[command(name = "hashline-mcp", version, about)]
+#[command(
+    name = "hashline-mcp",
+    version,
+    about = "Standalone MCP server for hashline file reading, editing, and searching"
+)]
 struct Cli {
     /// Workspace root that relative paths resolve against.
     #[arg(long, env = "HASHLINE_ROOT")]
     root: Option<PathBuf>,
-
-    /// Anchor scheme.
-    #[arg(long, env = "HASHLINE_SCHEME", value_enum, default_value = "chunk")]
-    scheme: SchemeKind,
-
-    /// Anchor hash length in characters.
-    #[arg(long, env = "HASHLINE_HASH_LEN", default_value_t = 3, value_parser = clap::value_parser!(u8).range(1..=4))]
-    hash_len: u8,
-
-    /// Chunk size for the chunk scheme.
-    #[arg(long, env = "HASHLINE_CHUNK_SIZE", default_value_t = 8, value_parser = clap::value_parser!(u16).range(1..))]
-    chunk_size: u16,
-
-    /// Checkpoint interval for the checkpoint scheme.
-    #[arg(long, env = "HASHLINE_CHECKPOINT_INTERVAL", default_value_t = 32, value_parser = clap::value_parser!(u16).range(1..))]
-    checkpoint_interval: u16,
 
     /// Confine all tool paths to the workspace root (reject absolute paths
     /// and symlinks escaping it).
@@ -138,27 +126,14 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    let config = SchemeConfig {
-        kind: cli.scheme,
-        hash_len: usize::from(cli.hash_len),
-        chunk_size: usize::from(cli.chunk_size),
-        checkpoint_interval: usize::from(cli.checkpoint_interval),
-    };
-
-    let server = HashlineServer::new(root.clone(), config)
-        .context("invalid scheme configuration")?
+    let server = HashlineServer::new(root.clone(), SchemeConfig::default())
+        .context("invalid internal scheme configuration")?
         .with_root_pinned(explicit_root)
         .with_restrict(cli.restrict);
     tracing::info!(
         root = %root.display(),
         root_pinned = explicit_root,
         restrict = cli.restrict,
-        scheme = ?config.kind,
-        hash_len = config.hash_len,
-        // Which line hash this binary carries. The two produce different
-        // anchor letters for the same line, so a session that reports the
-        // wrong ones is answered by this field rather than by guesswork.
-        block_hash = hashline::hash::BLOCK_HASH,
         "starting hashline MCP server on stdio"
     );
 
