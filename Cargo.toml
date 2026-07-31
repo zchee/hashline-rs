@@ -2,7 +2,7 @@
 name = "hashline-rs"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.99"
 description = "Standalone MCP server for hashline anchor-based file reading, editing, and searching"
 license = "Apache-2.0"
 repository = "https://github.com/zchee/hashline-rs"
