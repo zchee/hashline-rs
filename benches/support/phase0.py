@@ -37,6 +37,20 @@ RESOURCE_SCENARIOS = (
     "tree_grep_base",
 )
 QUALITY_COMMANDS = (
+    (
+        "phase0_contract_tests",
+        (
+            "python3",
+            "-B",
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            "benches/support",
+            "-p",
+            "test_phase0.py",
+        ),
+    ),
     ("fmt", ("cargo", "fmt", "--all", "--", "--check")),
     ("build_all", ("cargo", "build", "--all-targets")),
     (
@@ -587,17 +601,21 @@ def capture_candidate_full(context: CaptureContext) -> dict[str, object]:
 
 
 def newest_estimate(criterion_root: Path, started_ns: int) -> Path:
-    """Find the one Criterion estimate updated by an exact filtered run."""
-    candidates = [
-        path
-        for path in criterion_root.rglob("estimates.json")
-        if path.stat().st_mtime_ns >= started_ns
-    ]
-    if not candidates:
-        candidates = list(criterion_root.rglob("estimates.json"))
-    if not candidates:
-        raise CaptureError("filtered Criterion run produced no estimates.json")
-    return max(candidates, key=lambda path: path.stat().st_mtime_ns)
+    """Find the sole fresh absolute estimate from an exact filtered run."""
+    candidates = sorted(
+        (
+            path
+            for path in criterion_root.rglob("estimates.json")
+            if path.parent.name == "new" and path.stat().st_mtime_ns >= started_ns
+        ),
+        key=lambda path: str(path),
+    )
+    if len(candidates) != 1:
+        raise CaptureError(
+            "filtered Criterion run produced "
+            f"{len(candidates)} fresh new/estimates.json files; expected exactly one"
+        )
+    return candidates[0]
 
 
 def estimate_summary(path: Path) -> dict[str, object]:
@@ -611,9 +629,17 @@ def estimate_summary(path: Path) -> dict[str, object]:
     point = median.get("point_estimate")
     lower = interval.get("lower_bound")
     upper = interval.get("upper_bound")
-    if not all(isinstance(item, (int, float)) for item in (point, lower, upper)):
-        raise CaptureError(f"Criterion median estimate is incomplete: {path}")
+    values = (point, lower, upper)
+    if not all(
+        isinstance(item, (int, float))
+        and not isinstance(item, bool)
+        and math.isfinite(float(item))
+        and float(item) > 0
+        for item in values
+    ):
+        raise CaptureError(f"Criterion absolute median estimate is invalid: {path}")
     return {
+        "estimate_kind": "absolute",
         "point_estimate_ns": cast(float | int, point),
         "confidence_interval_ns": {
             "lower_bound": cast(float | int, lower),
@@ -1262,15 +1288,26 @@ def latest_run(goal_root: Path, key: str) -> Path:
 
 def validate_hashes(run_root: Path) -> int:
     """Verify every checksum in one immutable artifact run."""
-    hashes = require_object(load_json(run_root / "SHA256SUMS.json"), "checksums")
+    checksum_path = run_root / "SHA256SUMS.json"
+    hashes = require_object(load_json(checksum_path), "checksums")
     if not hashes:
         raise CaptureError(f"empty checksum manifest: {run_root}")
+    listed_paths = set(hashes)
+    artifact_paths = {
+        str(path.relative_to(run_root))
+        for path in run_root.rglob("*")
+        if path.is_file() and path != checksum_path
+    }
+    if listed_paths != artifact_paths:
+        missing = sorted(artifact_paths - listed_paths)
+        unexpected = sorted(listed_paths - artifact_paths)
+        raise CaptureError(
+            f"checksum coverage mismatch; missing={missing}, unexpected={unexpected}"
+        )
     for relative, expected in hashes.items():
         if not isinstance(expected, str):
             raise CaptureError(f"non-string checksum for {relative}")
         path = run_root / relative
-        if not path.is_file():
-            raise CaptureError(f"hashed artifact missing: {path}")
         actual = sha256_file(path)
         if actual != expected:
             raise CaptureError(f"checksum mismatch: {path}")
@@ -1310,6 +1347,8 @@ def validate_pair_results(run_root: Path) -> None:
                 run_object.get("estimate"),
                 f"{spec.name} estimate",
             )
+            if estimate.get("estimate_kind") != "absolute":
+                raise CaptureError(f"{spec.name} did not record an absolute estimate")
             point = estimate.get("point_estimate_ns")
             interval = require_object(
                 estimate.get("confidence_interval_ns"),
@@ -1317,14 +1356,31 @@ def validate_pair_results(run_root: Path) -> None:
             )
             lower = interval.get("lower_bound")
             upper = interval.get("upper_bound")
+            values = (point, lower, upper)
             if not all(
-                isinstance(value, (int, float)) for value in (point, lower, upper)
+                isinstance(value, (int, float))
+                and not isinstance(value, bool)
+                and math.isfinite(float(value))
+                and float(value) > 0
+                for value in values
             ):
-                raise CaptureError(f"{spec.name} has incomplete Criterion estimates")
+                raise CaptureError(
+                    f"{spec.name} has invalid absolute Criterion estimates"
+                )
             if not cast(float, lower) <= cast(float, point) <= cast(float, upper):
                 raise CaptureError(
                     f"{spec.name} point estimate lies outside its interval"
                 )
+
+            raw_path = run_object.get("raw_path")
+            if not isinstance(raw_path, str):
+                raise CaptureError(f"{spec.name} run has no raw artifact path")
+            raw_root = (run_root / raw_path).resolve()
+            if not raw_root.is_relative_to(run_root.resolve()):
+                raise CaptureError(f"{spec.name} raw artifact path escapes the run")
+            raw_estimate = raw_root / "criterion_new" / "estimates.json"
+            if estimate_summary(raw_estimate) != estimate:
+                raise CaptureError(f"{spec.name} summary differs from its raw estimate")
 
 
 def validate_filesystem(run_root: Path) -> None:
