@@ -82,6 +82,46 @@ class Phase0ContractTests(unittest.TestCase):
                 "absolute",
             )
 
+    def test_profile_symbol_validation_replays_raw_report(self) -> None:
+        """Profile summaries must be scenario-specific views of raw reports."""
+        reports = {
+            "full_read": "phase0_resources::profile_full_read_once",
+            "edit": "hashline::edit::apply::apply_edits",
+            "rare_grep": "_RNvNtCs50PqqpBYgnV_8hashline4grep11search_file",
+            "common_grep": "hashline::grep::search_file",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            run_root = Path(directory)
+            records: list[dict[str, object]] = []
+            for scenario, report in reports.items():
+                raw = run_root / "profiles" / scenario / "report.txt"
+                raw.parent.mkdir(parents=True)
+                _ = raw.write_text(report, encoding="utf-8")
+                symbol_hits = phase0.profile_symbol_hits(scenario, report)
+                records.append(
+                    {
+                        "scenario": scenario,
+                        "raw_path": str(raw.relative_to(run_root)),
+                        "symbol_hits": symbol_hits,
+                        "symbolized": bool(symbol_hits),
+                    }
+                )
+
+            phase0.write_json(run_root / "profiles" / "results.json", records)
+            phase0.validate_profiles(run_root)
+            self.assertEqual(
+                phase0.profile_symbol_hits("rare_grep", "third_party::search_file"),
+                [],
+            )
+
+            records[2]["symbol_hits"] = ["profile_grep_once"]
+            phase0.write_json(run_root / "profiles" / "results.json", records)
+            with self.assertRaisesRegex(
+                phase0.CaptureError,
+                "profile summary differs from raw report: rare_grep",
+            ):
+                phase0.validate_profiles(run_root)
+
     def test_hash_manifest_has_exact_artifact_coverage(self) -> None:
         """The immutable checksum manifest must cover exactly the captured files."""
         with tempfile.TemporaryDirectory() as directory:

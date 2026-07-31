@@ -29,6 +29,18 @@ PLAN_PATH = ".omx/plans/2026-07-31-incompatible-max-performance-redesign.md"
 SCHEMA_VERSION = 1
 REQUIRED_PLATFORMS = ("macos-arm64", "linux-amd64")
 PROFILE_SCENARIOS = ("full_read", "edit", "rare_grep", "common_grep")
+GREP_PROFILE_SYMBOLS = (
+    "profile_grep_once",
+    "run_grep",
+    "hashline::grep::search_file",
+    "hashline4grep11search_file",
+)
+PROFILE_SYMBOLS = {
+    "full_read": ("profile_full_read_once", "format_hashline_content"),
+    "edit": ("profile_edit_once", "apply_edits"),
+    "rare_grep": GREP_PROFILE_SYMBOLS,
+    "common_grep": GREP_PROFILE_SYMBOLS,
+}
 RESOURCE_SCENARIOS = (
     "full_read_base",
     "full_read_candidate",
@@ -942,6 +954,25 @@ def build_symbolized_probe(context: CaptureContext, profile_target: Path) -> Pat
     raise CaptureError("symbolized phase0-resources executable was not reported")
 
 
+def profile_symbol_hits(scenario: str, report: str) -> list[str]:
+    """Return scenario-specific workload symbols present in a profile report.
+
+    Args:
+        scenario: One of the declared profile scenarios.
+        report: Raw text emitted by the platform profiler.
+
+    Returns:
+        Sorted symbol substrings found in the report.
+
+    Raises:
+        CaptureError: If the scenario has no declared symbol contract.
+    """
+    symbols = PROFILE_SYMBOLS.get(scenario)
+    if symbols is None:
+        raise CaptureError(f"unknown profile scenario: {scenario}")
+    return sorted(symbol for symbol in symbols if symbol in report)
+
+
 def profile_macos(
     context: CaptureContext,
     executable: Path,
@@ -990,18 +1021,7 @@ def profile_macos(
         process_stderr.close()
 
     text = raw.read_text(encoding="utf-8", errors="replace")
-    symbol_hits = sorted(
-        symbol
-        for symbol in (
-            "profile_full_read_once",
-            "profile_edit_once",
-            "profile_grep_once",
-            "format_hashline_content",
-            "apply_edits",
-            "run_grep",
-        )
-        if symbol in text
-    )
+    symbol_hits = profile_symbol_hits(scenario, text)
     return {
         "scenario": scenario,
         "tool": "sample",
@@ -1058,18 +1078,7 @@ def profile_linux(
     )
     raw = profile_root / "perf_report.txt"
     raw.write_text(report.stdout, encoding="utf-8")
-    symbol_hits = sorted(
-        symbol
-        for symbol in (
-            "profile_full_read_once",
-            "profile_edit_once",
-            "profile_grep_once",
-            "format_hashline_content",
-            "apply_edits",
-            "run_grep",
-        )
-        if symbol in report.stdout
-    )
+    symbol_hits = profile_symbol_hits(scenario, report.stdout)
     return {
         "scenario": scenario,
         "tool": "perf",
@@ -1460,11 +1469,25 @@ def validate_profiles(run_root: Path) -> None:
     }
     for scenario in PROFILE_SCENARIOS:
         record = by_scenario.get(scenario)
-        if record is None or record.get("symbolized") is not True:
-            raise CaptureError(f"profile is not symbolized: {scenario}")
+        if record is None:
+            raise CaptureError(f"profile result is missing: {scenario}")
         raw = record.get("raw_path")
-        if not isinstance(raw, str) or not (run_root / raw).is_file():
+        if not isinstance(raw, str):
             raise CaptureError(f"profile raw report is missing: {scenario}")
+        raw_path = (run_root / raw).resolve()
+        if not raw_path.is_relative_to(run_root.resolve()) or not raw_path.is_file():
+            raise CaptureError(f"profile raw report is missing: {scenario}")
+        symbol_hits = profile_symbol_hits(
+            scenario,
+            raw_path.read_text(encoding="utf-8", errors="replace"),
+        )
+        if not symbol_hits:
+            raise CaptureError(f"profile is not symbolized: {scenario}")
+        if (
+            record.get("symbolized") is not True
+            or record.get("symbol_hits") != symbol_hits
+        ):
+            raise CaptureError(f"profile summary differs from raw report: {scenario}")
 
 
 def validate_quality(run_root: Path) -> None:
