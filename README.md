@@ -20,9 +20,9 @@ corrupting the file.
 
 | Tool | Purpose |
 |---|---|
-| `hashline_read` | Read a file as `ANCHOR→CONTENT` lines (supports `offset`/`limit`) |
-| `hashline_edit` | Apply `replace` / `insert_after` / `write` ops addressed by anchors; batches are validated against the pre-edit snapshot and applied atomically bottom-up |
-| `hashline_grep` | Regex content search with anchor-annotated match (`:`) and context (`-`) lines, respecting `.gitignore` |
+| `read` | Read a file as `ANCHOR→CONTENT` lines (supports `offset`/`limit`) |
+| `edit` | Apply `replace` / `insert_after` / `write` ops addressed by anchors; batches are validated against the pre-edit snapshot and applied atomically bottom-up |
+| `grep` | Regex content search with anchor-annotated match (`:`) and context (`-`) lines, respecting `.gitignore` |
 
 The edit tool returns fresh anchors around the edited region on success. On
 stale-anchor failures it returns the current content with fresh anchors and,

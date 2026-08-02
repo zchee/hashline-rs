@@ -48,21 +48,21 @@ use crate::read::{HashlineReadInput, MAX_LINES_READ, run_read};
 use crate::scheme::Scheme;
 use crate::util::{ToolOutcome, Workspace};
 
-const READ_TEMPLATE: &str = r#"Read a file with line-anchored output for use with hashline_edit.
+const READ_TEMPLATE: &str = r#"Read a file with line-anchored output for use with edit.
 
 Each line is formatted as ANCHOR→CONTENT, for example:
 {example_line1}
 {example_line2}
 
 This read format uses `→` between the anchor and content. By contrast,
-hashline_grep keeps grep-style separators after the anchor: `:` for
+grep keeps grep-style separators after the anchor: `:` for
 match lines and `-` for context lines.
 
 The ANCHOR (e.g. "{example_anchor}") is a compact fingerprint of the line's content
-and surrounding context. Pass anchors to hashline_edit to make edits —
+and surrounding context. Pass anchors to edit to make edits —
 they verify the targeted location still matches the snapshot you saw.
 Anchors are valid only for the file state at read time — after any edit,
-use the fresh anchors returned by hashline_edit or re-read the file.
+use the fresh anchors returned by edit or re-read the file.
 
 Usage:
 - The path parameter accepts either a relative path in the workspace or an absolute path
@@ -70,7 +70,7 @@ Usage:
 - Optionally specify offset and limit for large files
 - If you read a file that exists but has empty contents you will receive a warning in place of file contents."#;
 
-const EDIT_TEMPLATE: &str = r#"Edit a file using anchors from hashline_read or hashline_grep.
+const EDIT_TEMPLATE: &str = r#"Edit a file using anchors from read or grep.
 
 Operations (use the "op" field):
 
@@ -115,10 +115,10 @@ Follow-up edits:
 - Never fabricate or modify anchors — only use exact anchors as returned by
   previous tool outputs."#;
 
-const GREP_TEMPLATE: &str = r#"Search file contents with anchor-annotated results for use with hashline_edit.
+const GREP_TEMPLATE: &str = r#"Search file contents with anchor-annotated results for use with edit.
 
-Match lines include anchors you can pass directly to hashline_edit without
-needing to hashline_read the file first. This grep format keeps grep-style
+Match lines include anchors you can pass directly to edit without
+needing to read the file first. This grep format keeps grep-style
 separators after the anchor: `:` for match lines and `-` for context lines.
 
 Content output format:
@@ -319,9 +319,9 @@ impl HashlineServer {
     pub fn tools(&self) -> &[Tool] {
         self.tools.get_or_init(|| {
             vec![
-                Self::tool::<HashlineReadInput>("hashline_read", &self.read_description),
-                Self::tool::<HashlineEditInput>("hashline_edit", &self.edit_description),
-                Self::tool::<HashlineGrepInput>("hashline_grep", &self.grep_description),
+                Self::tool::<HashlineReadInput>("read", &self.read_description),
+                Self::tool::<HashlineEditInput>("edit", &self.edit_description),
+                Self::tool::<HashlineGrepInput>("grep", &self.grep_description),
             ]
         })
     }
@@ -332,28 +332,25 @@ impl HashlineServer {
     /// infrastructure failures become protocol errors.
     pub async fn dispatch(&self, name: &str, arguments: Value) -> Result<CallToolResult, McpError> {
         let outcome = match name {
-            "hashline_read" => match serde_json::from_value::<HashlineReadInput>(arguments) {
+            "read" => match serde_json::from_value::<HashlineReadInput>(arguments) {
                 Ok(input) => run_read(&self.workspace(), &input, self.scheme).await,
-                Err(e) => ToolOutcome::error(format!("Invalid arguments for hashline_read: {e}")),
+                Err(e) => ToolOutcome::error(format!("Invalid arguments for read: {e}")),
             },
-            "hashline_edit" => match serde_json::from_value::<HashlineEditInput>(arguments) {
+            "edit" => match serde_json::from_value::<HashlineEditInput>(arguments) {
                 Ok(input) => run_edit(&self.workspace(), &input, self.scheme).await,
-                Err(e) => ToolOutcome::error(format!("Invalid arguments for hashline_edit: {e}")),
+                Err(e) => ToolOutcome::error(format!("Invalid arguments for edit: {e}")),
             },
-            "hashline_grep" => match serde_json::from_value::<HashlineGrepInput>(arguments) {
+            "grep" => match serde_json::from_value::<HashlineGrepInput>(arguments) {
                 Ok(input) => {
                     let workspace = self.workspace();
                     let scheme = self.scheme;
                     tokio::task::spawn_blocking(move || run_grep(&workspace, &input, scheme))
                         .await
                         .map_err(|e| {
-                            McpError::internal_error(
-                                format!("hashline_grep task failed: {e}"),
-                                None,
-                            )
+                            McpError::internal_error(format!("grep task failed: {e}"), None)
                         })?
                 }
-                Err(e) => ToolOutcome::error(format!("Invalid arguments for hashline_grep: {e}")),
+                Err(e) => ToolOutcome::error(format!("Invalid arguments for grep: {e}")),
             },
             other => {
                 return Err(McpError::invalid_params(
@@ -377,9 +374,9 @@ impl ServerHandler for HashlineServer {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("hashline", env!("CARGO_PKG_VERSION")))
             .with_instructions(
-                "Hashline anchor-based file tools. Workflow: hashline_read (or \
-                 hashline_grep) a file to obtain per-line anchors, then pass those \
-                 anchors to hashline_edit to make validated edits. Anchors verify the \
+                "Hashline anchor-based file tools. Workflow: read (or \
+                 grep) a file to obtain per-line anchors, then pass those \
+                 anchors to edit to make validated edits. Anchors verify the \
                  target still matches the snapshot you saw; after an edit, use the \
                  fresh anchors it returns.",
             )
@@ -433,7 +430,7 @@ mod tests {
         let server = server(tmp.path());
         let tools = server.tools();
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
-        assert_eq!(names, ["hashline_read", "hashline_edit", "hashline_grep"]);
+        assert_eq!(names, ["read", "edit", "grep"]);
 
         for tool in tools {
             let desc = tool.description.as_deref().unwrap();
@@ -587,7 +584,7 @@ mod tests {
         // Create a file through the edit tool's write op.
         let result = server
             .dispatch(
-                "hashline_edit",
+                "edit",
                 json!({
                     "file_path": "demo.txt",
                     "edits": [{"op": "write", "content": "one\ntwo\nthree\n"}]
@@ -599,7 +596,7 @@ mod tests {
 
         // Read it back and harvest the anchor for line 2.
         let result = server
-            .dispatch("hashline_read", json!({"path": "demo.txt"}))
+            .dispatch("read", json!({"path": "demo.txt"}))
             .await
             .unwrap();
         assert_ne!(result.is_error, Some(true));
@@ -613,7 +610,7 @@ mod tests {
         // Edit line 2 via the harvested anchor.
         let result = server
             .dispatch(
-                "hashline_edit",
+                "edit",
                 json!({
                     "file_path": "demo.txt",
                     "edits": [{"op": "replace", "anchor": anchor, "content": "TWO"}]
@@ -637,16 +634,16 @@ mod tests {
 
         let server = server(tmp.path()).with_restrict(true);
         for (tool, args) in [
-            ("hashline_read", json!({"path": secret.to_str().unwrap()})),
+            ("read", json!({"path": secret.to_str().unwrap()})),
             (
-                "hashline_edit",
+                "edit",
                 json!({
                     "file_path": secret.to_str().unwrap(),
                     "edits": [{"op": "write", "content": "clobbered"}]
                 }),
             ),
             (
-                "hashline_grep",
+                "grep",
                 json!({"pattern": "secret", "path": outside.path().to_str().unwrap()}),
             ),
         ] {
@@ -668,7 +665,7 @@ mod tests {
         std::fs::write(tmp.path().join("ok.txt"), "fine\n").unwrap();
         let server = server(tmp.path()).with_restrict(true);
         let result = server
-            .dispatch("hashline_read", json!({"path": "ok.txt"}))
+            .dispatch("read", json!({"path": "ok.txt"}))
             .await
             .unwrap();
         assert_ne!(result.is_error, Some(true));
@@ -678,7 +675,7 @@ mod tests {
     async fn dispatch_invalid_arguments_is_tool_error() {
         let tmp = tempfile::TempDir::new().unwrap();
         let result = server(tmp.path())
-            .dispatch("hashline_read", json!({"nope": true}))
+            .dispatch("read", json!({"nope": true}))
             .await
             .unwrap();
         assert_eq!(result.is_error, Some(true));
@@ -695,11 +692,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn dispatch_rejects_legacy_tool_names() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let server = server(tmp.path());
+
+        for legacy_name in ["hashline_read", "hashline_edit", "hashline_grep"] {
+            let error = server
+                .dispatch(legacy_name, json!({}))
+                .await
+                .expect_err("legacy tool aliases must remain removed");
+            assert!(
+                error.message.contains("Unknown tool"),
+                "{legacy_name}: {}",
+                error.message
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn dispatch_grep_finds_match() {
         let tmp = tempfile::TempDir::new().unwrap();
         std::fs::write(tmp.path().join("s.rs"), "fn needle() {}\n").unwrap();
         let result = server(tmp.path())
-            .dispatch("hashline_grep", json!({"pattern": "needle"}))
+            .dispatch("grep", json!({"pattern": "needle"}))
             .await
             .unwrap();
         assert_ne!(result.is_error, Some(true));

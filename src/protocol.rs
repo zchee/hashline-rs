@@ -408,7 +408,7 @@ const fn default_read_limit() -> u16 {
     MAX_PAGE_LINES
 }
 
-/// Frozen v2 input schema for hashline_read.
+/// Frozen v2 input schema for `read`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ReadRequest {
@@ -441,7 +441,7 @@ const fn default_max_matches() -> u16 {
     MAX_GREP_MATCHES
 }
 
-/// Frozen v2 input schema for hashline_grep.
+/// Frozen v2 input schema for `grep`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct GrepRequest {
@@ -562,7 +562,7 @@ impl EditOperation {
     }
 }
 
-/// Frozen v2 input schema for hashline_edit.
+/// Frozen v2 input schema for `edit`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct EditRequest {

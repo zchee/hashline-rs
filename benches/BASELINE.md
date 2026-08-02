@@ -51,7 +51,7 @@ Criterion column values are the point estimate (middle of the reported
 | `batch_8ops_50k_lines` | 70.652 ms |
 | `stale_anchor_error_path_50k_lines` (find_shifted + full-file context render) | 8.2990 ms |
 
-## `hashline_grep` (2,000-file synthetic tree fixture, chunk scheme)
+## `grep` (2,000-file synthetic tree fixture, chunk scheme)
 
 | Benchmark | Median |
 |---|---|
@@ -88,7 +88,7 @@ the optimization payoff is concentrated in:
   `apply_edits/batch_8ops_50k_lines` in particular (70.7 ms) is dominated by
   the repeated full-file passes described in finding F3 — each of the 8 ops'
   post-edit snippet render re-walks the whole file.
-- **`hashline_grep`**, which is the one tool whose cost scales with repository
+- **`grep`**, which is the one tool whose cost scales with repository
   size rather than a single file's size — all three query shapes land in the
   13-15 ms band over a 2,000-file/~85,900-line fixture even before any
   haystack-level matching (F5) is applied.
@@ -179,7 +179,7 @@ is deliberately neutral here: the edit path splices the whole line vector, so
 `pre_edit_index` keeps its eager split (`FileIndex::from_lines_partial`) rather
 than paying for a span scan and a materialization.
 
-## `hashline_grep` (2,000-file synthetic tree fixture, chunk scheme)
+## `grep` (2,000-file synthetic tree fixture, chunk scheme)
 
 | Benchmark | Phase 0 | Now | Speedup |
 |---|---|---|---|
@@ -191,7 +191,7 @@ Unchanged, as expected: this fixture is filesystem-bound (directory walk plus
 2,000 opens is essentially the whole wall time), which is why acceptance
 criterion 4 was re-scoped to the single-file bench below.
 
-## `hashline_grep`, single 50,000-line file (~1.6 MB) — NEW in Phase 5
+## `grep`, single 50,000-line file (~1.6 MB) — NEW in Phase 5
 
 Criterion 4(b)'s match-bound bench. The search path is the file itself, taking
 `run_grep`'s single-file short circuit; pointing it at the containing directory

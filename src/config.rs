@@ -64,7 +64,7 @@ pub struct ExampleAnchors {
 /// Configurable parameters for the hashline anchor scheme.
 ///
 /// One instance is shared by all three hashline tools so anchors produced by
-/// `hashline_read`/`hashline_grep` always validate under `hashline_edit`.
+/// `read`/`grep` always validate under `edit`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SchemeConfig {
     /// Active scheme.

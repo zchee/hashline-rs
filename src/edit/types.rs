@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-//! Input/output types for the `hashline_edit` tool.
+//! Input/output types for the `edit` tool.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -22,7 +22,7 @@ pub use crate::protocol::EditOperation as HashlineEditV2Operation;
 /// Frozen incompatible-v2 request schema for versioned byte-range editing.
 pub use crate::protocol::EditRequest as HashlineEditV2Input;
 
-/// Input for the `hashline_edit` tool.
+/// Input for the `edit` tool.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct HashlineEditInput {
     /// The path of the file to edit (relative to the workspace root or absolute).
@@ -98,7 +98,7 @@ pub enum HashlineOp {
     },
 }
 
-/// Output of a successful `hashline_edit` application.
+/// Output of a successful `edit` application.
 #[derive(Debug, Clone)]
 pub struct HashlineEditsApplied {
     /// Number of operations applied.

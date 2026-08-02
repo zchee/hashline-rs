@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-//! Core edit-application logic for `hashline_edit`.
+//! Core edit-application logic for `edit`.
 //!
 //! Validates anchors against the pre-edit file snapshot, detects overlapping
 //! edits, sorts operations bottom-up, and applies them. Returns a fresh-anchor
@@ -96,7 +96,7 @@ fn anchor_content_error(op_label: &str, content: &str, line_num: usize) -> Hashl
         error: HashlineEditErrorKind::InvalidInput,
         message: format!(
             "{op_label} content contains anchor prefixes (e.g. \"22:abc:rst\u{2192}\") \
-             copied from hashline_read output. The first offending line is line {line_num}. \
+             copied from read output. The first offending line is line {line_num}. \
              Strip the anchor prefixes and the \u{2192} separator from every line, \
              keeping only the actual file content, then retry."
         ),
@@ -107,7 +107,7 @@ fn anchor_content_error(op_label: &str, content: &str, line_num: usize) -> Hashl
 }
 
 /// Strip the `→CONTENT` (or `->CONTENT`) tail that models copy verbatim from
-/// `hashline_read` output, leaving the bare anchor.
+/// `read` output, leaving the bare anchor.
 fn strip_anchor_suffix(anchor_str: &str) -> &str {
     anchor_str
         .split_once(CONTENT_SEPARATOR)
@@ -651,7 +651,7 @@ fn validate_anchor(
     index: &FileIndex<'_>,
     scheme: Scheme,
 ) -> Result<usize, HashlineEditError> {
-    // Strip trailing arrow + content that the model copies from hashline_read
+    // Strip trailing arrow + content that the model copies from read
     // output (e.g. `22:abc:rst→code` or `22:abc:rst->code`).
     let anchor_str = strip_anchor_suffix(anchor_str);
 

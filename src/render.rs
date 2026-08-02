@@ -14,13 +14,13 @@
 //
 //! The `ANCHOR→CONTENT` wire format, rendered in exactly one place.
 //!
-//! `hashline_read` renders windows of a file and `hashline_edit` renders
+//! `read` renders windows of a file and `edit` renders
 //! post-edit snippets and stale-anchor context. Those are the same bytes by
 //! contract — a model compares an edit snippet against a later read and must
 //! not see them disagree — so both go through [`render_range`] rather than
 //! through two implementations kept in step by comment.
 //!
-//! `hashline_grep` is deliberately not a caller: its lines carry `:` for a
+//! `grep` is deliberately not a caller: its lines carry `:` for a
 //! match and `-` for context instead of the separator here, so it is a
 //! different format rather than the same one rendered elsewhere.
 

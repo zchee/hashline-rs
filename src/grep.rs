@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-//! `hashline_grep` — anchor-annotated content search.
+//! `grep` — anchor-annotated content search.
 //!
 //! Self-contained reimplementation of ripgrep-style content search: the
 //! `ignore` crate walks the tree and ripgrep's own engine (`grep-searcher`
@@ -65,7 +65,7 @@ pub const DEFAULT_MAX_MATCHES: usize = 200;
 /// separators and the newline.
 const ANCHOR_RENDER_OVERHEAD: usize = 16;
 
-/// Input for the `hashline_grep` tool.
+/// Input for the `grep` tool.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct HashlineGrepInput {
     /// Regular expression to search for (e.g. `log.*Error`, `function\s+\w+`).
@@ -253,8 +253,8 @@ fn search_file(
         .iter()
         .map(|span| scheme.required_hash_span(span.clone(), usize::MAX))
         .collect();
-    // Anchors still come from the same FileIndex view hashline_read and
-    // hashline_edit use, so a grep anchor can be passed straight to an edit.
+    // Anchors still come from the same `FileIndex` view that `read` and
+    // `edit` use, so a grep anchor can be passed straight to an edit.
     let index = FileIndex::new_partial(&content, &hash_spans);
     // `FileIndex` appends the synthetic trailing empty line hashline's 1-based
     // numbering needs; grep numbers lines like `str::lines()` and never renders
@@ -447,7 +447,7 @@ fn assemble_output(hits: &[FileHit], max_matches: usize) -> String {
     out
 }
 
-/// Execute a `hashline_grep` request against the local filesystem.
+/// Execute a `grep` request against the local filesystem.
 ///
 /// This is a blocking function — call it via `spawn_blocking` from async
 /// contexts.
@@ -733,7 +733,7 @@ mod tests {
 
     #[test]
     fn grep_anchor_matches_read_anchor() {
-        // Anchors produced by grep must be identical to hashline_read's for
+        // Anchors produced by grep must be identical to read's for
         // the same file/scheme, so they can be passed straight to edit.
         let tmp = tempfile::TempDir::new().unwrap();
         let content = "fn main() {\n    let target = 1;\n}\n";
@@ -819,7 +819,7 @@ mod tests {
             outcome.text
         );
         // The carriage return is stripped exactly as `str::lines()` does, so
-        // rendered content matches what hashline_read would emit.
+        // rendered content matches what read would emit.
         let match_line = outcome
             .text
             .lines()
@@ -828,7 +828,7 @@ mod tests {
         assert!(match_line.ends_with("beta target"), "{match_line:?}");
         assert!(match_line.starts_with("2:"), "{match_line}");
 
-        // And the anchor is byte-identical to hashline_read's for line 2.
+        // And the anchor is byte-identical to read's for line 2.
         let anchor: String = match_line
             .splitn(4, ':')
             .take(3)

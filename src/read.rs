@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-//! `hashline_read` — anchor-annotated file reading.
+//! `read` — anchor-annotated file reading.
 //!
 //! Output format: `ANCHOR→CONTENT` (e.g. `22:abc:rst→  let x = 1;`).
 //!
@@ -48,7 +48,7 @@ pub const MAX_LINES_READ: usize = 2000;
 /// large files.
 const BINARY_SNIFF_BYTES: usize = 8 * 1024;
 
-/// Input for the `hashline_read` tool.
+/// Input for the `read` tool.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct HashlineReadInput {
     /// Path of the file to read (relative to the workspace root or absolute).
@@ -134,7 +134,7 @@ fn read_window(content: &str, offset: usize, limit: usize, scheme: Scheme) -> Re
     }
 }
 
-/// Execute a `hashline_read` request against the local filesystem.
+/// Execute a `read` request against the local filesystem.
 pub async fn run_read(
     workspace: &Workspace,
     input: &HashlineReadInput,

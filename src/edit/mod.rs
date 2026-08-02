@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-//! `hashline_edit` — anchor-based file editing.
+//! `edit` — anchor-based file editing.
 //!
 //! Supports `replace`, `insert_after`, and `write` operations. Anchors are
 //! validated against the pre-edit file snapshot; edits are applied bottom-up
@@ -71,7 +71,7 @@ fn render_error(err: &HashlineEditError) -> String {
     msg
 }
 
-/// Execute a `hashline_edit` request against the local filesystem.
+/// Execute an `edit` request against the local filesystem.
 pub async fn run_edit(
     workspace: &Workspace,
     input: &HashlineEditInput,

@@ -937,7 +937,7 @@ fn bench_dispatch(c: &mut Criterion) {
         b.to_async(&rt).iter(|| {
             let args = read_args.clone();
             let server = &server;
-            async move { black_box(server.dispatch("hashline_read", args).await) }
+            async move { black_box(server.dispatch("read", args).await) }
         });
     });
 
@@ -951,7 +951,7 @@ fn bench_dispatch(c: &mut Criterion) {
             |()| {
                 let args = edit_args.clone();
                 let server = &server;
-                async move { black_box(server.dispatch("hashline_edit", args).await) }
+                async move { black_box(server.dispatch("edit", args).await) }
             },
             BatchSize::SmallInput,
         );
