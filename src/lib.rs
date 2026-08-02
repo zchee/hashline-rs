@@ -34,6 +34,7 @@ pub mod read;
 mod render;
 pub mod scheme;
 pub mod server;
+pub mod snapshot;
 pub mod util;
 
 #[cfg(test)]

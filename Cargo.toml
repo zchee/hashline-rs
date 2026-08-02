@@ -46,6 +46,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 simdutf8 = "0.1"
 thiserror = "2"
+# Portable, process-seeded 128-bit identities for exact v2 snapshot bytes.
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
 tokio = { version = "1", features = ["fs", "io-std", "macros", "rt-multi-thread"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -61,7 +63,6 @@ rapidhash = "4.5.1"
 # implementation; the production path matches via grep-regex/grep-searcher.
 regex = "1"
 tempfile = "3"
-xxhash-rust = { version = "0.8", features = ["xxh3"] }
 
 [[bench]]
 name = "hashline"

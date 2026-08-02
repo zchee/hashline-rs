@@ -15,7 +15,27 @@
 //! Small shared helpers for the hashline tools.
 
 use std::borrow::Cow;
+use std::collections::hash_map::RandomState;
+use std::hash::{BuildHasher, Hasher};
 use std::path::{Component, Path, PathBuf};
+use std::sync::OnceLock;
+
+/// Return one unpredictable seed shared by this process.
+///
+/// `RandomState` supplies the operating-system-seeded key material used by the
+/// standard hash map. Hashing a domain label turns that opaque key into the
+/// scalar seed required by the snapshot version function without adding a
+/// second random-number dependency.
+pub(crate) fn process_random_seed() -> u64 {
+    static PROCESS_RANDOM_SEED: OnceLock<u64> = OnceLock::new();
+
+    *PROCESS_RANDOM_SEED.get_or_init(|| {
+        let state = RandomState::new();
+        let mut hasher = state.build_hasher();
+        hasher.write(b"hashline-v2-snapshot-version");
+        hasher.finish()
+    })
+}
 
 /// Decode file bytes as UTF-8, borrowing the buffer when it is already valid.
 ///

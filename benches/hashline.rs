@@ -36,6 +36,7 @@ use hashline::hash::{encode_hash, fnv1a_32, line_hash};
 use hashline::index::{FileIndex, split_lines};
 use hashline::read::format_hashline_content;
 use hashline::scheme::{Anchor, Scheme};
+use hashline::snapshot::Snapshot;
 use hashline::util::Workspace;
 use memchr::{memchr_iter, memchr3_iter};
 
@@ -959,6 +960,364 @@ fn bench_dispatch(c: &mut Criterion) {
     group.finish();
 }
 
+/// Benchmark seed used only to compare raw version functions under identical input.
+const PHASE2_VERSION_BENCH_SEED: u64 = 0x8ca7_4f91_2d63_b5e0;
+
+#[derive(Debug)]
+struct SnapshotValidationProbe {
+    text: String,
+    version: u128,
+    line_count: usize,
+    byte_len: usize,
+}
+
+fn assert_validation_probe_policy(bytes: &[u8]) {
+    assert!(
+        memchr::memchr(0, bytes).is_none(),
+        "benchmark corpus must be NUL-free"
+    );
+}
+
+fn finish_validation_probe(text: String) -> SnapshotValidationProbe {
+    let version = xxhash_rust::xxh3::xxh3_128_with_seed(text.as_bytes(), PHASE2_VERSION_BENCH_SEED);
+    let line_count = memchr_iter(b'\n', text.as_bytes()).count() + 1;
+    let byte_len = text.len();
+    SnapshotValidationProbe {
+        text,
+        version,
+        line_count,
+        byte_len,
+    }
+}
+
+fn safe_snapshot_probe(bytes: Vec<u8>) -> SnapshotValidationProbe {
+    assert_validation_probe_policy(&bytes);
+    let text = String::from_utf8(bytes).expect("benchmark corpus must be valid UTF-8");
+    finish_validation_probe(text)
+}
+
+fn unsafe_snapshot_probe(bytes: Vec<u8>) -> SnapshotValidationProbe {
+    assert_validation_probe_policy(&bytes);
+    simdutf8::compat::from_utf8(&bytes).expect("benchmark corpus must be valid UTF-8");
+    // SAFETY: simdutf8 validated this exact owned buffer above, and no mutation
+    // occurs between validation and ownership transfer.
+    let text = unsafe { String::from_utf8_unchecked(bytes) };
+    finish_validation_probe(text)
+}
+
+#[derive(Debug)]
+struct SparseCheckpoints {
+    interval: usize,
+    checkpoints: Vec<u32>,
+}
+
+impl SparseCheckpoints {
+    fn new(content: &str, interval: usize) -> Self {
+        let mut checkpoints =
+            Vec::with_capacity(phase0_workloads::logical_line_count(content) / interval + 1);
+        checkpoints.push(0);
+        for (line, newline) in memchr_iter(b'\n', content.as_bytes()).enumerate() {
+            let next_line = line + 1;
+            if next_line % interval == 0 {
+                checkpoints.push(
+                    u32::try_from(newline + 1).expect("Phase 2 benchmark corpus is below 4 GiB"),
+                );
+            }
+        }
+        Self {
+            interval,
+            checkpoints,
+        }
+    }
+
+    fn select_window(&self, content: &str, start_line: usize, count: usize) -> Vec<u32> {
+        if count == 0 {
+            return Vec::new();
+        }
+        let checkpoint_index = start_line / self.interval;
+        let checkpoint_line = checkpoint_index * self.interval;
+        let mut position =
+            usize::try_from(self.checkpoints[checkpoint_index]).expect("u32 checkpoint fits usize");
+        let mut lines_to_skip = start_line - checkpoint_line;
+        if lines_to_skip > 0 {
+            for newline in memchr_iter(b'\n', &content.as_bytes()[position..]) {
+                position += newline + 1;
+                lines_to_skip -= 1;
+                if lines_to_skip == 0 {
+                    break;
+                }
+            }
+        }
+
+        let mut starts = Vec::with_capacity(count);
+        starts.push(u32::try_from(position).expect("benchmark offset fits u32"));
+        for newline in memchr_iter(b'\n', &content.as_bytes()[position..]).take(count - 1) {
+            starts.push(u32::try_from(position + newline + 1).expect("benchmark offset fits u32"));
+        }
+        starts
+    }
+
+    fn resident_bytes(&self) -> usize {
+        self.checkpoints.len() * std::mem::size_of::<u32>()
+    }
+}
+
+const RANK_SELECT_WORD_BITS: usize = 64;
+const RANK_SELECT_WORDS_PER_SUPERBLOCK: usize = 8;
+
+#[derive(Debug)]
+struct RankSelectBitmap {
+    words: Vec<u64>,
+    superblocks: Vec<u32>,
+    line_count: usize,
+}
+
+impl RankSelectBitmap {
+    fn new(content: &str) -> Self {
+        let word_count = content.len() / RANK_SELECT_WORD_BITS + 1;
+        let mut words = vec![0_u64; word_count];
+        Self::set(&mut words, 0);
+        let mut line_count = 1;
+        for newline in memchr_iter(b'\n', content.as_bytes()) {
+            Self::set(&mut words, newline + 1);
+            line_count += 1;
+        }
+
+        let mut superblocks =
+            Vec::with_capacity(words.len() / RANK_SELECT_WORDS_PER_SUPERBLOCK + 1);
+        let mut rank = 0_u32;
+        for block in words.chunks(RANK_SELECT_WORDS_PER_SUPERBLOCK) {
+            superblocks.push(rank);
+            let block_ones = block.iter().map(|word| word.count_ones()).sum::<u32>();
+            rank = rank
+                .checked_add(block_ones)
+                .expect("benchmark line count fits u32");
+        }
+        Self {
+            words,
+            superblocks,
+            line_count,
+        }
+    }
+
+    fn set(words: &mut [u64], position: usize) {
+        let word = position / RANK_SELECT_WORD_BITS;
+        let bit = position % RANK_SELECT_WORD_BITS;
+        words[word] |= 1_u64 << bit;
+    }
+
+    fn select(&self, line: usize) -> Option<usize> {
+        if line >= self.line_count {
+            return None;
+        }
+        let line_u32 = u32::try_from(line).ok()?;
+        let after = self.superblocks.partition_point(|rank| *rank <= line_u32);
+        let superblock = after.saturating_sub(1);
+        let mut remaining = line_u32 - self.superblocks[superblock];
+        let first_word = superblock * RANK_SELECT_WORDS_PER_SUPERBLOCK;
+        let last_word = (first_word + RANK_SELECT_WORDS_PER_SUPERBLOCK).min(self.words.len());
+        for (relative, &word) in self.words[first_word..last_word].iter().enumerate() {
+            let ones = word.count_ones();
+            if remaining >= ones {
+                remaining -= ones;
+                continue;
+            }
+            let mut selected = word;
+            for _ in 0..remaining {
+                selected &= selected - 1;
+            }
+            let bit =
+                usize::try_from(selected.trailing_zeros()).expect("trailing-zero count fits usize");
+            return Some((first_word + relative) * RANK_SELECT_WORD_BITS + bit);
+        }
+        None
+    }
+
+    fn select_window(&self, start_line: usize, count: usize) -> Vec<u32> {
+        (start_line..start_line + count)
+            .filter_map(|line| self.select(line))
+            .map(|offset| u32::try_from(offset).expect("benchmark offset fits u32"))
+            .collect()
+    }
+
+    fn resident_bytes(&self) -> usize {
+        self.words.len() * std::mem::size_of::<u64>()
+            + self.superblocks.len() * std::mem::size_of::<u32>()
+    }
+}
+
+fn full_u32_window(content: &str, start_line: usize, count: usize) -> Vec<u32> {
+    let offsets = phase0_workloads::offsets_u32(content);
+    offsets[start_line..start_line + count].to_vec()
+}
+
+fn full_u64_window(content: &str, start_line: usize, count: usize) -> Vec<u64> {
+    let offsets = phase0_workloads::offsets_u64(content);
+    offsets[start_line..start_line + count].to_vec()
+}
+
+fn bench_phase2_snapshot(c: &mut Criterion) {
+    let content_10k = generate_corpus(10_000, 0xB200_0010);
+    let content_50k = generate_corpus(50_000, 0xB200_0050);
+
+    for (size, content) in [(10_000usize, &content_10k), (50_000, &content_50k)] {
+        let mut group = c.benchmark_group(format!("phase2_snapshot/{size}"));
+        group.sample_size(30);
+        group.measurement_time(Duration::from_secs(3));
+        group.bench_function("base_current_index", |b| {
+            b.iter(|| {
+                let index = FileIndex::new(black_box(content));
+                black_box(index.len())
+            });
+        });
+        group.bench_function("candidate_snapshot", |b| {
+            b.iter_batched(
+                || content.as_bytes().to_vec(),
+                |bytes| {
+                    let snapshot =
+                        Snapshot::from_bytes(black_box(bytes)).expect("valid benchmark snapshot");
+                    black_box((snapshot.id(), snapshot.line_count(), snapshot.byte_len()))
+                },
+                BatchSize::LargeInput,
+            );
+        });
+        group.finish();
+
+        let mut validation = c.benchmark_group(format!("phase2_validation/{size}"));
+        validation.sample_size(30);
+        validation.measurement_time(Duration::from_secs(3));
+        validation.bench_function("safe_snapshot", |b| {
+            b.iter_batched(
+                || content.as_bytes().to_vec(),
+                |bytes| {
+                    let probe = safe_snapshot_probe(black_box(bytes));
+                    black_box((probe.text, probe.version, probe.line_count, probe.byte_len))
+                },
+                BatchSize::LargeInput,
+            );
+        });
+        validation.bench_function("simd_validated_unchecked_snapshot", |b| {
+            b.iter_batched(
+                || content.as_bytes().to_vec(),
+                |bytes| {
+                    let probe = unsafe_snapshot_probe(black_box(bytes));
+                    black_box((probe.text, probe.version, probe.line_count, probe.byte_len))
+                },
+                BatchSize::LargeInput,
+            );
+        });
+        validation.finish();
+    }
+}
+
+fn bench_phase2_version_matrix(c: &mut Criterion) {
+    let short = "    let value_42 = compute(123, next_state);\n";
+    let multimegabyte = generate_corpus(50_000, 0xB200_0050);
+
+    for (label, content) in [("short", short), ("multimegabyte", multimegabyte.as_str())] {
+        let mut group = c.benchmark_group(format!("phase2_version/{label}"));
+        group.sample_size(30);
+        group.measurement_time(Duration::from_secs(3));
+
+        #[cfg(feature = "gxhash")]
+        group.bench_function("gxhash128", |b| {
+            b.iter(|| {
+                black_box(gxhash::gxhash128(
+                    black_box(content.as_bytes()),
+                    i64::from_ne_bytes(PHASE2_VERSION_BENCH_SEED.to_ne_bytes()),
+                ))
+            });
+        });
+        group.bench_function("xxh3_128_with_seed", |b| {
+            b.iter(|| {
+                black_box(xxhash_rust::xxh3::xxh3_128_with_seed(
+                    black_box(content.as_bytes()),
+                    PHASE2_VERSION_BENCH_SEED,
+                ))
+            });
+        });
+        group.bench_function("blake3_128", |b| {
+            b.iter(|| {
+                let digest = blake3::hash(black_box(content.as_bytes()));
+                let prefix: [u8; 16] = digest.as_bytes()[..16]
+                    .try_into()
+                    .expect("BLAKE3 digest prefix is exactly 16 bytes");
+                black_box(prefix)
+            });
+        });
+        group.finish();
+    }
+}
+
+fn bench_phase2_offsets(c: &mut Criterion) {
+    let content_50k = generate_corpus(50_000, 0xB200_0050);
+    let content_100k = generate_corpus(100_000, 0xB200_0100);
+
+    let mut construction = c.benchmark_group("phase2_offsets/construction_50k");
+    construction.sample_size(30);
+    construction.measurement_time(Duration::from_secs(3));
+    construction.bench_function("full_u32", |b| {
+        b.iter(|| black_box(phase0_workloads::offsets_u32(black_box(&content_50k))));
+    });
+    construction.bench_function("full_u64", |b| {
+        b.iter(|| black_box(phase0_workloads::offsets_u64(black_box(&content_50k))));
+    });
+    for interval in [128usize, 256, 512] {
+        construction.bench_function(format!("sparse_{interval}"), |b| {
+            b.iter(|| {
+                let checkpoints = SparseCheckpoints::new(black_box(&content_50k), interval);
+                black_box((checkpoints.resident_bytes(), checkpoints))
+            });
+        });
+    }
+    construction.bench_function("rank_select_bitmap", |b| {
+        b.iter(|| {
+            let bitmap = RankSelectBitmap::new(black_box(&content_50k));
+            black_box((bitmap.resident_bytes(), bitmap))
+        });
+    });
+    construction.finish();
+
+    const START_LINE: usize = 50_000;
+    const WINDOW_LINES: usize = 2_000;
+    let mut cold = c.benchmark_group("phase2_offsets/cold_window_2k_of_100k");
+    cold.sample_size(30);
+    cold.measurement_time(Duration::from_secs(3));
+    cold.bench_function("full_u32", |b| {
+        b.iter(|| {
+            black_box(full_u32_window(
+                black_box(&content_100k),
+                START_LINE,
+                WINDOW_LINES,
+            ))
+        });
+    });
+    cold.bench_function("full_u64", |b| {
+        b.iter(|| {
+            black_box(full_u64_window(
+                black_box(&content_100k),
+                START_LINE,
+                WINDOW_LINES,
+            ))
+        });
+    });
+    for interval in [128usize, 256, 512] {
+        cold.bench_function(format!("sparse_{interval}"), |b| {
+            b.iter(|| {
+                let checkpoints = SparseCheckpoints::new(black_box(&content_100k), interval);
+                black_box(checkpoints.select_window(&content_100k, START_LINE, WINDOW_LINES))
+            });
+        });
+    }
+    cold.bench_function("rank_select_bitmap", |b| {
+        b.iter(|| {
+            let bitmap = RankSelectBitmap::new(black_box(&content_100k));
+            black_box(bitmap.select_window(START_LINE, WINDOW_LINES))
+        });
+    });
+    cold.finish();
+}
+
 criterion_group!(
     benches,
     bench_line_hash,
@@ -970,6 +1329,9 @@ criterion_group!(
     bench_index_partial,
     bench_hash_matrix,
     bench_phase0_v2_pairs,
+    bench_phase2_snapshot,
+    bench_phase2_version_matrix,
+    bench_phase2_offsets,
     bench_dispatch,
 );
 criterion_main!(benches);
