@@ -1,0 +1,17 @@
+commit: 1ead4a6ff52a647fa3b4cfb8a814203c6febd98d
+date: 2026-08-03T12:23:08Z
+host: debian-13-trixie-x07x / Linux 6.12.100+deb13-cloud-amd64 x86_64
+cpu: Intel(R) Xeon(R) Platinum 8481C CPU @ 2.70GHz (44 threads)
+mem_gb: 172
+rustc 1.99.0-nightly (11177f223 2026-08-02)
+binary: rustc
+commit-hash: 11177f2235f0c842b00f82c558ad9480c0c3a895
+commit-date: 2026-08-02
+host: x86_64-unknown-linux-gnu
+release: 1.99.0-nightly
+LLVM version: 22.1.8
+cargo 1.99.0-nightly (7c83d4cc0 2026-07-29)
+RUSTFLAGS=[] CARGO_ENCODED_RUSTFLAGS=[] (both empty in this environment)
+profile: bench inherits release (lto=fat, codegen-units=1, Cargo.toml as committed); committed .cargo/config.toml applies +aes for x86_64 (shipping build config)
+runner: cargo bench --bench hashline -- <anchored-group-regex>, one group at a time, sequential, via ssh
+known-failing lib tests at this commit AND at 9407afb (pre-existing, Linux-only): persist::tests::atomic_write_detects_external_change, snapshot::tests::phase2_stable_read_rejects_two_mutated_attempts (same-length rewrites within one coarse file-timestamp tick produce identical FileStamps)

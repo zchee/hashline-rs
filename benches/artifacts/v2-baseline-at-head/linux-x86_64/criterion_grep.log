@@ -1,0 +1,26 @@
+    Finished `bench` profile [optimized] target(s) in 0.06s
+     Running benches/hashline.rs (target/release/build/hashline-rs/6b213fd31996ff18/out/hashline-6b213fd31996ff18)
+Gnuplot not found, using plotters backend
+Benchmarking grep/rare_literal
+Benchmarking grep/rare_literal: Warming up for 3.0000 s
+Benchmarking grep/rare_literal: Collecting 20 samples in estimated 6.8172 s (1470 iterations)
+Benchmarking grep/rare_literal: Analyzing
+grep/rare_literal       time:   [4.6060 ms 4.6414 ms 4.6761 ms]
+Found 2 outliers among 20 measurements (10.00%)
+  2 (10.00%) low mild
+Benchmarking grep/common_literal
+Benchmarking grep/common_literal: Warming up for 3.0000 s
+Benchmarking grep/common_literal: Collecting 20 samples in estimated 6.2210 s (4410 iterations)
+Benchmarking grep/common_literal: Analyzing
+grep/common_literal     time:   [1.4074 ms 1.4087 ms 1.4100 ms]
+Found 1 outliers among 20 measurements (5.00%)
+  1 (5.00%) low mild
+Benchmarking grep/anchored_regex
+Benchmarking grep/anchored_regex: Warming up for 3.0000 s
+Benchmarking grep/anchored_regex: Collecting 20 samples in estimated 6.2924 s (1680 iterations)
+Benchmarking grep/anchored_regex: Analyzing
+grep/anchored_regex     time:   [3.7480 ms 3.7535 ms 3.7596 ms]
+Found 2 outliers among 20 measurements (10.00%)
+  1 (5.00%) low severe
+  1 (5.00%) low mild
+

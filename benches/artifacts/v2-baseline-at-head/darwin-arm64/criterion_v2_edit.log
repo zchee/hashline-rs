@@ -1,0 +1,45 @@
+    Finished `bench` profile [optimized] target(s) in 0.07s
+     Running benches/hashline.rs (target/release/build/hashline-rs/27403edf009bad2d/out/hashline-27403edf009bad2d)
+Benchmarking v2_edit/single_op_50k_apply
+Benchmarking v2_edit/single_op_50k_apply: Warming up for 3.0000 s
+Benchmarking v2_edit/single_op_50k_apply: Collecting 20 samples in estimated 5.0755 s (1260 iterations)
+Benchmarking v2_edit/single_op_50k_apply: Analyzing
+v2_edit/single_op_50k_apply
+                        time:   [4.0430 ms 4.0572 ms 4.0735 ms]
+Found 3 outliers among 20 measurements (15.00%)
+  1 (5.00%) low mild
+  1 (5.00%) high mild
+  1 (5.00%) high severe
+Benchmarking v2_edit/batch_8ops_50k_apply
+Benchmarking v2_edit/batch_8ops_50k_apply: Warming up for 3.0000 s
+Benchmarking v2_edit/batch_8ops_50k_apply: Collecting 20 samples in estimated 5.1363 s (1260 iterations)
+Benchmarking v2_edit/batch_8ops_50k_apply: Analyzing
+v2_edit/batch_8ops_50k_apply
+                        time:   [4.0188 ms 4.0881 ms 4.1697 ms]
+Found 3 outliers among 20 measurements (15.00%)
+  1 (5.00%) low mild
+  2 (10.00%) high severe
+Benchmarking v2_edit/single_op_50k_e2e_full
+Benchmarking v2_edit/single_op_50k_e2e_full: Warming up for 1.0000 s
+Benchmarking v2_edit/single_op_50k_e2e_full: Collecting 10 samples in estimated 6.8033 s (440 iterations)
+Benchmarking v2_edit/single_op_50k_e2e_full: Analyzing
+v2_edit/single_op_50k_e2e_full
+                        time:   [14.847 ms 15.004 ms 15.194 ms]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking v2_edit/batch_8ops_50k_e2e_full
+Benchmarking v2_edit/batch_8ops_50k_e2e_full: Warming up for 1.0000 s
+Benchmarking v2_edit/batch_8ops_50k_e2e_full: Collecting 10 samples in estimated 6.6357 s (385 iterations)
+Benchmarking v2_edit/batch_8ops_50k_e2e_full: Analyzing
+v2_edit/batch_8ops_50k_e2e_full
+                        time:   [15.821 ms 16.407 ms 17.109 ms]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) low mild
+Benchmarking v2_edit/conflict_50k
+Benchmarking v2_edit/conflict_50k: Warming up for 2.0000 s
+Benchmarking v2_edit/conflict_50k: Collecting 20 samples in estimated 5.1723 s (1050 iterations)
+Benchmarking v2_edit/conflict_50k: Analyzing
+v2_edit/conflict_50k    time:   [4.2140 ms 4.3715 ms 4.6634 ms]
+Found 2 outliers among 20 measurements (10.00%)
+  2 (10.00%) high severe
+

@@ -1,0 +1,17 @@
+commit: 1ead4a6ff52a647fa3b4cfb8a814203c6febd98d
+date: 2026-08-03T12:10:03Z
+host: zchee-MacBook-Pro.local / Darwin 27.0.0 arm64
+cpu: Apple M3 Max (16 threads)
+mem_gb: 128
+rustc 1.99.0-nightly (11177f223 2026-08-02)
+binary: rustc
+commit-hash: 11177f2235f0c842b00f82c558ad9480c0c3a895
+commit-date: 2026-08-02
+host: aarch64-apple-darwin
+release: 1.99.0-nightly
+LLVM version: 22.1.8
+cargo 1.99.0-nightly (7c83d4cc0 2026-07-29)
+ambient shell exports RUSTFLAGS=[-C target-cpu=apple-m3 -C opt-level=3 -C force-frame-pointers=on -C debug-assertions=off -C overflow-checks=off]; every build and measurement in this capture runs with RUSTFLAGS and CARGO_ENCODED_RUSTFLAGS explicitly unset
+effective bench env: RUSTFLAGS=<unset> CARGO_ENCODED_RUSTFLAGS=<unset>
+profile: bench inherits release (lto=fat, codegen-units=1, Cargo.toml as committed); committed .cargo/config.toml +aes matrix is shipping build config, not ambient flags
+runner: cargo bench --bench hashline -- <anchored-group-regex>, one group at a time, sequential

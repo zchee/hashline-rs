@@ -1,0 +1,14 @@
+{
+  "allocations": {
+    "allocated_bytes": 1911944,
+    "allocation_calls": 120,
+    "deallocated_bytes": 1408176,
+    "deallocation_calls": 108,
+    "live_bytes": 503768,
+    "peak_live_bytes": 630163,
+    "reallocation_calls": 24
+  },
+  "output_bytes": 580395,
+  "scenario": "v2_read_full_10k",
+  "schema_version": 1
+}

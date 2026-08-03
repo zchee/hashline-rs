@@ -1,0 +1,31 @@
+    Finished `bench` profile [optimized] target(s) in 0.06s
+     Running benches/hashline.rs (target/release/build/hashline-rs/6b213fd31996ff18/out/hashline-6b213fd31996ff18)
+Gnuplot not found, using plotters backend
+Benchmarking v2_read/full_10k
+Benchmarking v2_read/full_10k: Warming up for 3.0000 s
+Benchmarking v2_read/full_10k: Collecting 20 samples in estimated 6.0051 s (630 iterations)
+Benchmarking v2_read/full_10k: Analyzing
+v2_read/full_10k        time:   [9.5950 ms 9.6044 ms 9.6146 ms]
+Found 1 outliers among 20 measurements (5.00%)
+  1 (5.00%) high mild
+Benchmarking v2_read/window_2k_of_100k_warm
+Benchmarking v2_read/window_2k_of_100k_warm: Warming up for 3.0000 s
+Benchmarking v2_read/window_2k_of_100k_warm: Collecting 20 samples in estimated 5.0057 s (32k iterations)
+Benchmarking v2_read/window_2k_of_100k_warm: Analyzing
+v2_read/window_2k_of_100k_warm
+                        time:   [159.47 µs 162.90 µs 168.75 µs]
+Benchmarking v2_read/window_2k_of_100k_cold
+Benchmarking v2_read/window_2k_of_100k_cold: Warming up for 3.0000 s
+Benchmarking v2_read/window_2k_of_100k_cold: Collecting 20 samples in estimated 5.2426 s (2100 iterations)
+Benchmarking v2_read/window_2k_of_100k_cold: Analyzing
+v2_read/window_2k_of_100k_cold
+                        time:   [2.4966 ms 2.4972 ms 2.4980 ms]
+Benchmarking v2_read/cursor_page_50k
+Benchmarking v2_read/cursor_page_50k: Warming up for 3.0000 s
+Benchmarking v2_read/cursor_page_50k: Collecting 20 samples in estimated 5.6641 s (630 iterations)
+Benchmarking v2_read/cursor_page_50k: Analyzing
+v2_read/cursor_page_50k time:   [8.9994 ms 9.0408 ms 9.0841 ms]
+Found 2 outliers among 20 measurements (10.00%)
+  1 (5.00%) high mild
+  1 (5.00%) high severe
+

@@ -1,0 +1,12 @@
+    Finished `bench` profile [optimized] target(s) in 0.06s
+     Running benches/hashline.rs (target/release/build/hashline-rs/6b213fd31996ff18/out/hashline-6b213fd31996ff18)
+Gnuplot not found, using plotters backend
+Benchmarking v2_grep/dense_file_capped
+Benchmarking v2_grep/dense_file_capped: Warming up for 3.0000 s
+Benchmarking v2_grep/dense_file_capped: Collecting 20 samples in estimated 5.1936 s (2520 iterations)
+Benchmarking v2_grep/dense_file_capped: Analyzing
+v2_grep/dense_file_capped
+                        time:   [2.0515 ms 2.0529 ms 2.0540 ms]
+Found 1 outliers among 20 measurements (5.00%)
+  1 (5.00%) high severe
+

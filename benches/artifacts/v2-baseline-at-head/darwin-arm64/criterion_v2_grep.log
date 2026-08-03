@@ -1,0 +1,11 @@
+    Finished `bench` profile [optimized] target(s) in 0.05s
+     Running benches/hashline.rs (target/release/build/hashline-rs/27403edf009bad2d/out/hashline-27403edf009bad2d)
+Benchmarking v2_grep/dense_file_capped
+Benchmarking v2_grep/dense_file_capped: Warming up for 3.0000 s
+Benchmarking v2_grep/dense_file_capped: Collecting 20 samples in estimated 5.2103 s (2730 iterations)
+Benchmarking v2_grep/dense_file_capped: Analyzing
+v2_grep/dense_file_capped
+                        time:   [1.7411 ms 1.7656 ms 1.7998 ms]
+Found 3 outliers among 20 measurements (15.00%)
+  3 (15.00%) high severe
+

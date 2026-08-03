@@ -1,0 +1,29 @@
+    Finished `bench` profile [optimized] target(s) in 0.06s
+     Running benches/hashline.rs (target/release/build/hashline-rs/27403edf009bad2d/out/hashline-27403edf009bad2d)
+Benchmarking grep/rare_literal
+Benchmarking grep/rare_literal: Warming up for 3.0000 s
+Benchmarking grep/rare_literal: Collecting 20 samples in estimated 6.3798 s (420 iterations)
+Benchmarking grep/rare_literal: Analyzing
+grep/rare_literal       time:   [14.556 ms 15.045 ms 15.672 ms]
+                        change: [+1.7897% +5.0330% +8.6638%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 3 outliers among 20 measurements (15.00%)
+  1 (5.00%) low mild
+  2 (10.00%) high mild
+Benchmarking grep/common_literal
+Benchmarking grep/common_literal: Warming up for 3.0000 s
+Benchmarking grep/common_literal: Collecting 20 samples in estimated 6.4503 s (1470 iterations)
+Benchmarking grep/common_literal: Analyzing
+grep/common_literal     time:   [4.2973 ms 4.3588 ms 4.4141 ms]
+                        change: [−71.311% −70.873% −70.382%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 1 outliers among 20 measurements (5.00%)
+  1 (5.00%) high mild
+Benchmarking grep/anchored_regex
+Benchmarking grep/anchored_regex: Warming up for 3.0000 s
+Benchmarking grep/anchored_regex: Collecting 20 samples in estimated 8.8554 s (630 iterations)
+Benchmarking grep/anchored_regex: Analyzing
+grep/anchored_regex     time:   [13.243 ms 13.496 ms 13.873 ms]
+                        change: [−7.0813% −5.1905% −2.9499%] (p = 0.00 < 0.05)
+                        Performance has improved.
+

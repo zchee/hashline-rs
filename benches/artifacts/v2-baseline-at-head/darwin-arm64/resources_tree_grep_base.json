@@ -1,0 +1,14 @@
+{
+  "allocations": {
+    "allocated_bytes": 7824097,
+    "allocation_calls": 24995,
+    "deallocated_bytes": 7716857,
+    "deallocation_calls": 24835,
+    "live_bytes": 107240,
+    "peak_live_bytes": 1784590,
+    "reallocation_calls": 7986
+  },
+  "output_bytes": 15197,
+  "scenario": "tree_grep_base",
+  "schema_version": 1
+}

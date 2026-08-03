@@ -1,0 +1,31 @@
+    Finished `bench` profile [optimized] target(s) in 0.05s
+     Running benches/hashline.rs (target/release/build/hashline-rs/27403edf009bad2d/out/hashline-27403edf009bad2d)
+Benchmarking dispatch/read_300_lines
+Benchmarking dispatch/read_300_lines: Warming up for 3.0000 s
+Benchmarking dispatch/read_300_lines: Collecting 30 samples in estimated 5.0119 s (190k iterations)
+Benchmarking dispatch/read_300_lines: Analyzing
+dispatch/read_300_lines time:   [26.454 µs 26.836 µs 27.248 µs]
+                        change: [−15.260% −11.752% −7.8709%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 2 outliers among 30 measurements (6.67%)
+  1 (3.33%) high mild
+  1 (3.33%) high severe
+Benchmarking dispatch/read_300_lines_cold
+Benchmarking dispatch/read_300_lines_cold: Warming up for 3.0000 s
+Benchmarking dispatch/read_300_lines_cold: Collecting 30 samples in estimated 5.0190 s (107k iterations)
+Benchmarking dispatch/read_300_lines_cold: Analyzing
+dispatch/read_300_lines_cold
+                        time:   [46.775 µs 48.060 µs 49.804 µs]
+                        change: [+46.296% +59.028% +68.948%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 3 outliers among 30 measurements (10.00%)
+  3 (10.00%) high severe
+Benchmarking dispatch/edit_single_op_300_lines
+Benchmarking dispatch/edit_single_op_300_lines: Warming up for 3.0000 s
+Benchmarking dispatch/edit_single_op_300_lines: Collecting 30 samples in estimated 9.0083 s (930 iterations)
+Benchmarking dispatch/edit_single_op_300_lines: Analyzing
+dispatch/edit_single_op_300_lines
+                        time:   [9.3009 ms 9.5276 ms 9.7557 ms]
+                        change: [+3.1712% +6.0270% +8.6811%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+
