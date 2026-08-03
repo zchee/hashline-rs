@@ -42,10 +42,8 @@ PROFILE_SYMBOLS = {
     "common_grep": GREP_PROFILE_SYMBOLS,
 }
 RESOURCE_SCENARIOS = (
-    "full_read_base",
-    "full_read_candidate",
-    "edit_50k_base",
-    "edit_50k_candidate",
+    "v2_read_full_10k",
+    "v2_edit_single_op_50k",
     "tree_grep_base",
 )
 QUALITY_COMMANDS = (

@@ -28,11 +28,15 @@ use anyhow::{Context as _, Result, bail};
 use hashline::config::SchemeConfig;
 use hashline::edit::HashlineOp;
 use hashline::edit::apply::apply_edits;
+use hashline::edit::run_edit;
 use hashline::grep::run_grep;
 use hashline::index::FileIndex;
-use hashline::protocol::GrepRequest;
-use hashline::read::format_hashline_content;
+use hashline::protocol::{
+    EditOperation, EditRequest, GrepRequest, PageCursor, Position, ReadRequest,
+};
+use hashline::read::{format_hashline_content, run_read};
 use hashline::scheme::Scheme;
+use hashline::snapshot::Snapshot;
 use hashline::util::Workspace;
 use serde_json::{Value, json};
 
@@ -250,6 +254,69 @@ fn grep_input(pattern: &str, path: Option<String>) -> GrepRequest {
     }
 }
 
+/// Build the probe runtime outside any allocation-counted region.
+fn probe_runtime() -> Result<tokio::runtime::Runtime> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("build probe runtime")
+}
+
+/// Drive the wired `run_read` through every page of `path`, returning the
+/// total rendered bytes across the pagination chain.
+async fn read_all_pages(workspace: &Workspace, path: &str) -> Result<usize> {
+    let mut request = ReadRequest {
+        path: path.to_owned(),
+        limit: 2_000,
+        cursor: None,
+    };
+    let mut total = 0usize;
+    loop {
+        let outcome = run_read(workspace, &request).await;
+        if outcome.is_error {
+            bail!("wired read failed: {}", outcome.text);
+        }
+        total += outcome.text.len();
+        let footer = outcome
+            .text
+            .rfind('\n')
+            .map_or(outcome.text.as_str(), |index| &outcome.text[index + 1..]);
+        let Some(rest) = footer.strip_prefix("[hashline-v2 next snapshot=") else {
+            return Ok(total);
+        };
+        let (snapshot, rest) = rest
+            .split_once(' ')
+            .context("cursor footer separates snapshot and position")?;
+        let position = rest
+            .strip_prefix("position=")
+            .and_then(|token| token.strip_suffix(']'))
+            .context("cursor footer carries a position token")?;
+        request.cursor = Some(PageCursor {
+            snapshot: snapshot.parse().context("parse cursor snapshot id")?,
+            next: position.parse().context("parse cursor position")?,
+        });
+    }
+}
+
+/// One-line wired v2 replace of line 25,000 against the exact corpus snapshot.
+fn single_replace_request(content: &str, path: &str) -> Result<EditRequest> {
+    let snapshot = Snapshot::from_bytes(content.as_bytes().to_vec())
+        .context("build resource corpus snapshot")?
+        .id();
+    let offsets = phase0_workloads::offsets_u64(content);
+    let start = Position::new(25_000, offsets[24_999]).context("start boundary")?;
+    let end = Position::new(25_001, offsets[25_000]).context("end boundary")?;
+    Ok(EditRequest {
+        file_path: path.to_owned(),
+        snapshot,
+        edits: vec![EditOperation::replace(
+            start,
+            end,
+            "RESOURCE REPLACEMENT 0\n".to_owned(),
+        )],
+    })
+}
+
 fn build_grep_fixture() -> Result<tempfile::TempDir> {
     let directory = tempfile::TempDir::new().context("create grep fixture root")?;
     for file_index in 0..GREP_FILE_COUNT {
@@ -290,35 +357,33 @@ fn measure_allocation<T>(operation: impl FnOnce() -> T) -> (T, AllocationStats) 
 
 fn measure_named_scenario(scenario: &str, optional_path: Option<&Path>) -> Result<Value> {
     match scenario {
-        "full_read_base" => {
-            let content = phase0_workloads::generate_corpus(10_000, 0xA11C_E000);
-            let (output, allocations) =
-                measure_allocation(|| format_hashline_content(&content, None, None, scheme()));
-            Ok(resource_json(scenario, output.len(), allocations))
+        "v2_read_full_10k" => {
+            let directory = tempfile::TempDir::new().context("create v2 read fixture root")?;
+            std::fs::write(
+                directory.path().join("corpus.rs"),
+                phase0_workloads::generate_corpus(10_000, 0xA11C_E000),
+            )
+            .context("write v2 read corpus")?;
+            let workspace = Workspace::new(directory.path().to_path_buf(), false);
+            let runtime = probe_runtime()?;
+            let (total, allocations) =
+                measure_allocation(|| runtime.block_on(read_all_pages(&workspace, "corpus.rs")));
+            Ok(resource_json(scenario, total?, allocations))
         }
-        "full_read_candidate" => {
-            let content = phase0_workloads::generate_corpus(10_000, 0xA11C_E000);
-            let (output, allocations) =
-                measure_allocation(|| phase0_workloads::versioned_render_all(&content));
-            Ok(resource_json(scenario, output.len(), allocations))
-        }
-        "edit_50k_base" => {
+        "v2_edit_single_op_50k" => {
+            let directory = tempfile::TempDir::new().context("create v2 edit fixture root")?;
             let content = phase0_workloads::generate_corpus(50_000, 0xED17_0001);
-            let operations = current_edit_fixture(&content, 1);
-            let (output, allocations) =
-                measure_allocation(|| apply_edits(&content, &operations, scheme()));
-            Ok(resource_json(
-                scenario,
-                output.new_content.context("current edit succeeds")?.len(),
-                allocations,
-            ))
-        }
-        "edit_50k_candidate" => {
-            let content = phase0_workloads::generate_corpus(50_000, 0xED17_0001);
-            let operations = phase0_workloads::replacement_edits(&content, &[25_000]);
-            let (output, allocations) =
-                measure_allocation(|| phase0_workloads::apply_byte_edits(&content, &operations));
-            Ok(resource_json(scenario, output.len(), allocations))
+            std::fs::write(directory.path().join("corpus.rs"), &content)
+                .context("write v2 edit corpus")?;
+            let workspace = Workspace::new(directory.path().to_path_buf(), false);
+            let request = single_replace_request(&content, "corpus.rs")?;
+            let runtime = probe_runtime()?;
+            let (outcome, allocations) =
+                measure_allocation(|| runtime.block_on(run_edit(&workspace, &request)));
+            if outcome.is_error {
+                bail!("wired edit failed: {}", outcome.text);
+            }
+            Ok(resource_json(scenario, outcome.text.len(), allocations))
         }
         "tree_grep_base" => {
             let fixture = build_grep_fixture()?;
