@@ -124,13 +124,7 @@ impl SnapshotCache {
             }
         }
         guard.used = guard.used.saturating_add(bytes);
-        guard.map.insert(
-            path,
-            Entry {
-                snapshot,
-                bytes,
-            },
-        );
+        guard.map.insert(path, Entry { snapshot, bytes });
     }
 
     /// Load via `loader` on miss; cache the result. Concurrent callers for the
@@ -273,24 +267,32 @@ mod tests {
         let cache = SnapshotCache::with_capacity(1024);
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join("stamp.txt");
-        std::fs::write(&path, b"a
-").unwrap();
+        std::fs::write(
+            &path, b"a
+",
+        )
+        .unwrap();
         let snap = Arc::new(Snapshot::load(&path).unwrap());
         cache.insert(path.clone(), Arc::clone(&snap));
         assert!(cache.get(&path, snap.stamp()).is_some());
 
         // External mutation changes stamp; get_or_load must reload, not serve stale.
         std::thread::sleep(std::time::Duration::from_millis(20));
-        std::fs::write(&path, b"b
-").unwrap();
+        std::fs::write(
+            &path, b"b
+",
+        )
+        .unwrap();
         let reloaded = cache
             .get_or_load(&path, || Snapshot::load(&path))
             .expect("reload");
         assert_ne!(reloaded.id(), snap.id());
-        assert_eq!(reloaded.bytes(), b"b
-");
+        assert_eq!(
+            reloaded.bytes(),
+            b"b
+"
+        );
     }
-
 
     #[test]
     fn concurrent_miss_single_flights() {

@@ -578,8 +578,20 @@ mod tests {
             .split_whitespace()
             .find_map(|p| p.strip_prefix("snapshot="))
             .unwrap();
-        let start = text.lines().find(|l| l.starts_with("2@")).unwrap().split('|').next().unwrap();
-        let end = text.lines().find(|l| l.starts_with("3@")).unwrap().split('|').next().unwrap();
+        let start = text
+            .lines()
+            .find(|l| l.starts_with("2@"))
+            .unwrap()
+            .split('|')
+            .next()
+            .unwrap();
+        let end = text
+            .lines()
+            .find(|l| l.starts_with("3@"))
+            .unwrap()
+            .split('|')
+            .next()
+            .unwrap();
         let result = server
             .dispatch(
                 "edit",

@@ -35,9 +35,9 @@ fn path_lock(path: &Path) -> std::sync::MutexGuard<'static, ()> {
     let locks = LOCKS.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
     let key = path.to_path_buf();
     let mut map = locks.lock().expect("path lock map poisoned");
-    let entry = map.entry(key).or_insert_with(|| {
-        Box::leak(Box::new(Mutex::new(())))
-    });
+    let entry = map
+        .entry(key)
+        .or_insert_with(|| Box::leak(Box::new(Mutex::new(()))));
     // Re-lock the per-path mutex without holding the map lock across I/O.
     // Drop map guard by cloning the static reference first.
     let mutex: &'static Mutex<()> = entry;
@@ -99,10 +99,7 @@ pub fn atomic_write(
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    let temp_name = format!(
-        ".hashline-{}.tmp",
-        nanos
-    );
+    let temp_name = format!(".hashline-{}.tmp", nanos);
     let temp_path = parent.join(temp_name);
 
     let write_temp = || -> Result<(), PersistError> {

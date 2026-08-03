@@ -21,9 +21,7 @@ use std::fmt::Write as _;
 use std::ops::Range;
 
 use crate::index::FileIndex;
-use crate::protocol::{
-    PageCursor, Position, SnapshotHeader, render_read_line,
-};
+use crate::protocol::{PageCursor, Position, SnapshotHeader, render_read_line};
 use crate::scheme::Scheme;
 use crate::snapshot::{Snapshot, SnapshotError};
 
@@ -149,7 +147,9 @@ pub(crate) fn render_snapshot_page(
         .saturating_add(limit)
         .saturating_sub(1)
         .min(line_count);
-    let page_lines = end_line_inclusive.saturating_sub(start_line).saturating_add(1);
+    let page_lines = end_line_inclusive
+        .saturating_sub(start_line)
+        .saturating_add(1);
 
     let text = snapshot.text();
     // Capacity: header + per-line "L@B|content\n" with digit upper bounds.
@@ -158,7 +158,9 @@ pub(crate) fn render_snapshot_page(
     let per_line = max_line_digits + 1 + max_byte_digits + 1 + 1; // L @ B | \n
     let mut capacity = header.render().len() + 1;
     capacity = capacity.saturating_add(
-        usize::try_from(page_lines).unwrap_or(usize::MAX).saturating_mul(per_line),
+        usize::try_from(page_lines)
+            .unwrap_or(usize::MAX)
+            .saturating_mul(per_line),
     );
     // Content bytes: span from first line start through last line end.
     if let (Some(first), Some(last_start)) = (
@@ -185,20 +187,22 @@ pub(crate) fn render_snapshot_page(
     out.push_str(&header.render());
 
     for line in start_line..=end_line_inclusive {
-        let start_byte = snapshot
-            .line_start(line)?
-            .ok_or(SnapshotError::Offsets(crate::snapshot::OffsetError::AddressInvariant))?;
+        let start_byte = snapshot.line_start(line)?.ok_or(SnapshotError::Offsets(
+            crate::snapshot::OffsetError::AddressInvariant,
+        ))?;
         let end_byte = if line < line_count {
             snapshot
                 .line_start(line + 1)?
-                .ok_or(SnapshotError::Offsets(crate::snapshot::OffsetError::AddressInvariant))?
+                .ok_or(SnapshotError::Offsets(
+                    crate::snapshot::OffsetError::AddressInvariant,
+                ))?
         } else {
             snapshot.byte_len()
         };
-        let start_u =
-            usize::try_from(start_byte).map_err(|_| SnapshotError::Offsets(crate::snapshot::OffsetError::AddressInvariant))?;
-        let end_u =
-            usize::try_from(end_byte).map_err(|_| SnapshotError::Offsets(crate::snapshot::OffsetError::AddressInvariant))?;
+        let start_u = usize::try_from(start_byte)
+            .map_err(|_| SnapshotError::Offsets(crate::snapshot::OffsetError::AddressInvariant))?;
+        let end_u = usize::try_from(end_byte)
+            .map_err(|_| SnapshotError::Offsets(crate::snapshot::OffsetError::AddressInvariant))?;
         let content = display_line_content(text, start_u, end_u);
         let position = Position::new(line, start_byte)
             .map_err(|_| SnapshotError::Offsets(crate::snapshot::OffsetError::AddressInvariant))?;
@@ -211,7 +215,9 @@ pub(crate) fn render_snapshot_page(
         let next_line = end_line_inclusive + 1;
         let next_byte = snapshot
             .line_start(next_line)?
-            .ok_or(SnapshotError::Offsets(crate::snapshot::OffsetError::AddressInvariant))?;
+            .ok_or(SnapshotError::Offsets(
+                crate::snapshot::OffsetError::AddressInvariant,
+            ))?;
         let next = Position::new(next_line, next_byte)
             .map_err(|_| SnapshotError::Offsets(crate::snapshot::OffsetError::AddressInvariant))?;
         let cursor = PageCursor {

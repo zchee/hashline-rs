@@ -29,8 +29,8 @@ use hashline::config::SchemeConfig;
 use hashline::edit::HashlineOp;
 use hashline::edit::apply::apply_edits;
 use hashline::grep::run_grep;
-use hashline::protocol::GrepRequest;
 use hashline::index::FileIndex;
+use hashline::protocol::GrepRequest;
 use hashline::read::format_hashline_content;
 use hashline::scheme::Scheme;
 use hashline::util::Workspace;
@@ -324,16 +324,14 @@ fn measure_named_scenario(scenario: &str, optional_path: Option<&Path>) -> Resul
             let fixture = build_grep_fixture()?;
             let workspace = Workspace::new(fixture.path().to_path_buf(), false);
             let input = grep_input(GREP_COMMON_TOKEN, None);
-            let (output, allocations) =
-                measure_allocation(|| run_grep(&workspace, &input));
+            let (output, allocations) = measure_allocation(|| run_grep(&workspace, &input));
             Ok(resource_json(scenario, output.text.len(), allocations))
         }
         "real_tree_grep_base" => {
             let root = optional_path.context("real_tree_grep_base requires a repository path")?;
             let workspace = Workspace::new(root.to_path_buf(), false);
             let input = grep_input("pub ", None);
-            let (output, allocations) =
-                measure_allocation(|| run_grep(&workspace, &input));
+            let (output, allocations) = measure_allocation(|| run_grep(&workspace, &input));
             Ok(resource_json(scenario, output.text.len(), allocations))
         }
         _ => bail!("unknown resource scenario: {scenario}"),
@@ -460,7 +458,7 @@ fn profile_scenario(scenario: &str, seconds: u64) -> Result<Value> {
                 GREP_COMMON_TOKEN
             };
             let input = grep_input(pattern, None);
-                        while Instant::now() < deadline {
+            while Instant::now() < deadline {
                 black_box(profile_grep_once(&workspace, &input));
                 iterations += 1;
             }

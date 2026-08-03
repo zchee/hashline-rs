@@ -43,7 +43,6 @@ use types::{HashlineEditError, HashlineEditErrorKind, HashlineEditsApplied};
 // Use the same wording without importing the private const.
 const CONFLICT_MSG: &str = "the file no longer matches the requested snapshot";
 
-
 fn protocol_outcome(error: ProtocolError) -> ToolOutcome {
     let envelope = ErrorResponse::new(error);
     match serde_json::to_string_pretty(&envelope) {
@@ -71,7 +70,10 @@ fn map_persist_error(error: PersistError) -> ToolOutcome {
     match error {
         PersistError::DestinationChanged { path } => protocol_outcome(ProtocolError::new(
             crate::protocol::ErrorCode::SnapshotConflict,
-            format!("destination changed before atomic rename: {}", path.display()),
+            format!(
+                "destination changed before atomic rename: {}",
+                path.display()
+            ),
         )),
         PersistError::Io {
             operation,
@@ -417,18 +419,15 @@ mod tests {
             &EditRequest {
                 file_path: "t.txt".into(),
                 snapshot: SnapshotId::from_u128(0xbad),
-                edits: vec![EditOperation::replace(
-                    pos(1, 0),
-                    pos(2, 6),
-                    "X\n".into(),
-                )],
+                edits: vec![EditOperation::replace(pos(1, 0), pos(2, 6), "X\n".into())],
             },
         )
         .await;
         assert!(outcome.is_error, "{}", outcome.text);
         assert_eq!(std::fs::read(&file).unwrap(), before);
         assert!(
-            outcome.text.contains("snapshot_conflict") || outcome.text.contains("no longer matches"),
+            outcome.text.contains("snapshot_conflict")
+                || outcome.text.contains("no longer matches"),
             "{}",
             outcome.text
         );

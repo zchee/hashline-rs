@@ -36,8 +36,8 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::protocol::{
-    ErrorResponse, GrepLine, GrepLineKind, GrepRequest, GrepSummary, GrepTarget,
-    GrepText, Position, ProtocolError, SnapshotHeader, classify_grep_text,
+    ErrorResponse, GrepLine, GrepLineKind, GrepRequest, GrepSummary, GrepTarget, GrepText,
+    Position, ProtocolError, SnapshotHeader, classify_grep_text,
 };
 use crate::snapshot::Snapshot;
 use crate::util::{ToolOutcome, Workspace};
@@ -430,7 +430,7 @@ fn assemble_output(
 ) -> String {
     let mut out = String::new();
     let mut shown_matches = 0usize;
-        let mut truncated = false;
+    let mut truncated = false;
 
     for hit in hits {
         if shown_matches >= max_matches {
@@ -592,7 +592,6 @@ pub fn run_grep(workspace: &Workspace, input: &GrepRequest) -> ToolOutcome {
     ))
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -624,7 +623,11 @@ mod tests {
         input.path = Some(".".into());
         let outcome = run_grep(&ws(tmp.path()), &input);
         assert!(!outcome.is_error, "{}", outcome.text);
-        assert!(outcome.text.contains("[hashline-v2 snapshot="), "{}", outcome.text);
+        assert!(
+            outcome.text.contains("[hashline-v2 snapshot="),
+            "{}",
+            outcome.text
+        );
         assert!(outcome.text.contains("@"), "{}", outcome.text);
         assert!(outcome.text.contains("target"), "{}", outcome.text);
         assert!(outcome.text.contains("matches="), "{}", outcome.text);

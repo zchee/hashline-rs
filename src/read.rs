@@ -25,6 +25,7 @@ use std::sync::Arc;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
+use crate::cache;
 use crate::index::FileIndex;
 use crate::protocol::{
     ContractError, ErrorCode, ErrorResponse, PageCursor, ProtocolError, ReadRequest,
@@ -32,7 +33,6 @@ use crate::protocol::{
 };
 use crate::render::{render_range, render_snapshot_page};
 use crate::scheme::Scheme;
-use crate::cache;
 use crate::snapshot::{Snapshot, SnapshotError};
 use crate::util::{ToolOutcome, Workspace};
 
@@ -48,7 +48,6 @@ pub const MAX_LINES_READ: usize = crate::protocol::MAX_PAGE_LINES as usize;
 /// construction is panic-free (unlike the old partial FileIndex), so small
 /// files avoid the spawn_blocking hop.
 const BLOCKING_READ_BYTES: usize = 256 * 1024;
-
 
 /// Legacy v1 input retained for transitional tests and benches only.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -107,15 +106,15 @@ fn map_snapshot_error(path: &Path, error: SnapshotError) -> ToolOutcome {
             "Failed to {operation} {}: {source}",
             io_path.display()
         )),
-        SnapshotError::ConcurrentModification { path: changed } => protocol_outcome(
-            ProtocolError::new(
+        SnapshotError::ConcurrentModification { path: changed } => {
+            protocol_outcome(ProtocolError::new(
                 ErrorCode::Io,
                 format!(
                     "file changed during both snapshot read attempts: {}",
                     changed.display()
                 ),
-            ),
-        ),
+            ))
+        }
         other => ToolOutcome::error(format!("Failed to read {}: {other}", path.display())),
     }
 }
@@ -239,7 +238,9 @@ pub async fn run_read_v1(
     scheme: Scheme,
 ) -> ToolOutcome {
     if input.offset == Some(0) {
-        return ToolOutcome::error("offset is 1-based; use offset=1 for the first line.".to_owned());
+        return ToolOutcome::error(
+            "offset is 1-based; use offset=1 for the first line.".to_owned(),
+        );
     }
     if input.limit == Some(0) {
         return ToolOutcome::error("limit must be greater than 0.".to_owned());
