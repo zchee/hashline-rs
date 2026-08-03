@@ -28,6 +28,7 @@ use std::time::Duration;
 
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use hashline::HashlineServer;
+use hashline::cache;
 use hashline::config::{SchemeConfig, SchemeKind};
 use hashline::edit::HashlineOp;
 use hashline::edit::apply::apply_edits;
@@ -40,6 +41,7 @@ use hashline::scheme::{Anchor, Scheme};
 use hashline::snapshot::Snapshot;
 use hashline::util::Workspace;
 use memchr::{memchr_iter, memchr3_iter};
+use rmcp::model::{CallToolResult, ContentBlock};
 
 #[path = "support/phase0_workloads.rs"]
 mod phase0_workloads;
@@ -899,10 +901,81 @@ fn bench_phase0_v2_pairs(c: &mut Criterion) {
     persist.finish();
 }
 
-/// End-to-end `HashlineServer::dispatch` bench: a realistic 300-line file
-/// through the read path, and a single-op edit — answers the plan's
-/// pre-mortem question of whether hot paths are already sub-millisecond at
-/// realistic file sizes.
+/// Byte offset of the 1-based logical `line` start within `content`.
+fn line_start_offset(content: &str, line: u64) -> u64 {
+    if line == 1 {
+        return 0;
+    }
+    let newline_index = usize::try_from(line - 2).expect("bench line fits usize");
+    let offset = memchr_iter(b'\n', content.as_bytes())
+        .nth(newline_index)
+        .expect("bench line within corpus")
+        + 1;
+    u64::try_from(offset).expect("bench offset fits u64")
+}
+
+/// Render the canonical v2 `LINE@BYTE` boundary token for a 1-based line.
+fn v2_boundary(content: &str, line: u64) -> String {
+    format!("{line}@{}", line_start_offset(content, line))
+}
+
+/// Process-seeded v2 snapshot id (32-hex) for the exact bytes of `content`.
+fn snapshot_id_hex(content: &str) -> String {
+    Snapshot::from_bytes(content.as_bytes().to_vec())
+        .expect("bench corpus is valid snapshot text")
+        .id()
+        .to_string()
+}
+
+/// Build v2 edit-tool arguments replacing each 1-based line in `lines`.
+fn v2_replace_args(content: &str, path: &str, lines: &[u64]) -> serde_json::Value {
+    let edits: Vec<serde_json::Value> = lines
+        .iter()
+        .enumerate()
+        .map(|(index, &line)| {
+            serde_json::json!({
+                "op": "replace",
+                "start": v2_boundary(content, line),
+                "end": v2_boundary(content, line + 1),
+                "content": format!("EDITED LINE {index}\n"),
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "file_path": path,
+        "snapshot": snapshot_id_hex(content),
+        "edits": edits,
+    })
+}
+
+/// First text block of a dispatch result, success or error.
+fn tool_text(result: &CallToolResult) -> &str {
+    match result.content.first() {
+        Some(ContentBlock::Text(text)) => &text.text,
+        other => panic!("dispatch returned non-text content: {other:?}"),
+    }
+}
+
+/// Panic unless the dispatch outcome is a tool success; return its text.
+///
+/// Every wired-path bench asserts through this so a silent rejection can
+/// never masquerade as a timing (plan Wave 0, AC26).
+fn assert_dispatch_success(result: &CallToolResult) -> &str {
+    assert_ne!(
+        result.is_error,
+        Some(true),
+        "wired tool call failed: {result:?}"
+    );
+    tool_text(result)
+}
+
+/// End-to-end `HashlineServer::dispatch` bench on a realistic 300-line file:
+/// the read path split into cold (snapshot-cache miss per iteration) and warm
+/// (resident snapshot) states, plus a valid single-op v2 edit. Every body
+/// asserts tool success. Reset-dependent benches use
+/// `BatchSize::PerIteration` because batched setup runs all resets before the
+/// first timed call, which would let later iterations observe the previous
+/// edit and silently measure the conflict path instead.
 fn bench_dispatch(c: &mut Criterion) {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime for dispatch bench");
 
@@ -914,13 +987,6 @@ fn bench_dispatch(c: &mut Criterion) {
     let server = HashlineServer::new(tmp.path().to_path_buf(), SchemeConfig::default())
         .expect("server construction");
 
-    let scheme = SchemeConfig::default()
-        .build_scheme()
-        .expect("build scheme");
-    let index = FileIndex::new(&content);
-    let edit_target = nearest_nonblank(index.lines(), 150);
-    let edit_anchor = anchor_at(&index, scheme, edit_target);
-
     let mut group = c.benchmark_group("dispatch");
     group.sample_size(30);
     group.measurement_time(Duration::from_secs(5));
@@ -930,23 +996,41 @@ fn bench_dispatch(c: &mut Criterion) {
         b.to_async(&rt).iter(|| {
             let args = read_args.clone();
             let server = &server;
-            async move { black_box(server.dispatch("read", args).await) }
+            async move {
+                let result = server.dispatch("read", args).await.expect("read dispatch");
+                black_box(assert_dispatch_success(&result).len())
+            }
         });
     });
 
-    let edit_args = serde_json::json!({
-        "file_path": "sample.rs",
-        "edits": [{"op": "replace", "anchor": edit_anchor, "content": "EDITED LINE"}],
+    group.bench_function("read_300_lines_cold", |b| {
+        b.to_async(&rt).iter_batched(
+            || cache::process_cache().invalidate(&file_path),
+            |()| {
+                let args = read_args.clone();
+                let server = &server;
+                async move {
+                    let result = server.dispatch("read", args).await.expect("read dispatch");
+                    black_box(assert_dispatch_success(&result).len())
+                }
+            },
+            BatchSize::PerIteration,
+        );
     });
+
+    let edit_args = v2_replace_args(&content, "sample.rs", &[150]);
     group.bench_function("edit_single_op_300_lines", |b| {
         b.to_async(&rt).iter_batched(
             || std::fs::write(&file_path, &content).expect("reset dispatch fixture"),
             |()| {
                 let args = edit_args.clone();
                 let server = &server;
-                async move { black_box(server.dispatch("edit", args).await) }
+                async move {
+                    let result = server.dispatch("edit", args).await.expect("edit dispatch");
+                    black_box(assert_dispatch_success(&result).len())
+                }
             },
-            BatchSize::SmallInput,
+            BatchSize::PerIteration,
         );
     });
 
