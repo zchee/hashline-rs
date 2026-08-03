@@ -36,11 +36,12 @@
 //! anchors for an arbitrary line window, with full-file generation being the
 //! degenerate full-range case.
 
-use std::fmt;
-use std::ops::Range;
+use std::{fmt, ops::Range};
 
-use crate::hash::{self, DEFAULT_HASH_LEN, EncodedHash, MAX_HASH_LEN, fold_line_hash};
-use crate::index::FileIndex;
+use crate::{
+    hash::{self, DEFAULT_HASH_LEN, EncodedHash, MAX_HASH_LEN, fold_line_hash},
+    index::FileIndex,
+};
 
 /// Default chunk size for [`Scheme::Chunk`] when constructed with defaults.
 ///
@@ -611,8 +612,10 @@ pub enum ShiftResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::index::split_lines;
-    use crate::testutil::{Xorshift32, corpus};
+    use crate::{
+        index::split_lines,
+        testutil::{Xorshift32, corpus},
+    };
 
     fn sample_lines() -> Vec<&'static str> {
         vec![

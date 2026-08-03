@@ -19,11 +19,15 @@
 //! hit section carries a snapshot header and `LINE@BYTE` positions that edit
 //! can validate. No per-line content hashes or [`FileIndex`] are built.
 
-use std::io;
-use std::ops::Range;
-use std::path::{Path, PathBuf};
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::{
+    io,
+    ops::Range,
+    path::{Path, PathBuf},
+    sync::{
+        Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
 
 use grep_matcher::LineTerminator;
 use grep_regex::{RegexMatcher, RegexMatcherBuilder};
@@ -35,18 +39,19 @@ use ignore::{
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use crate::protocol::{
-    ErrorResponse, GrepLine, GrepLineKind, GrepRequest, GrepSummary, GrepTarget, GrepText,
-    Position, ProtocolError, SnapshotHeader, classify_grep_text,
-};
-use crate::snapshot::Snapshot;
-use crate::util::{ToolOutcome, Workspace};
-
 /// Frozen incompatible-v2 request schema for the snapshot-bearing grep phase.
 ///
 /// The current anchor search engine remains isolated behind HashlineGrepInput
 /// until Phase 5 replaces its renderer; this type is the only v2 wire contract.
 pub use crate::protocol::GrepRequest as HashlineGrepV2Input;
+use crate::{
+    protocol::{
+        ErrorResponse, GrepLine, GrepLineKind, GrepRequest, GrepSummary, GrepTarget, GrepText,
+        Position, ProtocolError, SnapshotHeader, classify_grep_text,
+    },
+    snapshot::Snapshot,
+    util::{ToolOutcome, Workspace},
+};
 
 /// Default cap on reported match lines.
 pub const DEFAULT_MAX_MATCHES: usize = 200;
@@ -595,8 +600,7 @@ pub fn run_grep(workspace: &Workspace, input: &GrepRequest) -> ToolOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::GrepRequest;
-    use crate::util::Workspace;
+    use crate::{protocol::GrepRequest, util::Workspace};
 
     fn ws(root: &std::path::Path) -> Workspace {
         Workspace::new(root.to_path_buf(), false)

@@ -18,10 +18,8 @@ use std::path::PathBuf;
 
 use anyhow::Context as _;
 use clap::Parser;
+use hashline::{config::SchemeConfig, server::HashlineServer};
 use rmcp::ServiceExt as _;
-
-use hashline::config::SchemeConfig;
-use hashline::server::HashlineServer;
 
 /// Standalone MCP server providing hashline file reading, editing, and
 /// searching tools over stdio.

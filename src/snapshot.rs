@@ -18,18 +18,22 @@
 //! 128-bit identity, and counts logical lines without building a line index.
 //! Position metadata is materialized once on first random-access use.
 
-use std::fs::{File, Metadata};
-use std::io::{self, Read};
-use std::mem;
-use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::{
+    fs::{File, Metadata},
+    io::{self, Read},
+    mem,
+    path::{Path, PathBuf},
+    sync::OnceLock,
+};
 
 use memchr::{memchr, memchr_iter};
 use thiserror::Error;
 use xxhash_rust::xxh3::xxh3_128_with_seed;
 
-use crate::protocol::{ContractError, Position, SnapshotId, validate_file_size};
-use crate::util::process_random_seed;
+use crate::{
+    protocol::{ContractError, Position, SnapshotId, validate_file_size},
+    util::process_random_seed,
+};
 
 const READ_BUFFER_BYTES: usize = 64 * 1024;
 const MAX_READ_ATTEMPTS: u8 = 2;
@@ -768,10 +772,7 @@ impl Snapshot {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-    use std::sync::mpsc;
-    use std::thread;
-    use std::time::Duration;
+    use std::{fs, sync::mpsc, thread, time::Duration};
 
     use super::*;
     use crate::protocol::reference_line_starts;

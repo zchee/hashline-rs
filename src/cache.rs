@@ -19,10 +19,12 @@
 //! Concurrent loads of the same path single-flight through one in-flight future
 //! cell. Shard locks are never held across disk I/O.
 
-use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::{
+    collections::HashMap,
+    hash::{Hash, Hasher},
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex, OnceLock},
+};
 
 use crate::snapshot::{FileStamp, Snapshot, SnapshotError};
 
@@ -237,9 +239,9 @@ impl Default for SnapshotCache {
 
 #[cfg(test)]
 mod tests {
+    use std::{sync::Barrier, thread};
+
     use super::*;
-    use std::sync::Barrier;
-    use std::thread;
 
     #[test]
     fn insert_and_get_roundtrip() {

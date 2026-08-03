@@ -35,8 +35,7 @@
 //! slices are materialized: outside them the scan just counts newlines, and the
 //! skipped slices are rebuilt on demand if a caller ever asks for one.
 
-use std::cell::OnceCell;
-use std::ops::Range;
+use std::{cell::OnceCell, ops::Range};
 
 use memchr::memchr_iter;
 

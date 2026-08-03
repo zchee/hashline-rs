@@ -18,23 +18,23 @@
 //! followed by `LINE@BYTE|CONTENT` lines. When more lines remain, a
 //! [`PageCursor`](crate::protocol::PageCursor) footer continues the same snapshot.
 
-use std::ops::Range;
-use std::path::Path;
-use std::sync::Arc;
+use std::{ops::Range, path::Path, sync::Arc};
 
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use crate::cache;
-use crate::index::FileIndex;
-use crate::protocol::{
-    ContractError, ErrorCode, ErrorResponse, PageCursor, ProtocolError, ReadRequest,
-    validate_reference_cursor,
+use crate::{
+    cache,
+    index::FileIndex,
+    protocol::{
+        ContractError, ErrorCode, ErrorResponse, PageCursor, ProtocolError, ReadRequest,
+        validate_reference_cursor,
+    },
+    render::{render_range, render_snapshot_page},
+    scheme::Scheme,
+    snapshot::{Snapshot, SnapshotError},
+    util::{ToolOutcome, Workspace},
 };
-use crate::render::{render_range, render_snapshot_page};
-use crate::scheme::Scheme;
-use crate::snapshot::{Snapshot, SnapshotError};
-use crate::util::{ToolOutcome, Workspace};
 
 /// Frozen incompatible-v2 request schema (production wire type).
 pub type HashlineReadV2Input = ReadRequest;
@@ -275,11 +275,15 @@ pub async fn run_read_v1(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::protocol::{PageCursor, Position, SnapshotId};
-    use crate::util::Workspace;
     use std::io::Write;
+
     use tempfile::tempdir;
+
+    use super::*;
+    use crate::{
+        protocol::{PageCursor, Position, SnapshotId},
+        util::Workspace,
+    };
 
     fn ws(root: &std::path::Path) -> Workspace {
         Workspace::new(root.to_path_buf(), false)

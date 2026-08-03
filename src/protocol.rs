@@ -14,9 +14,11 @@
 //
 #![doc = include_str!("../docs/protocol-v2.md")]
 
-use std::borrow::Cow;
-use std::fmt::{self, Display, Write as _};
-use std::str::FromStr;
+use std::{
+    borrow::Cow,
+    fmt::{self, Display, Write as _},
+    str::FromStr,
+};
 
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};

@@ -16,10 +16,12 @@
 //!
 //! Nothing in this module is linked into the shipping library or binary.
 
-use std::fmt::Write as _;
-use std::fs::OpenOptions;
-use std::io::{self, Write as _};
-use std::path::Path;
+use std::{
+    fmt::Write as _,
+    fs::OpenOptions,
+    io::{self, Write as _},
+    path::Path,
+};
 
 use memchr::memchr_iter;
 

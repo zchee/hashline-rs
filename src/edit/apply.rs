@@ -20,13 +20,18 @@
 
 use std::ops::Range;
 
-use super::range_policy;
-use super::types::{
-    HashlineEditError, HashlineEditErrorKind, HashlineEditOutput, HashlineEditsApplied, HashlineOp,
+use super::{
+    range_policy,
+    types::{
+        HashlineEditError, HashlineEditErrorKind, HashlineEditOutput, HashlineEditsApplied,
+        HashlineOp,
+    },
 };
-use crate::index::{FileIndex, split_lines};
-use crate::render::{CONTENT_SEPARATOR, render_range};
-use crate::scheme::{DEFAULT_SEARCH_RADIUS, ParsedAnchor, Scheme, ShiftResult, ValidationResult};
+use crate::{
+    index::{FileIndex, split_lines},
+    render::{CONTENT_SEPARATOR, render_range},
+    scheme::{DEFAULT_SEARCH_RADIUS, ParsedAnchor, Scheme, ShiftResult, ValidationResult},
+};
 
 const SNIPPET_CONTEXT: usize = 3;
 
@@ -840,8 +845,10 @@ fn build_write_result(new_content: &str, scheme: Scheme) -> HashlineEditOutput {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{SchemeConfig, SchemeKind};
-    use crate::testutil::corpus;
+    use crate::{
+        config::{SchemeConfig, SchemeKind},
+        testutil::corpus,
+    };
 
     fn scheme() -> Scheme {
         SchemeConfig::default().build_scheme().unwrap()

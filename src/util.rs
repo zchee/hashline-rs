@@ -14,11 +14,13 @@
 //
 //! Small shared helpers for the hashline tools.
 
-use std::borrow::Cow;
-use std::collections::hash_map::RandomState;
-use std::hash::{BuildHasher, Hasher};
-use std::path::{Component, Path, PathBuf};
-use std::sync::OnceLock;
+use std::{
+    borrow::Cow,
+    collections::hash_map::RandomState,
+    hash::{BuildHasher, Hasher},
+    path::{Component, Path, PathBuf},
+    sync::OnceLock,
+};
 
 /// Return one unpredictable seed shared by this process.
 ///

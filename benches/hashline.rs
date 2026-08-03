@@ -21,25 +21,27 @@
 //! inline xorshift32 PRNG, no `rand` and no system time) so results are
 //! reproducible across runs and machines.
 
-use std::hint::black_box;
-use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
-use std::time::Duration;
+use std::{
+    hint::black_box,
+    path::{Path, PathBuf},
+    sync::OnceLock,
+    time::Duration,
+};
 
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
-use hashline::HashlineServer;
-use hashline::cache;
-use hashline::config::{SchemeConfig, SchemeKind};
-use hashline::edit::HashlineOp;
-use hashline::edit::apply::apply_edits;
-use hashline::grep::run_grep;
-use hashline::hash::{encode_hash, fnv1a_32, line_hash};
-use hashline::index::{FileIndex, split_lines};
-use hashline::protocol::{EditRequest, GrepRequest, apply_versioned_reference_edits};
-use hashline::read::format_hashline_content;
-use hashline::scheme::{Anchor, Scheme};
-use hashline::snapshot::Snapshot;
-use hashline::util::Workspace;
+use hashline::{
+    HashlineServer, cache,
+    config::{SchemeConfig, SchemeKind},
+    edit::{HashlineOp, apply::apply_edits},
+    grep::run_grep,
+    hash::{encode_hash, fnv1a_32, line_hash},
+    index::{FileIndex, split_lines},
+    protocol::{EditRequest, GrepRequest, apply_versioned_reference_edits},
+    read::format_hashline_content,
+    scheme::{Anchor, Scheme},
+    snapshot::Snapshot,
+    util::Workspace,
+};
 use memchr::{memchr_iter, memchr3_iter};
 use rmcp::model::{CallToolResult, ContentBlock};
 

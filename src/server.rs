@@ -29,25 +29,30 @@
 //!    capability, the first usable `file://` root from `roots/list` is
 //!    adopted, and `notifications/roots/list_changed` re-queries it.
 
-use std::path::PathBuf;
-use std::sync::{Arc, OnceLock, RwLock};
-
-use rmcp::ErrorData as McpError;
-use rmcp::ServerHandler;
-use rmcp::model::{
-    CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Implementation,
-    ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerInfo, Tool,
+use std::{
+    path::PathBuf,
+    sync::{Arc, OnceLock, RwLock},
 };
-use rmcp::service::{NotificationContext, Peer, RequestContext, RoleServer};
+
+use rmcp::{
+    ErrorData as McpError, ServerHandler,
+    model::{
+        CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Implementation,
+        ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerInfo, Tool,
+    },
+    service::{NotificationContext, Peer, RequestContext, RoleServer},
+};
 use serde_json::Value;
 
-use crate::config::{ConfigError, SchemeConfig};
-use crate::edit::run_edit;
-use crate::grep::run_grep;
-use crate::protocol::{EditRequest, GrepRequest, ReadRequest};
-use crate::read::{MAX_LINES_READ, run_read};
-use crate::scheme::Scheme;
-use crate::util::{ToolOutcome, Workspace};
+use crate::{
+    config::{ConfigError, SchemeConfig},
+    edit::run_edit,
+    grep::run_grep,
+    protocol::{EditRequest, GrepRequest, ReadRequest},
+    read::{MAX_LINES_READ, run_read},
+    scheme::Scheme,
+    util::{ToolOutcome, Workspace},
+};
 
 const READ_TEMPLATE: &str = r#"Read a file with versioned positional output for use with edit.
 
@@ -378,9 +383,10 @@ impl ServerHandler for HashlineServer {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
     use crate::config::SchemeKind;
-    use serde_json::json;
 
     fn server(root: &std::path::Path) -> HashlineServer {
         HashlineServer::new(root.to_path_buf(), SchemeConfig::default()).unwrap()

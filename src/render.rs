@@ -17,13 +17,14 @@
 //! Phase 3 production reads use [`render_snapshot_page`]. The v1
 //! [`render_range`] path remains only for edit/grep until those tools migrate.
 
-use std::fmt::Write as _;
-use std::ops::Range;
+use std::{fmt::Write as _, ops::Range};
 
-use crate::index::FileIndex;
-use crate::protocol::{PageCursor, Position, SnapshotHeader, render_read_line};
-use crate::scheme::Scheme;
-use crate::snapshot::{Snapshot, SnapshotError};
+use crate::{
+    index::FileIndex,
+    protocol::{PageCursor, Position, SnapshotHeader, render_read_line},
+    scheme::Scheme,
+    snapshot::{Snapshot, SnapshotError},
+};
 
 /// Separator between a v1 line's anchor and its content.
 pub(crate) const CONTENT_SEPARATOR: char = '\u{2192}';

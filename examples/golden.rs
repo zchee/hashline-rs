@@ -35,13 +35,14 @@
 //! Any optimization that is not meant to change the wire format must keep this
 //! diff empty.
 
-use hashline::config::{SchemeConfig, SchemeKind};
-use hashline::edit::HashlineOp;
-use hashline::edit::apply::apply_edits;
-use hashline::grep::run_grep;
-use hashline::protocol::GrepRequest;
-use hashline::read::format_hashline_content;
-use hashline::util::Workspace;
+use hashline::{
+    config::{SchemeConfig, SchemeKind},
+    edit::{HashlineOp, apply::apply_edits},
+    grep::run_grep,
+    protocol::GrepRequest,
+    read::format_hashline_content,
+    util::Workspace,
+};
 
 struct Xorshift32(u32);
 

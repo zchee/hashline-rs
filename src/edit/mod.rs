@@ -23,21 +23,22 @@ pub mod apply;
 pub mod range_policy;
 pub mod types;
 
-use std::path::Path;
-use std::sync::Arc;
+use std::{path::Path, sync::Arc};
 
+use types::{HashlineEditError, HashlineEditErrorKind, HashlineEditsApplied};
 pub use types::{HashlineEditInput, HashlineEditOutput, HashlineOp};
 
-use crate::cache;
-use crate::persist::{self, PersistError};
-use crate::protocol::{
-    EditRequest, EditSuccess, ErrorResponse, ProtocolError, apply_versioned_reference_edits,
-    reference_context, reference_header,
+use crate::{
+    cache,
+    persist::{self, PersistError},
+    protocol::{
+        EditRequest, EditSuccess, ErrorResponse, ProtocolError, apply_versioned_reference_edits,
+        reference_context, reference_header,
+    },
+    scheme::Scheme,
+    snapshot::{Snapshot, SnapshotError},
+    util::{ToolOutcome, Workspace, decode_utf8},
 };
-use crate::scheme::Scheme;
-use crate::snapshot::{Snapshot, SnapshotError};
-use crate::util::{ToolOutcome, Workspace, decode_utf8};
-use types::{HashlineEditError, HashlineEditErrorKind, HashlineEditsApplied};
 
 // Re-export for apply_versioned tests; message is crate-private in protocol.
 // Use the same wording without importing the private const.
@@ -372,8 +373,10 @@ async fn write_and_render_v1(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::{EditOperation, Position, SnapshotId};
-    use crate::util::Workspace;
+    use crate::{
+        protocol::{EditOperation, Position, SnapshotId},
+        util::Workspace,
+    };
 
     fn ws(root: &Path) -> Workspace {
         Workspace::new(root.to_path_buf(), false)

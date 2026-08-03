@@ -14,30 +14,30 @@
 
 //! One-shot resource, filesystem-cache, and symbolized-profile Phase 0 probes.
 
-use std::alloc::{GlobalAlloc, Layout, System};
-use std::fs::File;
-use std::hint::black_box;
-use std::io::{Read as _, Write as _};
 #[cfg(unix)]
 use std::os::fd::AsRawFd as _;
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::time::{Duration, Instant};
+use std::{
+    alloc::{GlobalAlloc, Layout, System},
+    fs::File,
+    hint::black_box,
+    io::{Read as _, Write as _},
+    path::{Path, PathBuf},
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
+    time::{Duration, Instant},
+};
 
 use anyhow::{Context as _, Result, bail};
-use hashline::config::SchemeConfig;
-use hashline::edit::HashlineOp;
-use hashline::edit::apply::apply_edits;
-use hashline::edit::run_edit;
-use hashline::grep::run_grep;
-use hashline::index::FileIndex;
-use hashline::protocol::{
-    EditOperation, EditRequest, GrepRequest, PageCursor, Position, ReadRequest,
+use hashline::{
+    config::SchemeConfig,
+    edit::{HashlineOp, apply::apply_edits, run_edit},
+    grep::run_grep,
+    index::FileIndex,
+    protocol::{EditOperation, EditRequest, GrepRequest, PageCursor, Position, ReadRequest},
+    read::{format_hashline_content, run_read},
+    scheme::Scheme,
+    snapshot::Snapshot,
+    util::Workspace,
 };
-use hashline::read::{format_hashline_content, run_read};
-use hashline::scheme::Scheme;
-use hashline::snapshot::Snapshot;
-use hashline::util::Workspace;
 use serde_json::{Value, json};
 
 // This binary uses the shared resource subset; the Criterion target uses the
