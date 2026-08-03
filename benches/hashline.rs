@@ -1040,6 +1040,12 @@ fn bench_dispatch(c: &mut Criterion) {
     let content = generate_corpus(300, 0xD159_A7C0);
     let file_path = tmp.path().join("sample.rs");
     std::fs::write(&file_path, &content).expect("write dispatch fixture");
+    // The server canonicalizes its root, so cache keys are canonical paths;
+    // invalidation through the raw tempdir path (/var vs /private/var on
+    // macOS) would silently no-op and time a warm read as "cold".
+    let file_path = file_path
+        .canonicalize()
+        .expect("canonicalize dispatch fixture");
 
     let server = HashlineServer::new(tmp.path().to_path_buf(), SchemeConfig::default())
         .expect("server construction");
@@ -1470,6 +1476,9 @@ fn bench_v2_read(c: &mut Criterion) {
     let content_100k = generate_corpus(100_000, 0xC0FF_EE00);
     let path_100k = tmp.path().join("hundred_k.rs");
     std::fs::write(&path_100k, &content_100k).expect("write 100k fixture");
+    // Canonicalize so per-iteration invalidation hits the same key the
+    // canonicalized workspace root produces (cache keys are canonical paths).
+    let path_100k = path_100k.canonicalize().expect("canonicalize 100k fixture");
     let content_50k = generate_corpus(50_000, 0x50C0_5001);
     std::fs::write(tmp.path().join("fifty_k.rs"), &content_50k).expect("write 50k fixture");
 
