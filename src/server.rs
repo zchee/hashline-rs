@@ -42,78 +42,40 @@ use rmcp::service::{NotificationContext, Peer, RequestContext, RoleServer};
 use serde_json::Value;
 
 use crate::config::{ConfigError, SchemeConfig};
-use crate::edit::{HashlineEditInput, run_edit};
-use crate::grep::{HashlineGrepInput, run_grep};
-use crate::read::{HashlineReadInput, MAX_LINES_READ, run_read};
+use crate::edit::run_edit;
+use crate::grep::run_grep;
+use crate::protocol::{EditRequest, GrepRequest, ReadRequest};
+use crate::read::{MAX_LINES_READ, run_read};
 use crate::scheme::Scheme;
 use crate::util::{ToolOutcome, Workspace};
 
-const READ_TEMPLATE: &str = r#"Read a file with line-anchored output for use with edit.
+const READ_TEMPLATE: &str = r#"Read a file with versioned positional output for use with edit.
 
-Each line is formatted as ANCHOR→CONTENT, for example:
-{example_line1}
-{example_line2}
+Every response starts with a snapshot header:
+[hashline-v2 snapshot=<ID> lines=<N> bytes=<B> path=<JSON_STRING>]
 
-This read format uses `→` between the anchor and content. By contrast,
-grep keeps grep-style separators after the anchor: `:` for
-match lines and `-` for context lines.
-
-The ANCHOR (e.g. "{example_anchor}") is a compact fingerprint of the line's content
-and surrounding context. Pass anchors to edit to make edits —
-they verify the targeted location still matches the snapshot you saw.
-Anchors are valid only for the file state at read time — after any edit,
-use the fresh anchors returned by edit or re-read the file.
+Each following line is LINE@BYTE|CONTENT. Pass the snapshot ID and positions to edit.
+Pagination footer: [hashline-v2 next snapshot=<ID> position=LINE@BYTE]
 
 Usage:
-- The path parameter accepts either a relative path in the workspace or an absolute path
-- By default reads up to {max_lines_read} lines from the beginning
-- Optionally specify offset and limit for large files
-- If you read a file that exists but has empty contents you will receive a warning in place of file contents."#;
+- path is workspace-relative or absolute
+- limit defaults to {max_lines_read} (max {max_lines_read})
+- optional cursor continues a prior page
+"#;
 
-const EDIT_TEMPLATE: &str = r#"Edit a file using anchors from read or grep.
+const EDIT_TEMPLATE: &str = r#"Edit a file using versioned byte-range replace operations.
 
-Operations (use the "op" field):
+{
+  "file_path": "src/lib.rs",
+  "snapshot": "<32-hex from read>",
+  "edits": [
+    { "op": "replace", "start": "21@418", "end": "22@430", "content": "mod render;
+" }
+  ]
+}
 
-  "replace" — Replace one line or a range with new content.
-    { "op": "replace", "anchor": "{example_anchor}", "content": "    let x = 42;" }
-    Range: add "end_anchor" to replace from anchor through end_anchor (INCLUSIVE —
-    both the anchor line and end_anchor line are replaced along with everything
-    between them). If the anchor or end_anchor line contains a closing delimiter
-    like `}` that must be preserved, include it in "content".
-    Delete one line: { "op": "replace", "anchor": "{example_anchor}", "content": "" }
-    Delete a range: { "op": "replace", "anchor": "{example_anchor}", "end_anchor": "...", "content": "" }
-
-  "insert_after" — Insert new lines after the anchored line.
-    { "op": "insert_after", "anchor": "{example_anchor}", "content": "    let y = 1;" }
-    Add a blank line: { "op": "insert_after", "anchor": "{example_anchor}", "content": "" }
-    Multi-line insert: content with newlines adds multiple lines.
-    Beginning of file: use "0:" as anchor.
-    End of file: use "EOF" as anchor.
-    Existing lines below the anchor are preserved — only include new content.
-    Prefer insert_after over replace when adding lines without removing existing ones.
-
-  "write" — Replace entire file content (no anchors needed).
-    { "op": "write", "content": "full file content here" }
-
-Batch edits: pass multiple operations in "edits". They are validated against the
-pre-edit snapshot and applied atomically bottom-up — if any anchor fails
-validation, ALL edits in the batch are rejected (none are applied).
-Overlapping ranges are also rejected.
-
-Range safety:
-- Multi-line edits may return caution warnings, especially for broader rewrites.
-- Larger rewrites are allowed, but use them when you are confident about the target range.
-- For very large rewrites (most of the file), prefer a single "write" op over many replace ops.
-
-Follow-up edits:
-- On success, the tool returns a snippet with fresh anchors around the edited region.
-- On stale-anchor errors, the tool returns fresh anchors around the target line.
-  Use these anchors to immediately retry your edit — do not re-read the file.
-- The anchor is the full "LINE:HASH" or "LINE:HASH:HASH" before the → separator
-  (e.g. "{example_anchor}"). Always include the line number. Do NOT include → or
-  the line content after it.
-- Never fabricate or modify anchors — only use exact anchors as returned by
-  previous tool outputs."#;
+start inclusive, end exclusive. Stale snapshot fails closed with snapshot_conflict.
+"#;
 
 const GREP_TEMPLATE: &str = r#"Search file contents with anchor-annotated results for use with edit.
 
@@ -168,7 +130,8 @@ pub struct HashlineServer {
     root_pinned: bool,
     /// When `true`, tool paths are confined to the workspace root.
     restrict: bool,
-    /// The anchor scheme, built once from `config` at construction.
+    /// Retained until Phase 8 removes scheme CLI; tools no longer consume it.
+    #[allow(dead_code)]
     scheme: Scheme,
     read_description: Arc<str>,
     edit_description: Arc<str>,
@@ -319,9 +282,9 @@ impl HashlineServer {
     pub fn tools(&self) -> &[Tool] {
         self.tools.get_or_init(|| {
             vec![
-                Self::tool::<HashlineReadInput>("read", &self.read_description),
-                Self::tool::<HashlineEditInput>("edit", &self.edit_description),
-                Self::tool::<HashlineGrepInput>("grep", &self.grep_description),
+                Self::tool::<ReadRequest>("read", &self.read_description),
+                Self::tool::<EditRequest>("edit", &self.edit_description),
+                Self::tool::<GrepRequest>("grep", &self.grep_description),
             ]
         })
     }
@@ -332,19 +295,18 @@ impl HashlineServer {
     /// infrastructure failures become protocol errors.
     pub async fn dispatch(&self, name: &str, arguments: Value) -> Result<CallToolResult, McpError> {
         let outcome = match name {
-            "read" => match serde_json::from_value::<HashlineReadInput>(arguments) {
-                Ok(input) => run_read(&self.workspace(), &input, self.scheme).await,
+            "read" => match serde_json::from_value::<ReadRequest>(arguments) {
+                Ok(input) => run_read(&self.workspace(), &input).await,
                 Err(e) => ToolOutcome::error(format!("Invalid arguments for read: {e}")),
             },
-            "edit" => match serde_json::from_value::<HashlineEditInput>(arguments) {
-                Ok(input) => run_edit(&self.workspace(), &input, self.scheme).await,
+            "edit" => match serde_json::from_value::<EditRequest>(arguments) {
+                Ok(input) => run_edit(&self.workspace(), &input).await,
                 Err(e) => ToolOutcome::error(format!("Invalid arguments for edit: {e}")),
             },
-            "grep" => match serde_json::from_value::<HashlineGrepInput>(arguments) {
+            "grep" => match serde_json::from_value::<GrepRequest>(arguments) {
                 Ok(input) => {
                     let workspace = self.workspace();
-                    let scheme = self.scheme;
-                    tokio::task::spawn_blocking(move || run_grep(&workspace, &input, scheme))
+                    tokio::task::spawn_blocking(move || run_grep(&workspace, &input))
                         .await
                         .map_err(|e| {
                             McpError::internal_error(format!("grep task failed: {e}"), None)
@@ -437,13 +399,12 @@ mod tests {
             assert!(!desc.contains("{example_anchor}"), "unrendered: {desc}");
             assert!(!desc.contains("{max_lines_read}"), "unrendered: {desc}");
         }
-        // Default chunk scheme, hash_len 3 → examples look like 22:abc:rst.
         let edit_desc = tools[1].description.as_deref().unwrap();
-        assert!(edit_desc.contains("22:abc:rst"), "{edit_desc}");
+        assert!(edit_desc.contains("snapshot"), "{edit_desc}");
     }
 
     #[test]
-    fn content_only_descriptions_use_short_anchors() {
+    fn content_only_descriptions_remain_v2() {
         let tmp = tempfile::TempDir::new().unwrap();
         let config = SchemeConfig {
             kind: SchemeKind::ContentOnly,
@@ -451,10 +412,8 @@ mod tests {
             ..Default::default()
         };
         let server = HashlineServer::new(tmp.path().to_path_buf(), config).unwrap();
-        let tools = server.tools();
-        let edit_desc = tools[1].description.as_deref().unwrap();
-        assert!(edit_desc.contains("22:ab"), "{edit_desc}");
-        assert!(!edit_desc.contains("22:ab:"), "{edit_desc}");
+        let edit_desc = server.tools()[1].description.as_deref().unwrap();
+        assert!(edit_desc.contains("snapshot"), "{edit_desc}");
     }
 
     #[test]
@@ -467,6 +426,7 @@ mod tests {
         assert!(read_schema["properties"].get("path").is_some());
         let edit_schema = serde_json::to_value(tools[1].input_schema.as_ref()).unwrap();
         assert!(edit_schema["properties"].get("file_path").is_some());
+        assert!(edit_schema["properties"].get("snapshot").is_some());
         assert!(edit_schema["properties"].get("edits").is_some());
     }
 
@@ -578,47 +538,65 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_read_write_edit_roundtrip() {
+        use crate::snapshot::Snapshot;
+
         let tmp = tempfile::TempDir::new().unwrap();
         let server = server(tmp.path());
-
-        // Create a file through the edit tool's write op.
+        let empty = Snapshot::from_bytes(Vec::new()).unwrap();
         let result = server
             .dispatch(
                 "edit",
                 json!({
                     "file_path": "demo.txt",
-                    "edits": [{"op": "write", "content": "one\ntwo\nthree\n"}]
+                    "snapshot": empty.id().to_string(),
+                    "edits": [{
+                        "op": "replace",
+                        "start": "1@0",
+                        "end": "2@0",
+                        "content": "one\ntwo\nthree\n"
+                    }]
                 }),
             )
             .await
             .unwrap();
-        assert_ne!(result.is_error, Some(true));
+        assert_ne!(result.is_error, Some(true), "{result:?}");
 
-        // Read it back and harvest the anchor for line 2.
         let result = server
-            .dispatch("read", json!({"path": "demo.txt"}))
+            .dispatch("read", json!({"path": "demo.txt", "limit": 2000}))
             .await
             .unwrap();
         assert_ne!(result.is_error, Some(true));
         let text = match &result.content[0] {
             ContentBlock::Text(t) => t.text.clone(),
-            other => panic!("expected text content, got {other:?}"),
+            other => panic!("expected text, {other:?}"),
         };
-        let line2 = text.lines().find(|l| l.starts_with("2:")).unwrap();
-        let anchor = line2.split('→').next().unwrap();
-
-        // Edit line 2 via the harvested anchor.
+        assert!(text.contains("[hashline-v2 snapshot="), "{text}");
+        let snapshot = text
+            .lines()
+            .next()
+            .unwrap()
+            .split_whitespace()
+            .find_map(|p| p.strip_prefix("snapshot="))
+            .unwrap();
+        let start = text.lines().find(|l| l.starts_with("2@")).unwrap().split('|').next().unwrap();
+        let end = text.lines().find(|l| l.starts_with("3@")).unwrap().split('|').next().unwrap();
         let result = server
             .dispatch(
                 "edit",
                 json!({
                     "file_path": "demo.txt",
-                    "edits": [{"op": "replace", "anchor": anchor, "content": "TWO"}]
+                    "snapshot": snapshot,
+                    "edits": [{
+                        "op": "replace",
+                        "start": start,
+                        "end": end,
+                        "content": "TWO\n"
+                    }]
                 }),
             )
             .await
             .unwrap();
-        assert_ne!(result.is_error, Some(true));
+        assert_ne!(result.is_error, Some(true), "{result:?}");
         assert_eq!(
             std::fs::read_to_string(tmp.path().join("demo.txt")).unwrap(),
             "one\nTWO\nthree\n"
@@ -639,7 +617,8 @@ mod tests {
                 "edit",
                 json!({
                     "file_path": secret.to_str().unwrap(),
-                    "edits": [{"op": "write", "content": "clobbered"}]
+                    "snapshot": "00000000000000000000000000000000",
+                    "edits": [{"op": "replace", "start": "1@0", "end": "2@0", "content": "x"}]
                 }),
             ),
             (

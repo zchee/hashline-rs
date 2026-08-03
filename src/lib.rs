@@ -24,12 +24,14 @@
 //! baseline. Phase-specific v2 request aliases keep the frozen wire schemas
 //! executable without advertising later engine work before its exit gate.
 
+pub mod cache;
 pub mod config;
 pub mod edit;
 pub mod grep;
 pub mod hash;
 pub mod index;
 pub mod protocol;
+pub mod persist;
 pub mod read;
 mod render;
 pub mod scheme;

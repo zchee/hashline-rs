@@ -172,6 +172,11 @@ impl FileStamp {
         self.len == 0
     }
 
+    /// Capture a stamp from filesystem metadata (used by atomic persist).
+    pub(crate) fn from_metadata_public(metadata: &Metadata) -> io::Result<Self> {
+        Self::from_metadata(metadata)
+    }
+
     #[cfg(unix)]
     fn from_metadata(metadata: &Metadata) -> io::Result<Self> {
         use std::os::unix::fs::MetadataExt as _;

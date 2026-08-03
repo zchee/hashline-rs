@@ -12,26 +12,241 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-//! `edit` — anchor-based file editing.
+//! `edit` — versioned byte-range file editing (hashline protocol v2).
 //!
-//! Supports `replace`, `insert_after`, and `write` operations. Anchors are
-//! validated against the pre-edit file snapshot; edits are applied bottom-up
-//! to avoid line-shift interference. Returns fresh-anchor snippets on success
-//! and structured error context on validation failures.
+//! Production path: [`run_edit`] takes an [`EditRequest`], validates the
+//! named snapshot, applies half-open ranges against exact bytes, and persists
+//! atomically. The transitional v1 anchor engine remains in [`apply`] for
+//! benches until Phase 8 deletes it.
 
 pub mod apply;
 pub mod range_policy;
 pub mod types;
 
 use std::path::Path;
+use std::sync::Arc;
 
 pub use types::{HashlineEditInput, HashlineEditOutput, HashlineOp};
 
+use crate::cache;
+use crate::persist::{self, PersistError};
+use crate::protocol::{
+    EditRequest, EditSuccess, ErrorResponse, ProtocolError, apply_versioned_reference_edits,
+    reference_context, reference_header,
+};
 use crate::scheme::Scheme;
+use crate::snapshot::{Snapshot, SnapshotError};
 use crate::util::{ToolOutcome, Workspace, decode_utf8};
 use types::{HashlineEditError, HashlineEditErrorKind, HashlineEditsApplied};
 
-/// Render a successful edit application as model-facing text.
+// Re-export for apply_versioned tests; message is crate-private in protocol.
+// Use the same wording without importing the private const.
+const CONFLICT_MSG: &str = "the file no longer matches the requested snapshot";
+
+
+fn protocol_outcome(error: ProtocolError) -> ToolOutcome {
+    let envelope = ErrorResponse::new(error);
+    match serde_json::to_string_pretty(&envelope) {
+        Ok(text) => ToolOutcome::error(text),
+        Err(_) => ToolOutcome::error(envelope.error.message),
+    }
+}
+
+fn map_snapshot_error(path: &Path, error: SnapshotError) -> ToolOutcome {
+    match error {
+        SnapshotError::Contract(contract) => protocol_outcome(ProtocolError::from(contract)),
+        SnapshotError::Io {
+            operation,
+            path: io_path,
+            source,
+        } => ToolOutcome::error(format!(
+            "Failed to {operation} {}: {source}",
+            io_path.display()
+        )),
+        other => ToolOutcome::error(format!("Failed to edit {}: {other}", path.display())),
+    }
+}
+
+fn map_persist_error(error: PersistError) -> ToolOutcome {
+    match error {
+        PersistError::DestinationChanged { path } => protocol_outcome(ProtocolError::new(
+            crate::protocol::ErrorCode::SnapshotConflict,
+            format!("destination changed before atomic rename: {}", path.display()),
+        )),
+        PersistError::Io {
+            operation,
+            path,
+            source,
+        } => ToolOutcome::error(format!(
+            "Failed to {operation} {}: {source}",
+            path.display()
+        )),
+    }
+}
+
+/// Execute a v2 `edit` request against the local filesystem.
+pub async fn run_edit(workspace: &Workspace, input: &EditRequest) -> ToolOutcome {
+    if let Err(error) = input.validate() {
+        return protocol_outcome(ProtocolError::from(error));
+    }
+
+    let path = match workspace.resolve(&input.file_path) {
+        Ok(path) => path,
+        Err(reason) => return ToolOutcome::error(reason),
+    };
+
+    let load_path = path.clone();
+    let snapshot = match tokio::task::spawn_blocking(move || Snapshot::load(&load_path)).await {
+        Ok(Ok(snapshot)) => snapshot,
+        Ok(Err(SnapshotError::Io {
+            source,
+            path: _missing,
+            ..
+        })) if source.kind() == std::io::ErrorKind::NotFound => {
+            // New-file path: only a whole-file replace from 1@0..2@0 on empty is
+            // modeled by applying against empty bytes when snapshot is the empty ID.
+            // Require the request snapshot to match an empty snapshot identity.
+            return create_new_file(&path, input).await;
+        }
+        Ok(Err(error)) => return map_snapshot_error(&path, error),
+        Err(join) => {
+            return ToolOutcome::error(format!("Failed to edit {}: {join}", path.display()));
+        }
+    };
+
+    let previous = snapshot.id();
+    let stamp = snapshot.stamp();
+    let display = input.file_path.clone();
+    let request = input.clone();
+    let source = snapshot.bytes().to_vec();
+
+    let applied = match tokio::task::spawn_blocking(move || {
+        apply_versioned_reference_edits(&source, previous, &request)
+    })
+    .await
+    {
+        Ok(Ok(bytes)) => bytes,
+        Ok(Err(error)) => return protocol_outcome(error),
+        Err(join) => {
+            return ToolOutcome::error(format!("Failed to edit {}: {join}", path.display()));
+        }
+    };
+
+    let path_for_write = path.clone();
+    let bytes_for_write = applied.clone();
+    let write_result = tokio::task::spawn_blocking(move || {
+        persist::atomic_write(&path_for_write, &bytes_for_write, stamp)
+    })
+    .await;
+    match write_result {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => return map_persist_error(error),
+        Err(join) => {
+            return ToolOutcome::error(format!("Failed to persist {}: {join}", path.display()));
+        }
+    }
+
+    let new_snapshot = match Snapshot::from_bytes(applied) {
+        Ok(snap) => snap,
+        Err(error) => return map_snapshot_error(&path, error),
+    };
+    let success = EditSuccess::new(
+        display,
+        previous,
+        new_snapshot.id(),
+        input.edits.len(),
+        new_snapshot.byte_len(),
+        new_snapshot.line_count(),
+    );
+    // Prefer a stamped resident entry so subsequent reads hit on FileStamp.
+    if let Ok(stamped) = Snapshot::load(&path) {
+        cache::process_cache().insert(path.clone(), Arc::new(stamped));
+    } else {
+        cache::process_cache().insert(path.clone(), Arc::new(new_snapshot));
+    }
+    match serde_json::to_string_pretty(&success) {
+        Ok(text) => ToolOutcome::success(text),
+        Err(e) => ToolOutcome::error(format!("Failed to encode edit success: {e}")),
+    }
+}
+
+async fn create_new_file(path: &Path, input: &EditRequest) -> ToolOutcome {
+    // Empty pre-image: compute empty snapshot id and require request match.
+    let empty = match Snapshot::from_bytes(Vec::new()) {
+        Ok(s) => s,
+        Err(error) => return map_snapshot_error(path, error),
+    };
+    if input.snapshot != empty.id() {
+        let header = reference_header(input.file_path.clone(), empty.id(), b"")
+            .map_err(|e| protocol_outcome(ProtocolError::from(e)));
+        let header = match header {
+            Ok(h) => h,
+            Err(outcome) => return outcome,
+        };
+        let context = reference_context(b"", 1).unwrap_or_default();
+        return protocol_outcome(
+            ProtocolError::snapshot_conflict(
+                input.snapshot,
+                header,
+                context,
+                CONFLICT_MSG.to_owned(),
+            )
+            .unwrap_or_else(ProtocolError::from),
+        );
+    }
+
+    let applied = match apply_versioned_reference_edits(b"", empty.id(), input) {
+        Ok(bytes) => bytes,
+        Err(error) => return protocol_outcome(error),
+    };
+
+    if let Some(parent) = path.parent()
+        && let Err(e) = tokio::fs::create_dir_all(parent).await
+    {
+        return ToolOutcome::error(format!(
+            "Failed to create parent directory for {}: {e}",
+            path.display()
+        ));
+    }
+
+    let path_for_write = path.to_path_buf();
+    let bytes_for_write = applied.clone();
+    match tokio::task::spawn_blocking(move || {
+        persist::atomic_write(&path_for_write, &bytes_for_write, None)
+    })
+    .await
+    {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => return map_persist_error(error),
+        Err(join) => {
+            return ToolOutcome::error(format!("Failed to persist {}: {join}", path.display()));
+        }
+    }
+
+    let new_snapshot = match Snapshot::from_bytes(applied) {
+        Ok(snap) => snap,
+        Err(error) => return map_snapshot_error(path, error),
+    };
+    let success = EditSuccess::new(
+        input.file_path.clone(),
+        empty.id(),
+        new_snapshot.id(),
+        input.edits.len(),
+        new_snapshot.byte_len(),
+        new_snapshot.line_count(),
+    );
+    if let Ok(stamped) = Snapshot::load(path) {
+        cache::process_cache().insert(path.to_path_buf(), Arc::new(stamped));
+    } else {
+        cache::process_cache().insert(path.to_path_buf(), Arc::new(new_snapshot));
+    }
+    match serde_json::to_string_pretty(&success) {
+        Ok(text) => ToolOutcome::success(text),
+        Err(e) => ToolOutcome::error(format!("Failed to encode edit success: {e}")),
+    }
+}
+
+/// Render a successful v1 edit application as model-facing text.
 fn render_applied(applied: &HashlineEditsApplied, path: &Path) -> String {
     let mut text = format!(
         "Applied {} edit(s) to {} (scheme {}).",
@@ -50,7 +265,7 @@ fn render_applied(applied: &HashlineEditsApplied, path: &Path) -> String {
     text
 }
 
-/// Render an edit failure as model-facing text.
+/// Render a v1 edit failure as model-facing text.
 fn render_error(err: &HashlineEditError) -> String {
     let mut msg = err.message.clone();
     if let Some(ref ctx) = err.context {
@@ -71,8 +286,8 @@ fn render_error(err: &HashlineEditError) -> String {
     msg
 }
 
-/// Execute an `edit` request against the local filesystem.
-pub async fn run_edit(
+/// Legacy v1 runner kept for transitional benches.
+pub async fn run_edit_v1(
     workspace: &Workspace,
     input: &HashlineEditInput,
     scheme: Scheme,
@@ -95,8 +310,6 @@ pub async fn run_edit(
     };
 
     let Some(old_bytes) = old_bytes else {
-        // A sole `write` op may create a new file; anything else needs an
-        // existing file to anchor against.
         if input.edits.len() == 1
             && let HashlineOp::Write { .. } = input.edits[0]
         {
@@ -108,7 +321,7 @@ pub async fn run_edit(
                     path.display()
                 ));
             }
-            return write_and_render(Vec::new(), input, &path, scheme).await;
+            return write_and_render_v1(Vec::new(), input, &path, scheme).await;
         }
         return ToolOutcome::error(format!(
             "File not found: {}. Only a single \"write\" op can create a new file.",
@@ -116,28 +329,15 @@ pub async fn run_edit(
         ));
     };
 
-    write_and_render(old_bytes, input, &path, scheme).await
+    write_and_render_v1(old_bytes, input, &path, scheme).await
 }
 
-/// Apply the edits to the pre-edit file bytes, persist on success, and render
-/// text.
-///
-/// All anchors are validated before any edit is applied, so the file is either
-/// fully updated or left untouched.
-async fn write_and_render(
+async fn write_and_render_v1(
     old_bytes: Vec<u8>,
     input: &HashlineEditInput,
     path: &Path,
     scheme: Scheme,
 ) -> ToolOutcome {
-    // Splicing and anchoring a large file would stall the reactor, so the
-    // CPU-bound step always runs on a blocking thread — every size, not just
-    // the large ones. The partial index panics on a programmer error, and a
-    // panic on a blocking thread surfaces as a failed join (this one tool call
-    // errors) instead of unwinding through the reactor and taking the session
-    // with it. The task needs `'static` data, so the (request-sized) op list is
-    // cloned; the file bytes move, and the decoded text borrows from them on
-    // that thread.
     let edits = input.edits.clone();
     let task = tokio::task::spawn_blocking(move || {
         apply::apply_edits(&decode_utf8(&old_bytes), &edits, scheme)
@@ -170,174 +370,91 @@ async fn write_and_render(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::SchemeConfig;
-    use crate::index::FileIndex;
-
-    fn scheme() -> Scheme {
-        SchemeConfig::default().build_scheme().unwrap()
-    }
-
-    fn anchor_for(content: &str, line: usize, scheme: Scheme) -> String {
-        let index = FileIndex::new(content);
-        scheme
-            .anchor_at(&index, line - 1)
-            .expect("line within file")
-            .render()
-    }
+    use crate::protocol::{EditOperation, Position, SnapshotId};
+    use crate::util::Workspace;
 
     fn ws(root: &Path) -> Workspace {
         Workspace::new(root.to_path_buf(), false)
     }
 
-    #[tokio::test]
-    async fn edit_existing_file_roundtrip() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let file = tmp.path().join("code.rs");
-        let content = "fn main() {\n    let x = 1;\n}\n";
-        std::fs::write(&file, content).unwrap();
+    fn pos(line: u64, byte: u64) -> Position {
+        Position::new(line, byte).unwrap()
+    }
 
-        let s = scheme();
-        let input = HashlineEditInput {
-            file_path: "code.rs".to_owned(),
-            edits: vec![HashlineOp::Replace {
-                anchor: anchor_for(content, 2, s),
-                end_anchor: None,
-                content: "    let x = 42;".to_owned(),
-            }],
-        };
-        let outcome = run_edit(&ws(tmp.path()), &input, s).await;
+    #[tokio::test]
+    async fn v2_edit_applies_and_persists() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let file = tmp.path().join("t.txt");
+        std::fs::write(&file, b"alpha\nbeta\n").unwrap();
+        let snap = Snapshot::load(&file).unwrap();
+        let outcome = run_edit(
+            &ws(tmp.path()),
+            &EditRequest {
+                file_path: "t.txt".into(),
+                snapshot: snap.id(),
+                edits: vec![EditOperation::replace(
+                    pos(2, 6),
+                    pos(3, 11),
+                    "BETA\n".into(),
+                )],
+            },
+        )
+        .await;
         assert!(!outcome.is_error, "{}", outcome.text);
-        assert!(outcome.text.contains("Applied 1 edit(s)"));
-        assert!(outcome.text.contains("fresh anchors"));
-        assert_eq!(
-            std::fs::read_to_string(&file).unwrap(),
-            "fn main() {\n    let x = 42;\n}\n"
-        );
+        assert_eq!(std::fs::read(&file).unwrap(), b"alpha\nBETA\n");
+        assert!(outcome.text.contains("\"protocol\""));
+        assert!(outcome.text.contains("previous_snapshot"));
     }
 
     #[tokio::test]
-    async fn write_op_creates_new_file_with_parents() {
+    async fn v2_stale_snapshot_applies_zero_edits() {
         let tmp = tempfile::TempDir::new().unwrap();
-        let s = scheme();
-        let input = HashlineEditInput {
-            file_path: "nested/dir/new.txt".to_owned(),
-            edits: vec![HashlineOp::Write {
-                content: "created\n".to_owned(),
-            }],
-        };
-        let outcome = run_edit(&ws(tmp.path()), &input, s).await;
-        assert!(!outcome.is_error, "{}", outcome.text);
-        assert_eq!(
-            std::fs::read_to_string(tmp.path().join("nested/dir/new.txt")).unwrap(),
-            "created\n"
-        );
-    }
-
-    #[tokio::test]
-    async fn non_write_on_missing_file_fails() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let s = scheme();
-        let input = HashlineEditInput {
-            file_path: "missing.txt".to_owned(),
-            edits: vec![HashlineOp::Replace {
-                anchor: "1:abc:rst".to_owned(),
-                end_anchor: None,
-                content: "x".to_owned(),
-            }],
-        };
-        let outcome = run_edit(&ws(tmp.path()), &input, s).await;
-        assert!(outcome.is_error);
-        assert!(outcome.text.contains("File not found"));
-    }
-
-    #[tokio::test]
-    async fn empty_edits_rejected() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let s = scheme();
-        let input = HashlineEditInput {
-            file_path: "any.txt".to_owned(),
-            edits: vec![],
-        };
-        let outcome = run_edit(&ws(tmp.path()), &input, s).await;
-        assert!(outcome.is_error);
-        assert!(outcome.text.contains("No edit operations"));
-    }
-
-    #[tokio::test]
-    async fn stale_anchor_leaves_file_untouched() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let file = tmp.path().join("f.txt");
-        let original = "alpha\nbeta\n";
-        std::fs::write(&file, original).unwrap();
-
-        let s = scheme();
-        let input = HashlineEditInput {
-            file_path: "f.txt".to_owned(),
-            edits: vec![HashlineOp::Replace {
-                anchor: "1:zzz:zzz".to_owned(),
-                end_anchor: None,
-                content: "nope".to_owned(),
-            }],
-        };
-        let outcome = run_edit(&ws(tmp.path()), &input, s).await;
-        assert!(outcome.is_error);
-        assert!(outcome.text.contains("retry your edit"));
-        assert_eq!(std::fs::read_to_string(&file).unwrap(), original);
-    }
-
-    #[tokio::test]
-    async fn large_file_edit_applies_on_the_blocking_thread() {
-        // Every edit runs on a blocking thread; this is the size at which that
-        // matters, so it pins that a whole-file splice survives the round trip.
-        let tmp = tempfile::TempDir::new().unwrap();
-        let file = tmp.path().join("big.rs");
-        let content: String = (0..30_000)
-            .map(|i| format!("let value_{i} = {i};\n"))
-            .collect();
-        std::fs::write(&file, &content).unwrap();
-
-        let s = scheme();
-        let input = HashlineEditInput {
-            file_path: "big.rs".to_owned(),
-            edits: vec![HashlineOp::Replace {
-                anchor: anchor_for(&content, 20_000, s),
-                end_anchor: None,
-                content: "let value_19999 = EDITED;".to_owned(),
-            }],
-        };
-        let outcome = run_edit(&ws(tmp.path()), &input, s).await;
-        assert!(!outcome.is_error, "{}", outcome.text);
-
-        let written = std::fs::read_to_string(&file).unwrap();
-        let lines: Vec<&str> = written.lines().collect();
-        assert_eq!(lines[19_999], "let value_19999 = EDITED;");
-        assert_eq!(lines[19_998], "let value_19998 = 19998;");
-        assert_eq!(lines.len(), 30_000);
-    }
-
-    #[tokio::test]
-    async fn invalid_utf8_falls_back_to_lossy_decoding() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let file = tmp.path().join("bad.txt");
-        // A lone 0xFF byte is not valid UTF-8; decoding must not fail the call.
-        std::fs::write(&file, b"alpha\n\xffbeta\n").unwrap();
-
-        let lossy = String::from_utf8_lossy(b"alpha\n\xffbeta\n").into_owned();
-        let s = scheme();
-        let input = HashlineEditInput {
-            file_path: "bad.txt".to_owned(),
-            edits: vec![HashlineOp::Replace {
-                anchor: anchor_for(&lossy, 1, s),
-                end_anchor: None,
-                content: "ALPHA".to_owned(),
-            }],
-        };
-        let outcome = run_edit(&ws(tmp.path()), &input, s).await;
-        assert!(!outcome.is_error, "{}", outcome.text);
+        let file = tmp.path().join("t.txt");
+        std::fs::write(&file, b"alpha\nbeta\n").unwrap();
+        let before = std::fs::read(&file).unwrap();
+        let outcome = run_edit(
+            &ws(tmp.path()),
+            &EditRequest {
+                file_path: "t.txt".into(),
+                snapshot: SnapshotId::from_u128(0xbad),
+                edits: vec![EditOperation::replace(
+                    pos(1, 0),
+                    pos(2, 6),
+                    "X\n".into(),
+                )],
+            },
+        )
+        .await;
+        assert!(outcome.is_error, "{}", outcome.text);
+        assert_eq!(std::fs::read(&file).unwrap(), before);
         assert!(
-            std::fs::read_to_string(&file)
-                .unwrap()
-                .starts_with("ALPHA\n")
+            outcome.text.contains("snapshot_conflict") || outcome.text.contains("no longer matches"),
+            "{}",
+            outcome.text
+        );
+    }
+
+    #[tokio::test]
+    async fn v2_create_empty_file_via_whole_replace() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let empty = Snapshot::from_bytes(Vec::new()).unwrap();
+        let outcome = run_edit(
+            &ws(tmp.path()),
+            &EditRequest {
+                file_path: "new.txt".into(),
+                snapshot: empty.id(),
+                edits: vec![EditOperation::replace(
+                    pos(1, 0),
+                    pos(2, 0),
+                    "created\n".into(),
+                )],
+            },
+        )
+        .await;
+        assert!(!outcome.is_error, "{}", outcome.text);
+        assert_eq!(
+            std::fs::read(tmp.path().join("new.txt")).unwrap(),
+            b"created\n"
         );
     }
 }

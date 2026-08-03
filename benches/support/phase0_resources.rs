@@ -28,7 +28,8 @@ use anyhow::{Context as _, Result, bail};
 use hashline::config::SchemeConfig;
 use hashline::edit::HashlineOp;
 use hashline::edit::apply::apply_edits;
-use hashline::grep::{HashlineGrepInput, run_grep};
+use hashline::grep::run_grep;
+use hashline::protocol::GrepRequest;
 use hashline::index::FileIndex;
 use hashline::read::format_hashline_content;
 use hashline::scheme::Scheme;
@@ -236,16 +237,16 @@ fn current_edit_fixture(content: &str, count: usize) -> Vec<HashlineOp> {
         .collect()
 }
 
-fn grep_input(pattern: &str, path: Option<String>) -> HashlineGrepInput {
-    HashlineGrepInput {
+fn grep_input(pattern: &str, path: Option<String>) -> GrepRequest {
+    GrepRequest {
         pattern: pattern.to_owned(),
         path,
         glob: Some("*.rs".to_owned()),
-        ignore_case: None,
+        ignore_case: false,
         after_context: None,
         before_context: None,
         context: None,
-        max_matches: Some(200),
+        max_matches: 200,
     }
 }
 
@@ -324,7 +325,7 @@ fn measure_named_scenario(scenario: &str, optional_path: Option<&Path>) -> Resul
             let workspace = Workspace::new(fixture.path().to_path_buf(), false);
             let input = grep_input(GREP_COMMON_TOKEN, None);
             let (output, allocations) =
-                measure_allocation(|| run_grep(&workspace, &input, scheme()));
+                measure_allocation(|| run_grep(&workspace, &input));
             Ok(resource_json(scenario, output.text.len(), allocations))
         }
         "real_tree_grep_base" => {
@@ -332,7 +333,7 @@ fn measure_named_scenario(scenario: &str, optional_path: Option<&Path>) -> Resul
             let workspace = Workspace::new(root.to_path_buf(), false);
             let input = grep_input("pub ", None);
             let (output, allocations) =
-                measure_allocation(|| run_grep(&workspace, &input, scheme()));
+                measure_allocation(|| run_grep(&workspace, &input));
             Ok(resource_json(scenario, output.text.len(), allocations))
         }
         _ => bail!("unknown resource scenario: {scenario}"),
@@ -425,8 +426,8 @@ fn profile_edit_once(content: &str, operations: &[HashlineOp]) -> usize {
 }
 
 #[inline(never)]
-fn profile_grep_once(workspace: &Workspace, input: &HashlineGrepInput, scheme: Scheme) -> usize {
-    run_grep(workspace, input, scheme).text.len()
+fn profile_grep_once(workspace: &Workspace, input: &GrepRequest) -> usize {
+    run_grep(workspace, input).text.len()
 }
 
 fn profile_scenario(scenario: &str, seconds: u64) -> Result<Value> {
@@ -459,9 +460,8 @@ fn profile_scenario(scenario: &str, seconds: u64) -> Result<Value> {
                 GREP_COMMON_TOKEN
             };
             let input = grep_input(pattern, None);
-            let selected_scheme = scheme();
-            while Instant::now() < deadline {
-                black_box(profile_grep_once(&workspace, &input, selected_scheme));
+                        while Instant::now() < deadline {
+                black_box(profile_grep_once(&workspace, &input));
                 iterations += 1;
             }
         }

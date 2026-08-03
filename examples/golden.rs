@@ -38,7 +38,8 @@
 use hashline::config::{SchemeConfig, SchemeKind};
 use hashline::edit::HashlineOp;
 use hashline::edit::apply::apply_edits;
-use hashline::grep::{HashlineGrepInput, run_grep};
+use hashline::grep::run_grep;
+use hashline::protocol::GrepRequest;
 use hashline::read::format_hashline_content;
 use hashline::util::Workspace;
 
@@ -288,21 +289,21 @@ fn main() {
             ("rare", "rare_marker_here", None),
             ("common", "value", None),
             ("anchored", "^fn ", None),
-            ("ctx", "duplicated", Some(2usize)),
+            ("ctx", "duplicated", Some(2u16)),
             ("nomatch", "zzz_no_such_token", None),
             ("dollar", ";$", None),
         ] {
-            let input = HashlineGrepInput {
+            let input = GrepRequest {
                 pattern: pattern.to_owned(),
                 path: None,
                 glob: None,
-                ignore_case: None,
+                ignore_case: false,
                 after_context: None,
                 before_context: None,
                 context,
-                max_matches: Some(40),
+                max_matches: 40,
             };
-            let outcome = run_grep(&ws, &input, scheme);
+            let outcome = run_grep(&ws, &input);
             println!("-- grep {label} is_error={}", outcome.is_error);
             println!("{}", outcome.text);
         }

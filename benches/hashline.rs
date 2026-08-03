@@ -31,7 +31,8 @@ use hashline::HashlineServer;
 use hashline::config::{SchemeConfig, SchemeKind};
 use hashline::edit::HashlineOp;
 use hashline::edit::apply::apply_edits;
-use hashline::grep::{HashlineGrepInput, run_grep};
+use hashline::grep::run_grep;
+use hashline::protocol::GrepRequest;
 use hashline::hash::{encode_hash, fnv1a_32, line_hash};
 use hashline::index::{FileIndex, split_lines};
 use hashline::read::format_hashline_content;
@@ -265,17 +266,17 @@ fn grep_fixture_root() -> &'static Path {
     root.as_path()
 }
 
-/// Build a `HashlineGrepInput` searching for `pattern` with default options.
-fn grep_input(pattern: &str) -> HashlineGrepInput {
-    HashlineGrepInput {
+/// Build a `GrepRequest` searching for `pattern` with default options.
+fn grep_input(pattern: &str) -> GrepRequest {
+    GrepRequest {
         pattern: pattern.to_owned(),
         path: None,
         glob: None,
-        ignore_case: None,
+        ignore_case: false,
         after_context: None,
         before_context: None,
         context: None,
-        max_matches: None,
+        max_matches: 200,
     }
 }
 
@@ -284,10 +285,6 @@ fn grep_input(pattern: &str) -> HashlineGrepInput {
 fn bench_grep(c: &mut Criterion) {
     let root = grep_fixture_root();
     let ws = Workspace::new(root.to_path_buf(), false);
-    let scheme = SchemeConfig::default()
-        .build_scheme()
-        .expect("build scheme");
-
     let mut group = c.benchmark_group("grep");
     group.sample_size(20);
     group.measurement_time(Duration::from_secs(6));
@@ -298,7 +295,7 @@ fn bench_grep(c: &mut Criterion) {
         ("anchored_regex", "^fn "),
     ] {
         group.bench_function(label, |b| {
-            b.iter(|| black_box(run_grep(&ws, &grep_input(pattern), scheme)));
+            b.iter(|| black_box(run_grep(&ws, &grep_input(pattern))));
         });
     }
     group.finish();
@@ -342,10 +339,6 @@ fn grep_large_fixture_root() -> &'static Path {
 fn bench_grep_large_file(c: &mut Criterion) {
     let root = grep_large_fixture_root();
     let ws = Workspace::new(root.to_path_buf(), false);
-    let scheme = SchemeConfig::default()
-        .build_scheme()
-        .expect("build scheme");
-
     let mut group = c.benchmark_group("grep_large_file");
     group.sample_size(30);
     group.measurement_time(Duration::from_secs(6));
@@ -358,7 +351,7 @@ fn bench_grep_large_file(c: &mut Criterion) {
         let mut input = grep_input(pattern);
         input.path = Some(GREP_LARGE_FILE.to_owned());
         group.bench_function(label, |b| {
-            b.iter(|| black_box(run_grep(&ws, &input, scheme)));
+            b.iter(|| black_box(run_grep(&ws, &input)));
         });
     }
     group.finish();
