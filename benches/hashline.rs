@@ -35,7 +35,7 @@ use hashline::edit::apply::apply_edits;
 use hashline::grep::run_grep;
 use hashline::hash::{encode_hash, fnv1a_32, line_hash};
 use hashline::index::{FileIndex, split_lines};
-use hashline::protocol::GrepRequest;
+use hashline::protocol::{EditRequest, GrepRequest, apply_versioned_reference_edits};
 use hashline::read::format_hashline_content;
 use hashline::scheme::{Anchor, Scheme};
 use hashline::snapshot::Snapshot;
@@ -296,8 +296,23 @@ fn bench_grep(c: &mut Criterion) {
         ("common_literal", GREP_COMMON_TOKEN),
         ("anchored_regex", "^fn "),
     ] {
+        let probe = run_grep(&ws, &grep_input(pattern));
+        assert!(
+            !probe.is_error,
+            "wired tree grep must succeed: {}",
+            probe.text
+        );
+        assert!(
+            probe.text.contains("matches="),
+            "v2 summary missing: {}",
+            probe.text
+        );
         group.bench_function(label, |b| {
-            b.iter(|| black_box(run_grep(&ws, &grep_input(pattern))));
+            b.iter(|| {
+                let outcome = run_grep(&ws, &grep_input(pattern));
+                assert!(!outcome.is_error, "wired tree grep must succeed");
+                black_box(outcome.text.len())
+            });
         });
     }
     group.finish();
@@ -352,8 +367,23 @@ fn bench_grep_large_file(c: &mut Criterion) {
     ] {
         let mut input = grep_input(pattern);
         input.path = Some(GREP_LARGE_FILE.to_owned());
+        let probe = run_grep(&ws, &input);
+        assert!(
+            !probe.is_error,
+            "wired large-file grep must succeed: {}",
+            probe.text
+        );
+        assert!(
+            probe.text.contains("matches="),
+            "v2 summary missing: {}",
+            probe.text
+        );
         group.bench_function(label, |b| {
-            b.iter(|| black_box(run_grep(&ws, &input)));
+            b.iter(|| {
+                let outcome = run_grep(&ws, &input);
+                assert!(!outcome.is_error, "wired large-file grep must succeed");
+                black_box(outcome.text.len())
+            });
         });
     }
     group.finish();
@@ -969,6 +999,33 @@ fn assert_dispatch_success(result: &CallToolResult) -> &str {
     tool_text(result)
 }
 
+/// Parse a non-terminal read page footer into (snapshot, position) tokens.
+fn parse_cursor_footer(text: &str) -> Option<(String, String)> {
+    let tail = &text[text.rfind('\n').map_or(0, |index| index + 1)..];
+    let rest = tail.strip_prefix("[hashline-v2 next snapshot=")?;
+    let (snapshot, rest) = rest.split_once(' ')?;
+    let position = rest.strip_prefix("position=")?.strip_suffix(']')?;
+    Some((snapshot.to_owned(), position.to_owned()))
+}
+
+/// Count rendered grep match lines (`LINE@BYTE:` grammar; context uses `-`).
+fn count_grep_match_lines(text: &str) -> usize {
+    text.lines()
+        .filter(|line| {
+            let Some((position, _)) = line.split_once(':') else {
+                return false;
+            };
+            let Some((line_part, byte_part)) = position.split_once('@') else {
+                return false;
+            };
+            !line_part.is_empty()
+                && !byte_part.is_empty()
+                && line_part.bytes().all(|byte| byte.is_ascii_digit())
+                && byte_part.bytes().all(|byte| byte.is_ascii_digit())
+        })
+        .count()
+}
+
 /// End-to-end `HashlineServer::dispatch` bench on a realistic 300-line file:
 /// the read path split into cold (snapshot-cache miss per iteration) and warm
 /// (resident snapshot) states, plus a valid single-op v2 edit. Every body
@@ -1395,6 +1452,323 @@ fn bench_phase2_offsets(c: &mut Criterion) {
     cold.finish();
 }
 
+/// Wave 0 wired-path read benches through `HashlineServer::dispatch`: full
+/// pagination of a 10k-line file (warm), the 2k window of a 100k-line file in
+/// explicit cold and warm snapshot-cache states, and page 2 of a 50k-line
+/// file via the cursor returned by page 1 — the pagination-cost bench the
+/// tree previously lacked. Cold state is forced by evicting the fixture from
+/// the process snapshot cache before every timed iteration.
+fn bench_v2_read(c: &mut Criterion) {
+    let rt = tokio::runtime::Runtime::new().expect("tokio runtime for v2 read bench");
+
+    let tmp = tempfile::TempDir::new().expect("tempdir for v2 read bench");
+    let server = HashlineServer::new(tmp.path().to_path_buf(), SchemeConfig::default())
+        .expect("server construction");
+
+    let content_10k = generate_corpus(10_000, 0x0A11_C0DE);
+    std::fs::write(tmp.path().join("ten_k.rs"), &content_10k).expect("write 10k fixture");
+    let content_100k = generate_corpus(100_000, 0xC0FF_EE00);
+    let path_100k = tmp.path().join("hundred_k.rs");
+    std::fs::write(&path_100k, &content_100k).expect("write 100k fixture");
+    let content_50k = generate_corpus(50_000, 0x50C0_5001);
+    std::fs::write(tmp.path().join("fifty_k.rs"), &content_50k).expect("write 50k fixture");
+
+    let mut group = c.benchmark_group("v2_read");
+    group.sample_size(20);
+    group.measurement_time(Duration::from_secs(5));
+
+    // Walk the pagination chain once so the timed loop replays five
+    // precomputed requests against a warm snapshot cache.
+    let full_10k_pages = rt.block_on(async {
+        let mut pages = Vec::new();
+        let mut args = serde_json::json!({"path": "ten_k.rs"});
+        loop {
+            pages.push(args.clone());
+            let result = server.dispatch("read", args).await.expect("read dispatch");
+            match parse_cursor_footer(assert_dispatch_success(&result)) {
+                Some((snapshot, position)) => {
+                    args = serde_json::json!({
+                        "path": "ten_k.rs",
+                        "cursor": {"snapshot": snapshot, "next": position},
+                    });
+                }
+                None => break,
+            }
+        }
+        pages
+    });
+    // A terminated file has one trailing empty logical line, so 10k physical
+    // lines are 10,001 v2 logical lines -> six pages, not five.
+    let logical_lines = memchr_iter(b'\n', content_10k.as_bytes()).count() as u64 + 1;
+    let expected_pages = logical_lines.div_ceil(2_000);
+    assert_eq!(
+        full_10k_pages.len() as u64,
+        expected_pages,
+        "pagination covers every logical line exactly once"
+    );
+
+    group.bench_function("full_10k", |b| {
+        b.to_async(&rt).iter(|| {
+            let pages = full_10k_pages.clone();
+            let server = &server;
+            async move {
+                let mut total = 0usize;
+                for args in pages {
+                    let result = server.dispatch("read", args).await.expect("read dispatch");
+                    total += assert_dispatch_success(&result).len();
+                }
+                black_box(total)
+            }
+        });
+    });
+
+    let window_args = serde_json::json!({"path": "hundred_k.rs", "limit": 2_000});
+    rt.block_on(async {
+        let result = server
+            .dispatch("read", window_args.clone())
+            .await
+            .expect("read dispatch");
+        let text = assert_dispatch_success(&result);
+        assert!(text.starts_with("[hashline-v2 snapshot="), "{text}");
+    });
+
+    group.bench_function("window_2k_of_100k_warm", |b| {
+        b.to_async(&rt).iter(|| {
+            let args = window_args.clone();
+            let server = &server;
+            async move {
+                let result = server.dispatch("read", args).await.expect("read dispatch");
+                black_box(assert_dispatch_success(&result).len())
+            }
+        });
+    });
+
+    group.bench_function("window_2k_of_100k_cold", |b| {
+        b.to_async(&rt).iter_batched(
+            || cache::process_cache().invalidate(&path_100k),
+            |()| {
+                let args = window_args.clone();
+                let server = &server;
+                async move {
+                    let result = server.dispatch("read", args).await.expect("read dispatch");
+                    black_box(assert_dispatch_success(&result).len())
+                }
+            },
+            BatchSize::PerIteration,
+        );
+    });
+
+    let cursor_args = rt.block_on(async {
+        let result = server
+            .dispatch(
+                "read",
+                serde_json::json!({"path": "fifty_k.rs", "limit": 2_000}),
+            )
+            .await
+            .expect("read dispatch");
+        let (snapshot, position) = parse_cursor_footer(assert_dispatch_success(&result))
+            .expect("50k first page returns a continuation cursor");
+        serde_json::json!({
+            "path": "fifty_k.rs",
+            "limit": 2_000,
+            "cursor": {"snapshot": snapshot, "next": position},
+        })
+    });
+
+    group.bench_function("cursor_page_50k", |b| {
+        b.to_async(&rt).iter(|| {
+            let args = cursor_args.clone();
+            let server = &server;
+            async move {
+                let result = server.dispatch("read", args).await.expect("read dispatch");
+                black_box(assert_dispatch_success(&result).len())
+            }
+        });
+    });
+
+    group.finish();
+}
+
+/// Wave 0 wired-path edit benches on a 50k-line file. CPU-apply variants call
+/// `apply_versioned_reference_edits` — the exact function `run_edit`
+/// dispatches to at HEAD — and the e2e variants dispatch real edits with a
+/// per-iteration file reset. The `_full` suffix records that HEAD always
+/// fsyncs temp file and parent directory (durability=full); Wave 2 adds the
+/// durability=rename variants beside them.
+fn bench_v2_edit(c: &mut Criterion) {
+    let rt = tokio::runtime::Runtime::new().expect("tokio runtime for v2 edit bench");
+
+    let tmp = tempfile::TempDir::new().expect("tempdir for v2 edit bench");
+    let server = HashlineServer::new(tmp.path().to_path_buf(), SchemeConfig::default())
+        .expect("server construction");
+
+    let content = generate_corpus(50_000, 0xED17_0002);
+    let file_path = tmp.path().join("editable.rs");
+    std::fs::write(&file_path, &content).expect("write editable fixture");
+
+    let single_args = v2_replace_args(&content, "editable.rs", &[25_000]);
+    let batch_lines: Vec<u64> = (1..=8).map(|op| op * 6_000).collect();
+    let batch_args = v2_replace_args(&content, "editable.rs", &batch_lines);
+
+    let single_request: EditRequest =
+        serde_json::from_value(single_args.clone()).expect("single edit request deserializes");
+    let batch_request: EditRequest =
+        serde_json::from_value(batch_args.clone()).expect("batch edit request deserializes");
+    let current = Snapshot::from_bytes(content.as_bytes().to_vec())
+        .expect("editable snapshot")
+        .id();
+
+    let mut group = c.benchmark_group("v2_edit");
+    group.sample_size(20);
+    group.measurement_time(Duration::from_secs(5));
+
+    group.bench_function("single_op_50k_apply", |b| {
+        b.iter(|| {
+            let applied = apply_versioned_reference_edits(
+                black_box(content.as_bytes()),
+                current,
+                &single_request,
+            )
+            .expect("wired single-op apply succeeds");
+            black_box(applied.len())
+        });
+    });
+
+    group.bench_function("batch_8ops_50k_apply", |b| {
+        b.iter(|| {
+            let applied = apply_versioned_reference_edits(
+                black_box(content.as_bytes()),
+                current,
+                &batch_request,
+            )
+            .expect("wired batch apply succeeds");
+            black_box(applied.len())
+        });
+    });
+
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(6));
+
+    group.bench_function("single_op_50k_e2e_full", |b| {
+        b.to_async(&rt).iter_batched(
+            || std::fs::write(&file_path, &content).expect("reset editable fixture"),
+            |()| {
+                let args = single_args.clone();
+                let server = &server;
+                async move {
+                    let result = server.dispatch("edit", args).await.expect("edit dispatch");
+                    black_box(assert_dispatch_success(&result).len())
+                }
+            },
+            BatchSize::PerIteration,
+        );
+    });
+
+    group.bench_function("batch_8ops_50k_e2e_full", |b| {
+        b.to_async(&rt).iter_batched(
+            || std::fs::write(&file_path, &content).expect("reset editable fixture"),
+            |()| {
+                let args = batch_args.clone();
+                let server = &server;
+                async move {
+                    let result = server.dispatch("edit", args).await.expect("edit dispatch");
+                    black_box(assert_dispatch_success(&result).len())
+                }
+            },
+            BatchSize::PerIteration,
+        );
+    });
+
+    group.sample_size(20);
+    group.warm_up_time(Duration::from_secs(2));
+    group.measurement_time(Duration::from_secs(5));
+
+    // Version-conflict path: a stale snapshot id must produce the structured
+    // conflict and leave the file untouched, so no per-iteration reset.
+    std::fs::write(&file_path, &content).expect("reset editable fixture");
+    let mut stale_source = content.clone();
+    stale_source.push_str("stale marker\n");
+    let stale_args = v2_replace_args(&stale_source, "editable.rs", &[25_000]);
+    group.bench_function("conflict_50k", |b| {
+        b.to_async(&rt).iter(|| {
+            let args = stale_args.clone();
+            let server = &server;
+            async move {
+                let result = server.dispatch("edit", args).await.expect("edit dispatch");
+                assert_eq!(result.is_error, Some(true), "stale snapshot must conflict");
+                let text = tool_text(&result);
+                assert!(
+                    text.contains("snapshot_conflict"),
+                    "structured conflict expected: {text}"
+                );
+                black_box(text.len())
+            }
+        });
+    });
+
+    group.finish();
+}
+
+/// Wave 0 wired-path grep bench: a dense single file where every line
+/// matches, capped at the protocol maximum. Setup asserts the AC8/AC24
+/// contract once (exactly `max_matches` rendered match lines plus the
+/// truncated summary); every timed iteration re-asserts the summary suffix.
+fn bench_v2_grep(c: &mut Criterion) {
+    let rt = tokio::runtime::Runtime::new().expect("tokio runtime for v2 grep bench");
+
+    let tmp = tempfile::TempDir::new().expect("tempdir for v2 grep bench");
+    let server = HashlineServer::new(tmp.path().to_path_buf(), SchemeConfig::default())
+        .expect("server construction");
+
+    let dense: String = (0..10_000)
+        .map(|line| format!("let needle_hit_{line} = {line};\n"))
+        .collect();
+    std::fs::write(tmp.path().join("dense.rs"), &dense).expect("write dense fixture");
+
+    let args = serde_json::json!({"pattern": "needle_hit", "path": "dense.rs", "max_matches": 200});
+    // HEAD truth (plan §1.2): the match budget stops only between files, so a
+    // single dense file renders every match and reports matches=10000
+    // truncated=false. Wave 3 tightens this bench to assert exactly
+    // max_matches rendered lines (AC8/AC24); until then setup pins the wired
+    // response to itself so any drift fails closed, and the baseline document
+    // records the violation.
+    let expected_summary = rt.block_on(async {
+        let result = server
+            .dispatch("grep", args.clone())
+            .await
+            .expect("grep dispatch");
+        let text = assert_dispatch_success(&result);
+        let rendered = count_grep_match_lines(text);
+        let summary = &text[text.rfind('\n').map_or(0, |index| index + 1)..];
+        assert!(
+            summary.starts_with(&format!("[hashline-v2 matches={rendered} ")),
+            "summary counter must equal rendered match lines: rendered={rendered} {summary}"
+        );
+        summary.to_owned()
+    });
+
+    let mut group = c.benchmark_group("v2_grep");
+    group.sample_size(20);
+    group.measurement_time(Duration::from_secs(5));
+
+    group.bench_function("dense_file_capped", |b| {
+        b.to_async(&rt).iter(|| {
+            let args = args.clone();
+            let server = &server;
+            let expected = &expected_summary;
+            async move {
+                let result = server.dispatch("grep", args).await.expect("grep dispatch");
+                let text = assert_dispatch_success(&result);
+                assert!(text.ends_with(expected.as_str()), "summary mismatch");
+                black_box(text.len())
+            }
+        });
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_line_hash,
@@ -1410,5 +1784,8 @@ criterion_group!(
     bench_phase2_version_matrix,
     bench_phase2_offsets,
     bench_dispatch,
+    bench_v2_read,
+    bench_v2_edit,
+    bench_v2_grep,
 );
 criterion_main!(benches);
