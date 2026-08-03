@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-//! `edit` — versioned byte-range file editing (hashline protocol v2).
+//! `edit` — versioned byte-range file editing for the hashline protocol.
 //!
 //! Production path: [`run_edit`] takes an [`EditRequest`], validates the
 //! named snapshot, applies half-open ranges against exact bytes, and persists
-//! atomically. The transitional v1 anchor engine remains in [`apply`] for
+//! atomically. The transitional legacy anchor engine remains in [`apply`] for
 //! benches until Phase 8 deletes it.
 
 pub mod apply;
@@ -87,7 +87,7 @@ fn map_persist_error(error: PersistError) -> ToolOutcome {
     }
 }
 
-/// Execute a v2 `edit` request against the local filesystem.
+/// Execute an `edit` request against the local filesystem.
 pub async fn run_edit(workspace: &Workspace, input: &EditRequest) -> ToolOutcome {
     if let Err(error) = input.validate() {
         return protocol_outcome(ProtocolError::from(error));
@@ -387,7 +387,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn v2_edit_applies_and_persists() {
+    async fn edit_applies_and_persists() {
         let tmp = tempfile::TempDir::new().unwrap();
         let file = tmp.path().join("t.txt");
         std::fs::write(&file, b"alpha\nbeta\n").unwrap();
@@ -412,7 +412,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn v2_stale_snapshot_applies_zero_edits() {
+    async fn stale_snapshot_applies_zero_edits() {
         let tmp = tempfile::TempDir::new().unwrap();
         let file = tmp.path().join("t.txt");
         std::fs::write(&file, b"alpha\nbeta\n").unwrap();
@@ -437,7 +437,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn v2_create_empty_file_via_whole_replace() {
+    async fn create_empty_file_via_whole_replace() {
         let tmp = tempfile::TempDir::new().unwrap();
         let empty = Snapshot::from_bytes(Vec::new()).unwrap();
         let outcome = run_edit(

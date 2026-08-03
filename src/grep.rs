@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-//! `grep` — versioned positional content search (hashline protocol v2).
+//! `grep` — versioned positional content search for the hashline protocol.
 //!
 //! The `ignore` crate walks the tree and ripgrep's engine searches each file as
 //! a single haystack. Matching files are converted into [`Snapshot`]s so each
@@ -39,11 +39,6 @@ use ignore::{
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-/// Frozen incompatible-v2 request schema for the snapshot-bearing grep phase.
-///
-/// The current anchor search engine remains isolated behind HashlineGrepInput
-/// until Phase 5 replaces its renderer; this type is the only v2 wire contract.
-pub use crate::protocol::GrepRequest as HashlineGrepV2Input;
 use crate::{
     protocol::{
         ErrorResponse, GrepLine, GrepLineKind, GrepRequest, GrepSummary, GrepTarget, GrepText,
@@ -473,7 +468,7 @@ fn protocol_outcome(error: ProtocolError) -> ToolOutcome {
     }
 }
 
-/// Execute a v2 `grep` request against the local filesystem.
+/// Execute a `grep` request against the local filesystem.
 ///
 /// Blocking — call via `spawn_blocking` from async contexts.
 pub fn run_grep(workspace: &Workspace, input: &GrepRequest) -> ToolOutcome {
@@ -628,7 +623,7 @@ mod tests {
         let outcome = run_grep(&ws(tmp.path()), &input);
         assert!(!outcome.is_error, "{}", outcome.text);
         assert!(
-            outcome.text.contains("[hashline-v2 snapshot="),
+            outcome.text.contains("[hashline snapshot="),
             "{}",
             outcome.text
         );

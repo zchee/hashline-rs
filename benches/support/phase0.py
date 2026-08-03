@@ -1,4 +1,4 @@
-"""Capture and evaluate reproducible incompatible-v2 Phase 0 evidence."""
+"""Capture and evaluate reproducible incompatible-redesign Phase 0 evidence."""
 
 from __future__ import annotations
 
@@ -42,8 +42,8 @@ PROFILE_SYMBOLS = {
     "common_grep": GREP_PROFILE_SYMBOLS,
 }
 RESOURCE_SCENARIOS = (
-    "v2_read_full_10k",
-    "v2_edit_single_op_50k",
+    "wired_read_full_10k",
+    "wired_edit_single_op_50k",
     "tree_grep_base",
 )
 QUALITY_COMMANDS = (

@@ -34,7 +34,7 @@ pub(crate) fn process_random_seed() -> u64 {
     *PROCESS_RANDOM_SEED.get_or_init(|| {
         let state = RandomState::new();
         let mut hasher = state.build_hasher();
-        hasher.write(b"hashline-v2-snapshot-version");
+        hasher.write(b"hashline-snapshot-version");
         hasher.finish()
     })
 }

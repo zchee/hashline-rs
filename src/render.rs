@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-//! Wire rendering for v2 positional lines and the transitional v1 anchor format.
+//! Wire rendering for positional lines and the transitional legacy anchor format.
 //!
-//! Phase 3 production reads use [`render_snapshot_page`]. The v1
+//! Phase 3 production reads use [`render_snapshot_page`]. The legacy
 //! [`render_range`] path remains only for edit/grep until those tools migrate.
 
 use std::{fmt::Write as _, ops::Range};
@@ -26,7 +26,7 @@ use crate::{
     snapshot::{Snapshot, SnapshotError},
 };
 
-/// Separator between a v1 line's anchor and its content.
+/// Separator between a legacy line's anchor and its content.
 pub(crate) const CONTENT_SEPARATOR: char = '\u{2192}';
 
 /// Number of decimal digits needed for `value`, at least 1.
@@ -34,7 +34,7 @@ fn decimal_digits(value: usize) -> usize {
     value.checked_ilog10().unwrap_or(0) as usize + 1
 }
 
-/// Bytes of anchor and separator overhead to reserve per rendered v1 line.
+/// Bytes of anchor and separator overhead to reserve per rendered legacy line.
 pub(crate) fn per_line_overhead(scheme: Scheme, last_line: usize) -> usize {
     let hash_len = scheme.hash_len();
     let context = if scheme.has_context() {
@@ -47,7 +47,7 @@ pub(crate) fn per_line_overhead(scheme: Scheme, last_line: usize) -> usize {
 }
 
 /// Render the 0-based half-open line range `range` of `index` as
-/// newline-separated v1 `ANCHOR→CONTENT` lines, appending to `out`.
+/// newline-separated legacy `ANCHOR→CONTENT` lines, appending to `out`.
 ///
 /// Kept for edit/grep until Phase 4/5 migrate them off [`FileIndex`].
 pub(crate) fn render_range(
@@ -101,7 +101,7 @@ fn u64_digits(value: u64) -> usize {
     }
 }
 
-/// Render one v2 read page: header, `LINE@BYTE|CONTENT` lines, optional cursor footer.
+/// Render one read page: header, `LINE@BYTE|CONTENT` lines, optional cursor footer.
 ///
 /// Lines are 1-based inclusive from `start_line` for at most `limit` logical lines.
 /// When more lines remain after the page, a [`PageCursor`] footer is appended.
@@ -256,10 +256,10 @@ mod tests {
     fn snapshot_page_empty_file() {
         let snap = Snapshot::from_bytes(Vec::new()).expect("empty");
         let page = render_snapshot_page(&snap, "empty.txt", 1, 2000).expect("render");
-        assert!(page.starts_with("[hashline-v2 snapshot="));
+        assert!(page.starts_with("[hashline snapshot="));
         assert!(page.contains("lines=1 bytes=0 path=\"empty.txt\""));
         assert!(page.contains("\n1@0|"));
-        assert!(!page.contains("[hashline-v2 next"));
+        assert!(!page.contains("[hashline next"));
         let _ = SnapshotId::from_u128(0); // keep import warm for clarity
     }
 
@@ -270,7 +270,7 @@ mod tests {
         let page = render_snapshot_page(&snap, "t.rs", 1, 2).expect("render");
         assert!(page.contains("\n1@0|line1"));
         assert!(page.contains("\n2@"));
-        assert!(page.contains("[hashline-v2 next snapshot="));
+        assert!(page.contains("[hashline next snapshot="));
         assert!(page.contains("position=3@"));
     }
 
@@ -290,7 +290,7 @@ mod tests {
 
         fn bodies(page: &str) -> Vec<&str> {
             page.lines()
-                .filter(|line| !line.starts_with("[hashline-v2"))
+                .filter(|line| !line.starts_with("[hashline"))
                 .collect()
         }
         let mut combined = bodies(&p1);

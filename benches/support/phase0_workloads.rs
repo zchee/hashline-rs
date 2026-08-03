@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Shared deterministic workloads and incompatible-v2 lower-bound prototypes.
+//! Shared deterministic workloads and incompatible-redesign lower-bound prototypes.
 //!
 //! Nothing in this module is linked into the shipping library or binary.
 
@@ -235,7 +235,7 @@ fn append_positioned_line(
     output.push('\n');
 }
 
-/// Render one v2-style section with one version header and positional line references.
+/// Render one protocol-style section with one version header and positional line references.
 pub fn render_positions(content: &str, version: u128, start_line: usize, count: usize) -> String {
     let total_lines = logical_line_count(content);
     let selection = sparse_select(content, start_line, count);
@@ -272,7 +272,7 @@ pub fn versioned_render_all(content: &str) -> String {
     render_all_positions(content, version)
 }
 
-/// One exact byte-range replacement used by the v2 splice prototype.
+/// One exact byte-range replacement used by the splice prototype.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ByteEdit {
     /// Inclusive byte start.

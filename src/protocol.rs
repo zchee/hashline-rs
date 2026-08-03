@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-#![doc = include_str!("../docs/protocol-v2.md")]
+#![doc = include_str!("../docs/protocol.md")]
 
 use std::{
     borrow::Cow,
@@ -24,8 +24,8 @@ use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use thiserror::Error;
 
-/// Stable protocol tag serialized in structured v2 responses.
-pub const PROTOCOL_V2: &str = "hashline/v2";
+/// Stable protocol tag serialized in structured responses.
+pub const PROTOCOL: &str = "hashline";
 
 /// Number of lowercase hexadecimal characters in a snapshot ID.
 pub const SNAPSHOT_ID_HEX_LEN: usize = 32;
@@ -42,7 +42,7 @@ pub const MAX_CONTEXT_LINES: u16 = 2_000;
 /// Maximum edit operations in one atomic request.
 pub const MAX_EDIT_OPERATIONS: usize = 1_024;
 
-/// Maximum file size accepted by the v2 protocol.
+/// Maximum file size accepted by the protocol.
 pub const MAX_FILE_BYTES: u64 = i64::MAX as u64;
 
 /// Maximum number of fresh lines returned with a snapshot conflict.
@@ -52,9 +52,8 @@ const SNAPSHOT_CONFLICT_MESSAGE: &str = "the file no longer matches the requeste
 
 /// Frozen semantic rules covered by the Phase 1 exit gate.
 pub const SEMANTIC_RULE_IDS: [&str; 22] = [
-    "V2-R001", "V2-R002", "V2-R003", "V2-R004", "V2-R005", "V2-R006", "V2-R007", "V2-R008",
-    "V2-R009", "V2-R010", "V2-R011", "V2-R012", "V2-R013", "V2-R014", "V2-R015", "V2-R016",
-    "V2-R017", "V2-R018", "V2-R019", "V2-R020", "V2-R021", "V2-R022",
+    "R001", "R002", "R003", "R004", "R005", "R006", "R007", "R008", "R009", "R010", "R011", "R012",
+    "R013", "R014", "R015", "R016", "R017", "R018", "R019", "R020", "R021", "R022",
 ];
 
 const SNAPSHOT_ID_PATTERN: &str = "^[0-9a-f]{32}$";
@@ -323,13 +322,13 @@ impl JsonSchema for Position {
     }
 }
 
-/// The single protocol tag accepted and emitted by v2 structured content.
+/// The single protocol tag accepted and emitted by structured content.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum ProtocolTag {
-    /// Hashline protocol v2.
+    /// The hashline protocol.
     #[default]
-    #[serde(rename = "hashline/v2")]
-    V2,
+    #[serde(rename = "hashline")]
+    Hashline,
 }
 
 /// Metadata preceding one read or grep file section.
@@ -379,7 +378,7 @@ impl SnapshotHeader {
         let path = serde_json::to_string(&self.path)
             .expect("serializing a Rust String as JSON cannot fail");
         format!(
-            "[hashline-v2 snapshot={} lines={} bytes={} path={path}]",
+            "[hashline snapshot={} lines={} bytes={} path={path}]",
             self.snapshot, self.lines, self.bytes
         )
     }
@@ -400,7 +399,7 @@ impl PageCursor {
     #[must_use]
     pub fn render_footer(&self) -> String {
         format!(
-            "[hashline-v2 next snapshot={} position={}]",
+            "[hashline next snapshot={} position={}]",
             self.snapshot, self.next
         )
     }
@@ -410,7 +409,7 @@ const fn default_read_limit() -> u16 {
     MAX_PAGE_LINES
 }
 
-/// Frozen v2 input schema for `read`.
+/// Frozen input schema for `read`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ReadRequest {
@@ -443,7 +442,7 @@ const fn default_max_matches() -> u16 {
     MAX_GREP_MATCHES
 }
 
-/// Frozen v2 input schema for `grep`.
+/// Frozen input schema for `grep`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct GrepRequest {
@@ -512,7 +511,7 @@ impl GrepRequest {
     }
 }
 
-/// The sole v2 edit operation.
+/// The sole edit operation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 #[schemars(deny_unknown_fields)]
@@ -564,7 +563,7 @@ impl EditOperation {
     }
 }
 
-/// Frozen v2 input schema for `edit`.
+/// Frozen input schema for `edit`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct EditRequest {
@@ -631,7 +630,7 @@ impl GrepLine {
     }
 }
 
-/// Terminal counters emitted after a v2 grep response.
+/// Terminal counters emitted after a grep response.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct GrepSummary {
@@ -650,7 +649,7 @@ impl GrepSummary {
     #[must_use]
     pub fn render(self) -> String {
         format!(
-            "[hashline-v2 matches={} truncated={} skipped_binary={} skipped_invalid_utf8={}]",
+            "[hashline matches={} truncated={} skipped_binary={} skipped_invalid_utf8={}]",
             self.matches, self.truncated, self.skipped_binary, self.skipped_invalid_utf8
         )
     }
@@ -757,7 +756,7 @@ pub enum ErrorCode {
 }
 
 impl ErrorCode {
-    /// Complete stable v2 tool-error code set.
+    /// Complete stable tool-error code set.
     pub const ALL: [Self; 15] = [
         Self::InvalidRequest,
         Self::InvalidSnapshot,
@@ -798,7 +797,7 @@ pub struct SnapshotConflict {
     pub context: Vec<ContextLine>,
 }
 
-/// Structured failure for one recognized v2 tool call.
+/// Structured failure for one recognized tool call.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ProtocolError {
@@ -862,7 +861,7 @@ impl From<ContractError> for ProtocolError {
     }
 }
 
-/// MCP structured-content envelope for a v2 tool error.
+/// MCP structured-content envelope for a tool error.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ErrorResponse {
@@ -873,11 +872,11 @@ pub struct ErrorResponse {
 }
 
 impl ErrorResponse {
-    /// Wrap a typed error with the v2 protocol tag.
+    /// Wrap a typed error with the protocol tag.
     #[must_use]
     pub const fn new(error: ProtocolError) -> Self {
         Self {
-            protocol: ProtocolTag::V2,
+            protocol: ProtocolTag::Hashline,
             error,
         }
     }
@@ -915,7 +914,7 @@ impl EditSuccess {
         lines: u64,
     ) -> Self {
         Self {
-            protocol: ProtocolTag::V2,
+            protocol: ProtocolTag::Hashline,
             path,
             previous_snapshot,
             snapshot,
@@ -1040,7 +1039,7 @@ impl ContractError {
     }
 }
 
-/// Reject a file length above the fixed v2 limit.
+/// Reject a file length above the fixed protocol limit.
 ///
 /// # Errors
 ///
@@ -1165,7 +1164,7 @@ fn edits_overlap(left: &ValidatedEdit<'_>, right: &ValidatedEdit<'_>) -> bool {
     }
 }
 
-/// Apply v2 ranges using the slow, obviously-correct byte-vector model.
+/// Apply replace ranges using the slow, obviously-correct byte-vector model.
 ///
 /// This function performs no hashing, file I/O, caching, locking, or
 /// persistence. Callers compare the requested snapshot before invoking it and
@@ -1472,7 +1471,7 @@ mod tests {
     }
 
     #[test]
-    fn v2_r001_snapshot_identity_is_canonical_and_seed_scoped() {
+    fn r001_snapshot_identity_is_canonical_and_seed_scoped() {
         let exact = b"alpha\r\n\xce\xb2eta\n";
         let first = test_snapshot(0x11, exact);
         assert_eq!(test_snapshot(0x11, exact), first);
@@ -1497,7 +1496,7 @@ mod tests {
     }
 
     #[test]
-    fn v2_r002_snapshot_header_has_one_unambiguous_grammar() {
+    fn r002_snapshot_header_has_one_unambiguous_grammar() {
         let header = SnapshotHeader::new(
             "src/\"odd]\n.rs".to_owned(),
             SnapshotId::from_u128(1),
@@ -1507,14 +1506,14 @@ mod tests {
         .expect("valid test header");
         assert_eq!(
             header.render(),
-            r#"[hashline-v2 snapshot=00000000000000000000000000000001 lines=3 bytes=11 path="src/\"odd]\n.rs"]"#
+            r#"[hashline snapshot=00000000000000000000000000000001 lines=3 bytes=11 path="src/\"odd]\n.rs"]"#
         );
         assert_eq!(header.render().lines().count(), 1);
         assert!(SnapshotHeader::new("x".to_owned(), header.snapshot, 0, 0).is_err());
     }
 
     #[test]
-    fn v2_r003_position_parser_is_strict_and_canonical() {
+    fn r003_position_parser_is_strict_and_canonical() {
         let maximum = format!("{}@{}", u64::MAX, u64::MAX);
         let parsed = maximum.parse::<Position>().expect("u64 maxima are valid");
         assert_eq!(parsed.line(), u64::MAX);
@@ -1543,7 +1542,7 @@ mod tests {
     }
 
     #[test]
-    fn v2_r004_byte_offset_is_authoritative_and_line_pair_is_checked() {
+    fn r004_byte_offset_is_authoritative_and_line_pair_is_checked() {
         let bytes = "a\né\n".as_bytes();
         for valid in [
             position(1, 0),
@@ -1567,7 +1566,7 @@ mod tests {
     }
 
     #[test]
-    fn v2_r005_ranges_are_half_open_ordered_boundaries() {
+    fn r005_ranges_are_half_open_ordered_boundaries() {
         let source = b"a\nb\n";
         let replace_second =
             EditOperation::replace(position(2, 2), position(3, 4), "B\n".to_owned());
@@ -1614,7 +1613,7 @@ mod tests {
     }
 
     #[test]
-    fn v2_r006_batches_are_atomic_and_same_position_insertions_are_stable() {
+    fn r006_batches_are_atomic_and_same_position_insertions_are_stable() {
         let source = b"one\ntwo\nthree\n";
         let operations = [
             EditOperation::replace(position(2, 4), position(2, 4), "A".to_owned()),
@@ -1651,7 +1650,7 @@ mod tests {
     }
 
     #[test]
-    fn v2_r007_all_text_paths_reject_invalid_utf8_and_nul() {
+    fn r007_all_text_paths_reject_invalid_utf8_and_nul() {
         assert_eq!(
             validate_text(b"\xef\xbb\xbfvalid").expect("a UTF-8 BOM is content"),
             "\u{feff}valid"
@@ -1681,7 +1680,7 @@ mod tests {
     }
 
     #[test]
-    fn v2_r008_line_endings_outside_ranges_are_byte_exact() {
+    fn r008_line_endings_outside_ranges_are_byte_exact() {
         let source = b"first\r\nsecond\nthird\r";
         let edit = EditOperation::replace(position(2, 7), position(3, 14), "SECOND\r\n".to_owned());
         assert_eq!(
@@ -1708,7 +1707,7 @@ mod tests {
     }
 
     #[test]
-    fn v2_r009_empty_file_has_one_line_and_distinct_terminal_boundary() {
+    fn r009_empty_file_has_one_line_and_distinct_terminal_boundary() {
         assert_eq!(reference_line_starts(""), vec![0]);
         validate_reference_position(b"", position(1, 0)).expect("empty logical line");
         validate_reference_position(b"", position(2, 0)).expect("terminal boundary");
@@ -1725,7 +1724,7 @@ mod tests {
     }
 
     #[test]
-    fn v2_r010_file_size_and_u64_offsets_never_truncate() {
+    fn r010_file_size_and_u64_offsets_never_truncate() {
         validate_file_size(MAX_FILE_BYTES).expect("the cap is inclusive");
         assert!(matches!(
             validate_file_size(MAX_FILE_BYTES + 1),
@@ -1753,7 +1752,7 @@ mod tests {
     }
 
     #[test]
-    fn v2_r011_conflict_carries_fresh_header_and_bounded_context() {
+    fn r011_conflict_carries_fresh_header_and_bounded_context() {
         let source = b"l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\nl10\n";
         let current_snapshot = test_snapshot(7, source);
         let requested_snapshot = SnapshotId::from_u128(9);
@@ -1787,7 +1786,7 @@ mod tests {
     }
 
     #[test]
-    fn v2_r012_cache_eviction_recomputes_and_restart_rotates_identity() {
+    fn r012_cache_eviction_recomputes_and_restart_rotates_identity() {
         let bytes = b"same exact bytes\r\n";
         let initial = test_snapshot(0x41, bytes);
         let recomputed_after_eviction = test_snapshot(0x41, bytes);
@@ -1814,7 +1813,7 @@ mod tests {
     }
 
     #[test]
-    fn v2_r013_page_cursor_binds_next_position_to_snapshot() {
+    fn r013_page_cursor_binds_next_position_to_snapshot() {
         let source = b"one\ntwo\n";
         let current_snapshot = SnapshotId::from_u128(0x7d9c);
         let cursor = PageCursor {
@@ -1823,7 +1822,7 @@ mod tests {
         };
         assert_eq!(
             cursor.render_footer(),
-            "[hashline-v2 next snapshot=00000000000000000000000000007d9c position=2@4]"
+            "[hashline next snapshot=00000000000000000000000000007d9c position=2@4]"
         );
         assert_eq!(
             validate_reference_cursor("page.txt", source, current_snapshot, &cursor),
@@ -1870,7 +1869,7 @@ mod tests {
     }
 
     #[test]
-    fn v2_r014_read_schema_uses_cursor_and_enforces_the_page_cap() {
+    fn r014_read_schema_uses_cursor_and_enforces_the_page_cap() {
         let request: ReadRequest =
             serde_json::from_value(json!({"path": "src/lib.rs"})).expect("defaults apply");
         assert_eq!(request.limit, MAX_PAGE_LINES);
@@ -1903,7 +1902,7 @@ mod tests {
     }
 
     #[test]
-    fn v2_r015_grep_lines_share_positions_and_exact_cap_semantics() {
+    fn r015_grep_lines_share_positions_and_exact_cap_semantics() {
         let snapshot = SnapshotId::from_u128(3);
         let header = SnapshotHeader::new("src/lib.rs".to_owned(), snapshot, 2, 9)
             .expect("valid grep header");
@@ -1950,12 +1949,12 @@ mod tests {
         };
         assert_eq!(
             summary.render(),
-            "[hashline-v2 matches=200 truncated=true skipped_binary=2 skipped_invalid_utf8=3]"
+            "[hashline matches=200 truncated=true skipped_binary=2 skipped_invalid_utf8=3]"
         );
     }
 
     #[test]
-    fn v2_r016_grep_invalid_text_policy_has_no_lossy_path() {
+    fn r016_grep_invalid_text_policy_has_no_lossy_path() {
         assert!(matches!(
             classify_grep_text(b"ok", GrepTarget::ExplicitFile),
             Ok(GrepText::Search("ok"))
@@ -1979,7 +1978,7 @@ mod tests {
     }
 
     #[test]
-    fn v2_r017_error_codes_and_envelope_are_stable() {
+    fn r017_error_codes_and_envelope_are_stable() {
         let names = ErrorCode::ALL
             .into_iter()
             .map(|code| serde_json::to_value(code).expect("serialize error code"))
@@ -2024,7 +2023,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(response).expect("serialize error envelope"),
             json!({
-                "protocol": PROTOCOL_V2,
+                "protocol": PROTOCOL,
                 "error": {
                     "code": "invalid_pattern",
                     "message": "unclosed group",
@@ -2035,13 +2034,13 @@ mod tests {
     }
 
     #[test]
-    fn v2_r018_tool_errors_do_not_absorb_json_rpc_failures() {
+    fn r018_tool_errors_do_not_absorb_json_rpc_failures() {
         let response = serde_json::to_value(ErrorResponse::new(ProtocolError::new(
             ErrorCode::InvalidRequest,
             "unknown field".to_owned(),
         )))
         .expect("serialize tool error");
-        assert_eq!(response["protocol"], PROTOCOL_V2);
+        assert_eq!(response["protocol"], PROTOCOL);
         assert!(response.get("jsonrpc").is_none());
         assert!(response.get("id").is_none());
 
@@ -2069,7 +2068,7 @@ mod tests {
     }
 
     #[test]
-    fn v2_r019_edit_success_names_only_the_persisted_snapshot() {
+    fn r019_edit_success_names_only_the_persisted_snapshot() {
         let previous = SnapshotId::from_u128(1);
         let persisted = SnapshotId::from_u128(2);
         let success = EditSuccess::new("src/lib.rs".to_owned(), previous, persisted, 2, 17, 3);
@@ -2097,11 +2096,11 @@ mod tests {
         );
         assert_eq!(value["previous_snapshot"], previous.to_string());
         assert_eq!(value["snapshot"], persisted.to_string());
-        assert_eq!(value["protocol"], PROTOCOL_V2);
+        assert_eq!(value["protocol"], PROTOCOL);
     }
 
     #[test]
-    fn v2_r020_read_or_grep_position_applies_only_to_named_bytes() {
+    fn r020_read_or_grep_position_applies_only_to_named_bytes() {
         let original = b"same\nline\n";
         let changed = b"same\nLINE\n";
         let original_snapshot = test_snapshot(0x51, original);
@@ -2135,7 +2134,7 @@ mod tests {
     }
 
     #[test]
-    fn v2_r021_position_validation_never_fuzzy_relocates() {
+    fn r021_position_validation_never_fuzzy_relocates() {
         let source = b"duplicated\nduplicated\n";
         let current = test_snapshot(0x61, source);
         let invalid_position =
@@ -2163,7 +2162,7 @@ mod tests {
     }
 
     #[test]
-    fn v2_r022_cli_and_edit_schema_have_no_v1_compatibility_surface() {
+    fn r022_cli_and_edit_schema_have_no_legacy_compatibility_surface() {
         let snapshot = "00000000000000000000000000000001";
         for legacy in [
             json!({"file_path": "x", "snapshot": snapshot, "anchor": "1:abc", "edits": []}),
@@ -2202,7 +2201,7 @@ mod tests {
         ] {
             assert!(
                 !rendered.contains(forbidden),
-                "{forbidden} leaked into v2 schema"
+                "{forbidden} leaked into the frozen schema"
             );
         }
         assert!(rendered.contains("\"replace\""));

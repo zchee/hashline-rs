@@ -12,17 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-//! Hashline MCP server and its incompatible v2 protocol contract.
+//! Hashline MCP server and its protocol contract.
 //!
-//! [`protocol`] is the normative interface for snapshot identities, byte
-//! positions and ranges, strict text handling, pagination, conflicts, and
-//! structured errors. Its slow reference model is intentionally independent
-//! of the optimized snapshot, read, edit, grep, persistence, and cache engines
-//! that later gated phases compare against it.
+//! [`protocol`] is the sole, unversioned normative interface for snapshot
+//! identities, byte positions and ranges, strict text handling, pagination,
+//! conflicts, and structured errors. Its slow reference model is intentionally
+//! independent of the optimized snapshot, read, edit, grep, persistence, and
+//! cache engines that later gated phases compare against it.
 //!
 //! The other modules retain the measured anchor engine used as the Phase 0
-//! baseline. Phase-specific v2 request aliases keep the frozen wire schemas
-//! executable without advertising later engine work before its exit gate.
+//! baseline until its scheduled deletion.
 
 pub mod cache;
 pub mod config;

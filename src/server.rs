@@ -57,10 +57,10 @@ use crate::{
 const READ_TEMPLATE: &str = r#"Read a file with versioned positional output for use with edit.
 
 Every response starts with a snapshot header:
-[hashline-v2 snapshot=<ID> lines=<N> bytes=<B> path=<JSON_STRING>]
+[hashline snapshot=<ID> lines=<N> bytes=<B> path=<JSON_STRING>]
 
 Each following line is LINE@BYTE|CONTENT. Pass the snapshot ID and positions to edit.
-Pagination footer: [hashline-v2 next snapshot=<ID> position=LINE@BYTE]
+Pagination footer: [hashline next snapshot=<ID> position=LINE@BYTE]
 
 Usage:
 - path is workspace-relative or absolute
@@ -410,7 +410,7 @@ mod tests {
     }
 
     #[test]
-    fn content_only_descriptions_remain_v2() {
+    fn content_only_descriptions_keep_snapshot_wording() {
         let tmp = tempfile::TempDir::new().unwrap();
         let config = SchemeConfig {
             kind: SchemeKind::ContentOnly,
@@ -437,19 +437,15 @@ mod tests {
     }
 
     #[test]
-    fn frozen_v2_tool_schemas_are_strict_and_incompatible() {
-        let read = serde_json::to_value(schemars::schema_for!(crate::read::HashlineReadV2Input))
-            .expect("v2 read schema serializes");
-        let edit = serde_json::to_value(schemars::schema_for!(
-            crate::edit::types::HashlineEditV2Input
-        ))
-        .expect("v2 edit schema serializes");
-        let operation = serde_json::to_value(schemars::schema_for!(
-            crate::edit::types::HashlineEditV2Operation
-        ))
-        .expect("v2 edit operation schema serializes");
-        let grep = serde_json::to_value(schemars::schema_for!(crate::grep::HashlineGrepV2Input))
-            .expect("v2 grep schema serializes");
+    fn frozen_tool_schemas_are_strict_and_incompatible() {
+        let read = serde_json::to_value(schemars::schema_for!(crate::protocol::ReadRequest))
+            .expect("read schema serializes");
+        let edit = serde_json::to_value(schemars::schema_for!(crate::protocol::EditRequest))
+            .expect("edit schema serializes");
+        let operation = serde_json::to_value(schemars::schema_for!(crate::protocol::EditOperation))
+            .expect("edit operation schema serializes");
+        let grep = serde_json::to_value(schemars::schema_for!(crate::protocol::GrepRequest))
+            .expect("grep schema serializes");
 
         for schema in [&read, &edit, &grep] {
             assert_eq!(schema["type"], "object");
@@ -460,8 +456,8 @@ mod tests {
         assert!(read["properties"].get("offset").is_none());
 
         assert_eq!(edit["required"], json!(["file_path", "snapshot", "edits"]));
-        let edit_text = serde_json::to_string(&edit).expect("render v2 edit schema");
-        let operation_text = serde_json::to_string(&operation).expect("render v2 operation schema");
+        let edit_text = serde_json::to_string(&edit).expect("render edit schema");
+        let operation_text = serde_json::to_string(&operation).expect("render operation schema");
         for legacy in [
             "anchor",
             "end_anchor",
@@ -477,7 +473,7 @@ mod tests {
         }
         assert!(operation_text.contains("\"replace\""));
 
-        let grep_properties = grep["properties"].as_object().expect("v2 grep properties");
+        let grep_properties = grep["properties"].as_object().expect("grep properties");
         assert_eq!(grep_properties.len(), 8);
         for field in [
             "pattern",
@@ -576,7 +572,7 @@ mod tests {
             ContentBlock::Text(t) => t.text.clone(),
             other => panic!("expected text, {other:?}"),
         };
-        assert!(text.contains("[hashline-v2 snapshot="), "{text}");
+        assert!(text.contains("[hashline snapshot="), "{text}");
         let snapshot = text
             .lines()
             .next()

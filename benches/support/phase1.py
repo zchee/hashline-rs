@@ -1,4 +1,4 @@
-"""Evaluate the incompatible-v2 Phase 1 protocol freeze."""
+"""Evaluate the incompatible-redesign Phase 1 protocol freeze."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ BASE_COMMIT = "6afe83059de218d71d4161fb36848d849c9da0a6"
 PLAN_PATH = ".omx/plans/2026-07-31-incompatible-max-performance-redesign.md"
 PLAN_SHA256 = "db00bf029f184811b79ab709df064a3fb9b23a9ab64562e28432e43ca8a41a6f"
 PHASE0_ROOT = Path(".omx/goals/performance/hashline-v2-phase0")
-RULE_IDS = tuple(f"V2-R{number:03d}" for number in range(1, 23))
+RULE_IDS = tuple(f"R{number:03d}" for number in range(1, 23))
 
 IMMUTABLE_FILES = {
     PLAN_PATH: PLAN_SHA256,
@@ -56,7 +56,7 @@ ALLOWED_CHANGED_PATHS = frozenset(
     {
         "benches/support/phase1.py",
         "benches/support/test_phase1.py",
-        "docs/protocol-v2.md",
+        "docs/protocol.md",
         "src/edit/types.rs",
         "src/grep.rs",
         "src/lib.rs",
@@ -433,7 +433,7 @@ def rules_without_executable_examples(documentation: str) -> list[str]:
 def verify_semantic_coverage() -> dict[str, object]:
     """Require one named test and documentation entry for every frozen rule."""
 
-    documentation_path = Path("docs/protocol-v2.md")
+    documentation_path = Path("docs/protocol.md")
     source_path = Path("src/protocol.rs")
     documentation = documentation_path.read_text(encoding="utf-8")
     source = source_path.read_text(encoding="utf-8")

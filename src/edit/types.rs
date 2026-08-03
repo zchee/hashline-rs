@@ -17,11 +17,6 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// Sole operation admitted by the incompatible-v2 edit schema.
-pub use crate::protocol::EditOperation as HashlineEditV2Operation;
-/// Frozen incompatible-v2 request schema for versioned byte-range editing.
-pub use crate::protocol::EditRequest as HashlineEditV2Input;
-
 /// Input for the `edit` tool.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct HashlineEditInput {

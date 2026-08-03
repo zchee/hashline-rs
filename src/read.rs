@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-//! `read` — versioned positional file reading (hashline protocol v2).
+//! `read` — versioned positional file reading for the hashline protocol.
 //!
 //! Output begins with one [`SnapshotHeader`](crate::protocol::SnapshotHeader),
 //! followed by `LINE@BYTE|CONTENT` lines. When more lines remain, a
@@ -36,10 +36,7 @@ use crate::{
     util::{ToolOutcome, Workspace},
 };
 
-/// Frozen incompatible-v2 request schema (production wire type).
-pub type HashlineReadV2Input = ReadRequest;
-
-/// Maximum number of lines returned by a single read page (v2 wire max).
+/// Maximum number of lines returned by a single read page (wire max).
 pub const MAX_LINES_READ: usize = crate::protocol::MAX_PAGE_LINES as usize;
 
 /// Byte size above which snapshot load + render runs on a blocking thread.
@@ -49,7 +46,7 @@ pub const MAX_LINES_READ: usize = crate::protocol::MAX_PAGE_LINES as usize;
 /// files avoid the spawn_blocking hop.
 const BLOCKING_READ_BYTES: usize = 256 * 1024;
 
-/// Legacy v1 input retained for transitional tests and benches only.
+/// Legacy anchor input retained for transitional tests and benches only.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct HashlineReadInput {
     /// Path of the file to read (relative to the workspace root or absolute).
@@ -62,7 +59,7 @@ pub struct HashlineReadInput {
     pub limit: Option<usize>,
 }
 
-/// Format file content with v1 anchors (bench / transitional only).
+/// Format file content with legacy anchors (bench / transitional only).
 pub fn format_hashline_content(
     file_content: &str,
     offset: Option<usize>,
@@ -139,7 +136,7 @@ fn validate_cursor_on_snapshot(
         .map(|position| position.line())
 }
 
-/// Execute a v2 `read` request against the local filesystem.
+/// Execute a `read` request against the local filesystem.
 pub async fn run_read(workspace: &Workspace, input: &ReadRequest) -> ToolOutcome {
     if let Err(error) = input.validate() {
         return protocol_outcome(ProtocolError::from(error));
@@ -290,7 +287,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn v2_read_empty_file_renders_header_and_empty_line() {
+    async fn read_empty_file_renders_header_and_empty_line() {
         let tmp = tempdir().unwrap();
         std::fs::write(tmp.path().join("e.txt"), b"").unwrap();
         let outcome = run_read(
@@ -308,7 +305,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn v2_read_paginates_with_cursor_footer() {
+    async fn read_paginates_with_cursor_footer() {
         let tmp = tempdir().unwrap();
         let mut body = String::new();
         for i in 1..=5 {
@@ -329,7 +326,7 @@ mod tests {
         let footer = first
             .text
             .lines()
-            .find(|l| l.starts_with("[hashline-v2 next"))
+            .find(|l| l.starts_with("[hashline next"))
             .expect("cursor footer");
         // Parse snapshot= and position= from footer.
         let snapshot_hex = footer
@@ -358,7 +355,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn v2_stale_cursor_conflicts() {
+    async fn stale_cursor_conflicts() {
         let tmp = tempdir().unwrap();
         std::fs::write(tmp.path().join("s.txt"), b"alpha\nbeta\n").unwrap();
         let stale = run_read(
@@ -384,7 +381,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn v2_invalid_limit_rejected() {
+    async fn invalid_limit_rejected() {
         let tmp = tempdir().unwrap();
         let mut f = std::fs::File::create(tmp.path().join("x.txt")).unwrap();
         writeln!(f, "hi").unwrap();
@@ -401,7 +398,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn v2_crlf_content_omits_terminator() {
+    async fn crlf_content_omits_terminator() {
         let tmp = tempdir().unwrap();
         std::fs::write(tmp.path().join("c.txt"), b"a\r\nb\r\n").unwrap();
         let outcome = run_read(

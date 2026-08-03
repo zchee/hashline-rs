@@ -1,11 +1,11 @@
-# Hashline Protocol v2
+# Hashline Protocol
 
 - Status: normative Phase 1 contract
 - Authoritative plan: `.omx/plans/2026-07-31-incompatible-max-performance-redesign.md`
 - Plan SHA-256: `db00bf029f184811b79ab709df064a3fb9b23a9ab64562e28432e43ca8a41a6f`
 - Phase 0 candidate: `6afe83059de218d71d4161fb36848d849c9da0a6`
 
-This document freezes the incompatible v2 protocol and its slow reference
+This document freezes the hashline protocol and its slow reference
 model. The words MUST, MUST NOT, SHOULD, and MAY are normative.
 
 The contract is deliberately independent of the optimized snapshot, offset,
@@ -32,7 +32,7 @@ A path is not a version. Metadata is not a version. The only version equality
 test is equality of the 128-bit identity produced from the exact byte sequence
 by one running server process.
 
-### V2-R001: Snapshot identity
+### R001: Snapshot identity
 
 A `SnapshotId` is exactly 128 bits and its canonical wire form is exactly 32
 lowercase hexadecimal ASCII characters. Leading zeroes are required. Uppercase
@@ -63,13 +63,13 @@ assert!(SnapshotId::from_str("7D9C3AF08E1B4F6C9A2D1137F68582A1").is_err());
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-### V2-R002: Snapshot header
+### R002: Snapshot header
 
 Every read response starts with one header. Grep emits one header for every
 file section containing a reported match. The exact grammar is:
 
 ```text
-[hashline-v2 snapshot=<SNAPSHOT_ID> lines=<LINE_COUNT> bytes=<BYTE_COUNT> path=<JSON_STRING>]
+[hashline snapshot=<SNAPSHOT_ID> lines=<LINE_COUNT> bytes=<BYTE_COUNT> path=<JSON_STRING>]
 ```
 
 Fields appear in that order with one ASCII space between them. `LINE_COUNT`
@@ -80,12 +80,12 @@ newlines cannot make the header ambiguous.
 Example:
 
 ```text
-[hashline-v2 snapshot=7d9c3af08e1b4f6c9a2d1137f68582a1 lines=641 bytes=18492 path="src/lib.rs"]
+[hashline snapshot=7d9c3af08e1b4f6c9a2d1137f68582a1 lines=641 bytes=18492 path="src/lib.rs"]
 21@418|mod render;
 22@430|mod scheme;
 ```
 
-### V2-R003: Position token grammar
+### R003: Position token grammar
 
 A position token has the exact grammar `LINE@BYTE`.
 
@@ -110,7 +110,7 @@ for invalid in ["0@0", "01@0", "1@00", "+1@0", "1@0@0", " 1@0"] {
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-### V2-R004: Byte authority and line diagnostics
+### R004: Byte authority and line diagnostics
 
 The byte component is an offset into the exact snapshot bytes and is
 authoritative. It is never a Unicode scalar, UTF-16 code-unit, grapheme, or
@@ -124,9 +124,9 @@ corrupted or manually edited tokens without making line numbers authoritative.
 Read and grep emit positions only at logical line starts. Edit also accepts the
 terminal boundary described below.
 
-### V2-R005: Half-open line-boundary ranges
+### R005: Half-open line-boundary ranges
 
-The only v2 operation is `replace`. Its `start` is inclusive and `end` is
+The only edit operation is `replace`. Its `start` is inclusive and `end` is
 exclusive. Both positions MUST be valid boundaries in the named snapshot.
 
 Logical line starts are byte zero and the byte immediately after every
@@ -142,7 +142,7 @@ is a non-insertion range even though both byte components equal `BYTE_COUNT`.
 Replacing `1@0` through the terminal boundary replaces the whole file.
 Replacement content is the exact UTF-8 bytes decoded from the JSON string.
 
-### V2-R006: Batch atomicity, overlap, and insertion order
+### R006: Batch atomicity, overlap, and insertion order
 
 An edit request contains between 1 and 1024 operations. Every operation is
 validated against the same named pre-edit snapshot before any output is
@@ -176,7 +176,7 @@ assert_eq!(output, b"alpha\r\nBETA\n");
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-### V2-R007: UTF-8 and NUL policy
+### R007: UTF-8 and NUL policy
 
 Read, edit, and grep are text tools. They accept only strictly valid UTF-8 and
 reject a NUL byte at any offset. Validation covers the complete file, not a
@@ -187,7 +187,7 @@ JSON replacement strings are valid Unicode by construction but are still
 rejected when they contain NUL. A UTF-8 BOM, when present, is ordinary file
 content and participates in byte offsets and snapshot identity.
 
-### V2-R008: Line endings and unterminated lines
+### R008: Line endings and unterminated lines
 
 LF is the only boundary byte. CR immediately before LF is part of the line
 terminator for display and is omitted from rendered line content. A bare CR is
@@ -198,14 +198,14 @@ copied byte-for-byte. The server never chooses or normalizes a line-ending
 style. A final unterminated line remains unterminated unless replacement
 content changes it.
 
-### V2-R009: Empty-file model
+### R009: Empty-file model
 
 An empty file has one logical empty line at `1@0` and a terminal boundary at
 `2@0`. A read renders `1@0|`. The line count is one and byte count is zero.
 Replacing `1@0` through `2@0` is the canonical whole-file write for an
 empty file.
 
-### V2-R010: Size and offset limits
+### R010: Size and offset limits
 
 Wire offsets and line numbers are `u64`. The maximum accepted file length is
 `i64::MAX` bytes (`9_223_372_036_854_775_807`). This matches the maximum
@@ -216,7 +216,7 @@ A larger metadata length fails with `file_too_large` before allocation or
 content reads. Every conversion to `usize`, every offset addition, and every
 output capacity calculation is checked. No truncating cast is permitted.
 
-### V2-R011: Snapshot conflict
+### R011: Snapshot conflict
 
 A syntactically valid requested snapshot that differs from the freshly
 computed identity is a `snapshot_conflict`. The server performs no edits.
@@ -234,18 +234,18 @@ Context lines use current positions and the same display rules as read. A
 missing, unreadable, or non-text current file returns its specific file/text
 error because no truthful fresh snapshot can be supplied.
 
-### V2-R012: Cache eviction and restart
+### R012: Cache eviction and restart
 
 The cache is an accelerator, never an authority. A cache miss or eviction
 forces a fresh read and identity computation. If the recomputed identity
 equals the request, the request remains valid; eviction alone cannot change
-semantics. If it differs, rule V2-R011 applies.
+semantics. If it differs, rule R011 applies.
 
 A restart creates a new seed. A pre-restart snapshot or pagination cursor is
 therefore outside its identity scope and conflicts with a fresh header. There
 is no persisted snapshot registry and no compatibility lookup.
 
-### V2-R013: Read pagination cursor
+### R013: Read pagination cursor
 
 A read request uses an optional structured cursor:
 
@@ -259,14 +259,14 @@ A read request uses an optional structured cursor:
 The cursor names the snapshot and the next logical line start. Request decoding
 first rejects a malformed token as `invalid_position`. For a decoded cursor,
 current-file text validation and snapshot comparison precede boundary
-resolution. A snapshot mismatch therefore uses V2-R011 even when the old
+resolution. A snapshot mismatch therefore uses R011 even when the old
 position is not a boundary in the current bytes. Only a matching snapshot with
 a boundary mismatch returns `invalid_position`.
 
 When more lines remain, the response ends with:
 
 ```text
-[hashline-v2 next snapshot=7d9c3af08e1b4f6c9a2d1137f68582a1 position=2001@58102]
+[hashline next snapshot=7d9c3af08e1b4f6c9a2d1137f68582a1 position=2001@58102]
 ```
 
 A complete page has no footer. The next byte offset lets the optimized path
@@ -274,7 +274,7 @@ continue without rescanning from byte zero. Pagination applies to read.
 Grep truncation is terminal and requires a narrower query rather than a tree
 cursor.
 
-### V2-R014: Read request and cap
+### R014: Read request and cap
 
 The exact read input is:
 
@@ -288,9 +288,9 @@ The exact read input is:
 
 `path` is required. `limit` defaults to 2000 and is in `1..=2000`.
 `cursor` defaults to null. Unknown properties are invalid. The first page
-omits the cursor. A cursor controls the start; v1 `offset` is not accepted.
+omits the cursor. A cursor controls the start; the legacy `offset` is not accepted.
 
-### V2-R015: Grep sections and positions
+### R015: Grep sections and positions
 
 The exact grep input fields are `pattern`, `path`, `glob`,
 `ignore_case`, `before_context`, `after_context`, `context`, and
@@ -299,19 +299,19 @@ The exact grep input fields are `pattern`, `path`, `glob`,
 Context counts are in `0..=2000`; `context` overrides before/after.
 `max_matches` defaults to and cannot exceed 200.
 
-Each matching file has one V2-R002 header. A match line is
+Each matching file has one R002 header. A match line is
 `POSITION:CONTENT`, a context line is `POSITION-CONTENT`, and `--`
 separates non-adjacent groups. Every position belongs to the section snapshot.
 The final summary is:
 
 ```text
-[hashline-v2 matches=<COUNT> truncated=<true|false> skipped_binary=<COUNT> skipped_invalid_utf8=<COUNT>]
+[hashline matches=<COUNT> truncated=<true|false> skipped_binary=<COUNT> skipped_invalid_utf8=<COUNT>]
 ```
 
 The count is the number of match lines, excluding context. The cap is exact;
 workers stop at the actual remaining global capacity.
 
-### V2-R016: Grep invalid-text behavior
+### R016: Grep invalid-text behavior
 
 An explicitly requested file containing NUL returns `binary_file`; invalid
 UTF-8 returns `invalid_utf8`. A tree search skips such files, increments the
@@ -319,13 +319,13 @@ corresponding final-summary counter, and continues. Grep never emits lossy or
 escaped substitute text because either would break position-to-byte identity.
 I/O, permission, and pattern failures are not classified as invalid text.
 
-### V2-R017: Structured tool-error taxonomy
+### R017: Structured tool-error taxonomy
 
 Every recognized-tool failure uses this envelope in MCP structured content:
 
 ```json
 {
-  "protocol": "hashline/v2",
+  "protocol": "hashline",
   "error": {
     "code": "snapshot_conflict",
     "message": "the file no longer matches the requested snapshot",
@@ -355,7 +355,7 @@ The complete, stable code set is:
 | `overlapping_edits` | Batch ranges conflict | false |
 | `invalid_utf8` | File bytes are not strict UTF-8 | false |
 | `binary_file` | File or replacement contains NUL | false |
-| `file_too_large` | Length exceeds V2-R010 | false |
+| `file_too_large` | Length exceeds R010 | false |
 | `not_found` | Path does not exist | true |
 | `not_a_file` | Path resolves to a non-file | false |
 | `permission_denied` | Access was denied | true |
@@ -367,7 +367,7 @@ The complete, stable code set is:
 `conflict` is present only for `snapshot_conflict`. Error messages are
 diagnostic, while `code` and typed fields carry semantics.
 
-### V2-R018: MCP error boundary
+### R018: MCP error boundary
 
 Malformed arguments for a recognized hashline tool are a structured
 `invalid_request` tool result with `isError: true`. File, text, conflict,
@@ -378,7 +378,7 @@ and server infrastructure failure remain MCP/JSON-RPC errors. They are not
 invented members of the tool-error taxonomy. Stdout contains MCP transport
 only; diagnostics and tracing remain on stderr.
 
-### V2-R019: Edit success and persistence ordering
+### R019: Edit success and persistence ordering
 
 A successful edit returns structured content with exactly:
 `protocol`, `path`, `previous_snapshot`, `snapshot`, `applied`,
@@ -391,10 +391,10 @@ transaction. Same-server writes to one canonical path are serialized.
 The plan's residual final TOCTOU window with a noncooperating external writer
 is documented rather than hidden.
 
-### V2-R020: Cross-tool invariant
+### R020: Cross-tool invariant
 
 A position emitted by read or grep names one exact snapshot. Edit either
-applies that byte range to the same exact snapshot or returns V2-R011. It
+applies that byte range to the same exact snapshot or returns R011. It
 never edits a different snapshot, even when the referenced line text happens
 to be identical.
 
@@ -402,23 +402,23 @@ Snapshot IDs hash content only, so equal bytes at two paths can have equal IDs
 inside one process. The request path remains the target; identity equality
 does not redirect paths.
 
-### V2-R021: No fuzzy relocation
+### R021: No fuzzy relocation
 
-V2 has no suffix recovery, contextual fingerprint search, shifted-line retry,
+The protocol has no suffix recovery, contextual fingerprint search, shifted-line retry,
 or "closest" match. A stale ID conflicts before position resolution. A
 position inconsistent with a matching snapshot is `invalid_position`.
 Recovery consists of using the fresh conflict context or performing a new
 read/grep, then sending a new request.
 
-### V2-R022: Incompatible surface
+### R022: Incompatible surface
 
 The server exposes one protocol. The binary accepts workspace `--root` and
 `--restrict` controls, but no scheme, hash-length, chunk-size, checkpoint,
-or v1 compatibility option or environment variable.
+or legacy compatibility option or environment variable.
 
-V2 edit accepts only `replace { start, end, content }`. It rejects v1
+Edit accepts only `replace { start, end, content }`. It rejects the legacy
 `anchor`, `end_anchor`, `insert_after`, `write`, double-encoded edit
-arrays, and bare-object edit shorthands. V2 read rejects `offset`. No source,
+arrays, and bare-object edit shorthands. Read rejects `offset`. No source,
 CLI, schema, wire, anchor, or persisted-reference compatibility is promised.
 
 ## 2. Canonical requests
@@ -491,11 +491,11 @@ persistence. Those mechanisms cannot alter its byte-range result.
 ## 4. Executable rule coverage
 
 Every block below is compiled and run by `cargo test --doc`. The inline
-examples above cover V2-R001, V2-R003, and V2-R006; these blocks cover the
+examples above cover R001, R003, and R006; these blocks cover the
 remaining rules. Each rule also has a realistic named regression in
 `src/protocol.rs`.
 
-### V2-R002
+### R002
 
 ```rust
 use hashline::protocol::{SnapshotHeader, SnapshotId};
@@ -508,12 +508,12 @@ let header = SnapshotHeader::new(
 )?;
 assert_eq!(
     header.render(),
-    r#"[hashline-v2 snapshot=00000000000000000000000000000001 lines=1 bytes=0 path="src/lib.rs"]"#
+    r#"[hashline snapshot=00000000000000000000000000000001 lines=1 bytes=0 path="src/lib.rs"]"#
 );
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-### V2-R004
+### R004
 
 ```rust
 use hashline::protocol::{Position, validate_reference_position};
@@ -524,7 +524,7 @@ assert!(validate_reference_position(bytes, Position::new(2, 3)?).is_err());
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-### V2-R005
+### R005
 
 ```rust
 use hashline::protocol::{EditOperation, Position, apply_reference_edits};
@@ -539,7 +539,7 @@ assert_eq!(apply_reference_edits(source, &edits)?, b"a\nSRT");
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-### V2-R007
+### R007
 
 ```rust
 use hashline::protocol::{ContractError, validate_text};
@@ -550,7 +550,7 @@ assert!(matches!(validate_text(b"a\xff"), Err(ContractError::InvalidUtf8 { .. })
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-### V2-R008
+### R008
 
 ```rust
 use hashline::protocol::{EditOperation, Position, apply_reference_edits};
@@ -568,7 +568,7 @@ assert_eq!(
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-### V2-R009
+### R009
 
 ```rust
 use hashline::protocol::{
@@ -588,7 +588,7 @@ assert_eq!(apply_reference_edits(b"", &[write])?, b"created");
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-### V2-R010
+### R010
 
 ```rust
 use hashline::protocol::{MAX_FILE_BYTES, Position, validate_file_size};
@@ -600,7 +600,7 @@ assert_eq!(maximum.to_string().parse::<Position>()?, maximum);
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-### V2-R011
+### R011
 
 ```rust
 use hashline::protocol::{
@@ -622,7 +622,7 @@ assert!(error.conflict.as_ref().unwrap().context.len() <= CONFLICT_CONTEXT_LINES
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-### V2-R012
+### R012
 
 ```rust
 use hashline::protocol::SnapshotId;
@@ -634,7 +634,7 @@ assert_eq!(requested, recomputed_after_eviction);
 assert_ne!(requested, recomputed_after_restart);
 ```
 
-### V2-R013
+### R013
 
 ```rust
 use hashline::protocol::{
@@ -653,12 +653,12 @@ assert_eq!(
 );
 assert_eq!(
     cursor.render_footer(),
-    "[hashline-v2 next snapshot=00000000000000000000000000000001 position=2@4]"
+    "[hashline next snapshot=00000000000000000000000000000001 position=2@4]"
 );
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-### V2-R014
+### R014
 
 ```rust
 use hashline::protocol::{MAX_PAGE_LINES, ReadRequest};
@@ -672,7 +672,7 @@ assert!(serde_json::from_value::<ReadRequest>(
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-### V2-R015
+### R015
 
 ```rust
 use hashline::protocol::{
@@ -696,12 +696,12 @@ assert_eq!(
         skipped_binary: 0,
         skipped_invalid_utf8: 0,
     }.render(),
-    "[hashline-v2 matches=1 truncated=false skipped_binary=0 skipped_invalid_utf8=0]"
+    "[hashline matches=1 truncated=false skipped_binary=0 skipped_invalid_utf8=0]"
 );
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-### V2-R016
+### R016
 
 ```rust
 use hashline::protocol::{
@@ -722,7 +722,7 @@ assert_eq!(
 );
 ```
 
-### V2-R017
+### R017
 
 ```rust
 use hashline::protocol::ErrorCode;
@@ -732,7 +732,7 @@ assert!(ErrorCode::SnapshotConflict.retryable());
 assert!(!ErrorCode::InvalidPosition.retryable());
 ```
 
-### V2-R018
+### R018
 
 ```rust
 use hashline::protocol::{ErrorCode, ErrorResponse, ProtocolError};
@@ -750,7 +750,7 @@ assert!(!object.contains_key("id"));
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-### V2-R019
+### R019
 
 ```rust
 use hashline::protocol::{EditSuccess, SnapshotId};
@@ -766,11 +766,11 @@ let response = EditSuccess::new(
 );
 let value = serde_json::to_value(response)?;
 assert_eq!(value["snapshot"], persisted.to_string());
-assert_eq!(value["protocol"], "hashline/v2");
+assert_eq!(value["protocol"], "hashline");
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-### V2-R020
+### R020
 
 ```rust
 use hashline::protocol::{
@@ -796,7 +796,7 @@ assert_eq!(error.code, ErrorCode::SnapshotConflict);
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-### V2-R021
+### R021
 
 ```rust
 use hashline::protocol::{
@@ -822,7 +822,7 @@ assert_eq!(error.code, ErrorCode::SnapshotConflict);
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-### V2-R022
+### R022
 
 ```rust
 use hashline::protocol::{EditRequest, ReadRequest};

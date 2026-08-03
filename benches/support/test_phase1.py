@@ -88,7 +88,7 @@ class Phase1EvaluatorTests(unittest.TestCase):
             [],
         )
 
-        missing_rule = "V2-R007"
+        missing_rule = "R007"
         missing_index = phase1.RULE_IDS.index(missing_rule)
         blocks[missing_index] = (
             f"### {missing_rule}: example\n\n```text\nnot executable\n```"

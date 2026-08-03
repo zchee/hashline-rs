@@ -306,7 +306,7 @@ fn bench_grep(c: &mut Criterion) {
         );
         assert!(
             probe.text.contains("matches="),
-            "v2 summary missing: {}",
+            "wired summary missing: {}",
             probe.text
         );
         group.bench_function(label, |b| {
@@ -377,7 +377,7 @@ fn bench_grep_large_file(c: &mut Criterion) {
         );
         assert!(
             probe.text.contains("matches="),
-            "v2 summary missing: {}",
+            "wired summary missing: {}",
             probe.text
         );
         group.bench_function(label, |b| {
@@ -657,12 +657,12 @@ fn bench_hash_matrix(c: &mut Criterion) {
     }
 }
 
-/// Paired incompatible-v2 lower-bound benches on byte-identical corpora.
+/// Paired wired-protocol lower-bound benches on byte-identical corpora.
 ///
 /// Every group has a current implementation and one prototype candidate. The
 /// Phase 0 capture harness invokes those functions in an interleaved order and
 /// preserves each Criterion estimate separately.
-fn bench_phase0_v2_pairs(c: &mut Criterion) {
+fn bench_phase0_pairs(c: &mut Criterion) {
     let content_10k = generate_corpus(10_000, 0xB200_0010);
     let content_50k = generate_corpus(50_000, 0xB200_0050);
     let content_100k = generate_corpus(100_000, 0xB200_0100);
@@ -946,12 +946,12 @@ fn line_start_offset(content: &str, line: u64) -> u64 {
     u64::try_from(offset).expect("bench offset fits u64")
 }
 
-/// Render the canonical v2 `LINE@BYTE` boundary token for a 1-based line.
-fn v2_boundary(content: &str, line: u64) -> String {
+/// Render the canonical `LINE@BYTE` boundary token for a 1-based line.
+fn boundary_token(content: &str, line: u64) -> String {
     format!("{line}@{}", line_start_offset(content, line))
 }
 
-/// Process-seeded v2 snapshot id (32-hex) for the exact bytes of `content`.
+/// Process-seeded snapshot id (32-hex) for the exact bytes of `content`.
 fn snapshot_id_hex(content: &str) -> String {
     Snapshot::from_bytes(content.as_bytes().to_vec())
         .expect("bench corpus is valid snapshot text")
@@ -959,16 +959,16 @@ fn snapshot_id_hex(content: &str) -> String {
         .to_string()
 }
 
-/// Build v2 edit-tool arguments replacing each 1-based line in `lines`.
-fn v2_replace_args(content: &str, path: &str, lines: &[u64]) -> serde_json::Value {
+/// Build edit-tool arguments replacing each 1-based line in `lines`.
+fn replace_args(content: &str, path: &str, lines: &[u64]) -> serde_json::Value {
     let edits: Vec<serde_json::Value> = lines
         .iter()
         .enumerate()
         .map(|(index, &line)| {
             serde_json::json!({
                 "op": "replace",
-                "start": v2_boundary(content, line),
-                "end": v2_boundary(content, line + 1),
+                "start": boundary_token(content, line),
+                "end": boundary_token(content, line + 1),
                 "content": format!("EDITED LINE {index}\n"),
             })
         })
@@ -1004,7 +1004,7 @@ fn assert_dispatch_success(result: &CallToolResult) -> &str {
 /// Parse a non-terminal read page footer into (snapshot, position) tokens.
 fn parse_cursor_footer(text: &str) -> Option<(String, String)> {
     let tail = &text[text.rfind('\n').map_or(0, |index| index + 1)..];
-    let rest = tail.strip_prefix("[hashline-v2 next snapshot=")?;
+    let rest = tail.strip_prefix("[hashline next snapshot=")?;
     let (snapshot, rest) = rest.split_once(' ')?;
     let position = rest.strip_prefix("position=")?.strip_suffix(']')?;
     Some((snapshot.to_owned(), position.to_owned()))
@@ -1030,7 +1030,7 @@ fn count_grep_match_lines(text: &str) -> usize {
 
 /// End-to-end `HashlineServer::dispatch` bench on a realistic 300-line file:
 /// the read path split into cold (snapshot-cache miss per iteration) and warm
-/// (resident snapshot) states, plus a valid single-op v2 edit. Every body
+/// (resident snapshot) states, plus a valid single-op edit. Every body
 /// asserts tool success. Reset-dependent benches use
 /// `BatchSize::PerIteration` because batched setup runs all resets before the
 /// first timed call, which would let later iterations observe the previous
@@ -1083,7 +1083,7 @@ fn bench_dispatch(c: &mut Criterion) {
         );
     });
 
-    let edit_args = v2_replace_args(&content, "sample.rs", &[150]);
+    let edit_args = replace_args(&content, "sample.rs", &[150]);
     group.bench_function("edit_single_op_300_lines", |b| {
         b.to_async(&rt).iter_batched(
             || std::fs::write(&file_path, &content).expect("reset dispatch fixture"),
@@ -1466,10 +1466,10 @@ fn bench_phase2_offsets(c: &mut Criterion) {
 /// file via the cursor returned by page 1 — the pagination-cost bench the
 /// tree previously lacked. Cold state is forced by evicting the fixture from
 /// the process snapshot cache before every timed iteration.
-fn bench_v2_read(c: &mut Criterion) {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime for v2 read bench");
+fn bench_wired_read(c: &mut Criterion) {
+    let rt = tokio::runtime::Runtime::new().expect("tokio runtime for wired read bench");
 
-    let tmp = tempfile::TempDir::new().expect("tempdir for v2 read bench");
+    let tmp = tempfile::TempDir::new().expect("tempdir for wired read bench");
     let server = HashlineServer::new(tmp.path().to_path_buf(), SchemeConfig::default())
         .expect("server construction");
 
@@ -1484,7 +1484,7 @@ fn bench_v2_read(c: &mut Criterion) {
     let content_50k = generate_corpus(50_000, 0x50C0_5001);
     std::fs::write(tmp.path().join("fifty_k.rs"), &content_50k).expect("write 50k fixture");
 
-    let mut group = c.benchmark_group("v2_read");
+    let mut group = c.benchmark_group("wired_read");
     group.sample_size(20);
     group.measurement_time(Duration::from_secs(5));
 
@@ -1509,7 +1509,7 @@ fn bench_v2_read(c: &mut Criterion) {
         pages
     });
     // A terminated file has one trailing empty logical line, so 10k physical
-    // lines are 10,001 v2 logical lines -> six pages, not five.
+    // lines are 10,001 logical lines -> six pages, not five.
     let logical_lines = memchr_iter(b'\n', content_10k.as_bytes()).count() as u64 + 1;
     let expected_pages = logical_lines.div_ceil(2_000);
     assert_eq!(
@@ -1540,7 +1540,7 @@ fn bench_v2_read(c: &mut Criterion) {
             .await
             .expect("read dispatch");
         let text = assert_dispatch_success(&result);
-        assert!(text.starts_with("[hashline-v2 snapshot="), "{text}");
+        assert!(text.starts_with("[hashline snapshot="), "{text}");
     });
 
     group.bench_function("window_2k_of_100k_warm", |b| {
@@ -1606,10 +1606,10 @@ fn bench_v2_read(c: &mut Criterion) {
 /// per-iteration file reset. The `_full` suffix records that HEAD always
 /// fsyncs temp file and parent directory (durability=full); Wave 2 adds the
 /// durability=rename variants beside them.
-fn bench_v2_edit(c: &mut Criterion) {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime for v2 edit bench");
+fn bench_wired_edit(c: &mut Criterion) {
+    let rt = tokio::runtime::Runtime::new().expect("tokio runtime for wired edit bench");
 
-    let tmp = tempfile::TempDir::new().expect("tempdir for v2 edit bench");
+    let tmp = tempfile::TempDir::new().expect("tempdir for wired edit bench");
     let server = HashlineServer::new(tmp.path().to_path_buf(), SchemeConfig::default())
         .expect("server construction");
 
@@ -1617,9 +1617,9 @@ fn bench_v2_edit(c: &mut Criterion) {
     let file_path = tmp.path().join("editable.rs");
     std::fs::write(&file_path, &content).expect("write editable fixture");
 
-    let single_args = v2_replace_args(&content, "editable.rs", &[25_000]);
+    let single_args = replace_args(&content, "editable.rs", &[25_000]);
     let batch_lines: Vec<u64> = (1..=8).map(|op| op * 6_000).collect();
-    let batch_args = v2_replace_args(&content, "editable.rs", &batch_lines);
+    let batch_args = replace_args(&content, "editable.rs", &batch_lines);
 
     let single_request: EditRequest =
         serde_json::from_value(single_args.clone()).expect("single edit request deserializes");
@@ -1629,7 +1629,7 @@ fn bench_v2_edit(c: &mut Criterion) {
         .expect("editable snapshot")
         .id();
 
-    let mut group = c.benchmark_group("v2_edit");
+    let mut group = c.benchmark_group("wired_edit");
     group.sample_size(20);
     group.measurement_time(Duration::from_secs(5));
 
@@ -1700,7 +1700,7 @@ fn bench_v2_edit(c: &mut Criterion) {
     std::fs::write(&file_path, &content).expect("reset editable fixture");
     let mut stale_source = content.clone();
     stale_source.push_str("stale marker\n");
-    let stale_args = v2_replace_args(&stale_source, "editable.rs", &[25_000]);
+    let stale_args = replace_args(&stale_source, "editable.rs", &[25_000]);
     group.bench_function("conflict_50k", |b| {
         b.to_async(&rt).iter(|| {
             let args = stale_args.clone();
@@ -1725,10 +1725,10 @@ fn bench_v2_edit(c: &mut Criterion) {
 /// matches, capped at the protocol maximum. Setup asserts the AC8/AC24
 /// contract once (exactly `max_matches` rendered match lines plus the
 /// truncated summary); every timed iteration re-asserts the summary suffix.
-fn bench_v2_grep(c: &mut Criterion) {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime for v2 grep bench");
+fn bench_wired_grep(c: &mut Criterion) {
+    let rt = tokio::runtime::Runtime::new().expect("tokio runtime for wired grep bench");
 
-    let tmp = tempfile::TempDir::new().expect("tempdir for v2 grep bench");
+    let tmp = tempfile::TempDir::new().expect("tempdir for wired grep bench");
     let server = HashlineServer::new(tmp.path().to_path_buf(), SchemeConfig::default())
         .expect("server construction");
 
@@ -1753,13 +1753,13 @@ fn bench_v2_grep(c: &mut Criterion) {
         let rendered = count_grep_match_lines(text);
         let summary = &text[text.rfind('\n').map_or(0, |index| index + 1)..];
         assert!(
-            summary.starts_with(&format!("[hashline-v2 matches={rendered} ")),
+            summary.starts_with(&format!("[hashline matches={rendered} ")),
             "summary counter must equal rendered match lines: rendered={rendered} {summary}"
         );
         summary.to_owned()
     });
 
-    let mut group = c.benchmark_group("v2_grep");
+    let mut group = c.benchmark_group("wired_grep");
     group.sample_size(20);
     group.measurement_time(Duration::from_secs(5));
 
@@ -1790,13 +1790,13 @@ criterion_group!(
     bench_grep_large_file,
     bench_index_partial,
     bench_hash_matrix,
-    bench_phase0_v2_pairs,
+    bench_phase0_pairs,
     bench_phase2_snapshot,
     bench_phase2_version_matrix,
     bench_phase2_offsets,
     bench_dispatch,
-    bench_v2_read,
-    bench_v2_edit,
-    bench_v2_grep,
+    bench_wired_read,
+    bench_wired_edit,
+    bench_wired_grep,
 );
 criterion_main!(benches);

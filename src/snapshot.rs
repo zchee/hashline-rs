@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-//! Immutable, strictly validated v2 file snapshots.
+//! Immutable, strictly validated file snapshots.
 //!
 //! Snapshot construction owns exact UTF-8 bytes, derives one process-scoped
 //! 128-bit identity, and counts logical lines without building a line index.
@@ -38,7 +38,7 @@ use crate::{
 const READ_BUFFER_BYTES: usize = 64 * 1024;
 const MAX_READ_ATTEMPTS: u8 = 2;
 
-/// Owned text that has passed the complete v2 file policy.
+/// Owned text that has passed the complete protocol file policy.
 ///
 /// Construction rejects oversized input, NUL bytes, and invalid UTF-8 before
 /// the text can enter a [`Snapshot`]. The inner `String` is private so cached
@@ -52,7 +52,7 @@ impl ValidatedText {
     /// # Errors
     ///
     /// Returns [`ContractError::FileTooLarge`], [`ContractError::NulFile`], or
-    /// [`ContractError::InvalidUtf8`] when the bytes violate the v2 text
+    /// [`ContractError::InvalidUtf8`] when the bytes violate the protocol text
     /// contract.
     pub fn try_from_bytes(bytes: Vec<u8>) -> Result<Self, ContractError> {
         let byte_len = u64::try_from(bytes.len())
@@ -409,7 +409,7 @@ pub enum SnapshotError {
         #[source]
         source: io::Error,
     },
-    /// Complete bytes violated the frozen v2 text policy.
+    /// Complete bytes violated the frozen text policy.
     #[error(transparent)]
     Contract(#[from] ContractError),
     /// A file changed during both permitted read attempts.
@@ -457,7 +457,7 @@ impl Snapshot {
     ///
     /// # Errors
     ///
-    /// Returns a v2 text-policy, line-count, or address-size error.
+    /// Returns a text-policy, line-count, or address-size error.
     pub fn from_bytes(bytes: Vec<u8>) -> Result<Self, SnapshotError> {
         let text = ValidatedText::try_from_bytes(bytes)?;
         Self::from_validated(text)
@@ -484,7 +484,7 @@ impl Snapshot {
     ///
     /// # Errors
     ///
-    /// Returns an I/O or v2 text-policy error, or
+    /// Returns an I/O or text-policy error, or
     /// [`SnapshotError::ConcurrentModification`] when both attempts observe a
     /// metadata change.
     pub fn load(path: impl AsRef<Path>) -> Result<Self, SnapshotError> {

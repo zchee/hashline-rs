@@ -281,7 +281,7 @@ async fn read_all_pages(workspace: &Workspace, path: &str) -> Result<usize> {
             .text
             .rfind('\n')
             .map_or(outcome.text.as_str(), |index| &outcome.text[index + 1..]);
-        let Some(rest) = footer.strip_prefix("[hashline-v2 next snapshot=") else {
+        let Some(rest) = footer.strip_prefix("[hashline next snapshot=") else {
             return Ok(total);
         };
         let (snapshot, rest) = rest
@@ -298,7 +298,7 @@ async fn read_all_pages(workspace: &Workspace, path: &str) -> Result<usize> {
     }
 }
 
-/// One-line wired v2 replace of line 25,000 against the exact corpus snapshot.
+/// One-line wired replace of line 25,000 against the exact corpus snapshot.
 fn single_replace_request(content: &str, path: &str) -> Result<EditRequest> {
     let snapshot = Snapshot::from_bytes(content.as_bytes().to_vec())
         .context("build resource corpus snapshot")?
@@ -357,24 +357,24 @@ fn measure_allocation<T>(operation: impl FnOnce() -> T) -> (T, AllocationStats) 
 
 fn measure_named_scenario(scenario: &str, optional_path: Option<&Path>) -> Result<Value> {
     match scenario {
-        "v2_read_full_10k" => {
-            let directory = tempfile::TempDir::new().context("create v2 read fixture root")?;
+        "wired_read_full_10k" => {
+            let directory = tempfile::TempDir::new().context("create wired read fixture root")?;
             std::fs::write(
                 directory.path().join("corpus.rs"),
                 phase0_workloads::generate_corpus(10_000, 0xA11C_E000),
             )
-            .context("write v2 read corpus")?;
+            .context("write wired read corpus")?;
             let workspace = Workspace::new(directory.path().to_path_buf(), false);
             let runtime = probe_runtime()?;
             let (total, allocations) =
                 measure_allocation(|| runtime.block_on(read_all_pages(&workspace, "corpus.rs")));
             Ok(resource_json(scenario, total?, allocations))
         }
-        "v2_edit_single_op_50k" => {
-            let directory = tempfile::TempDir::new().context("create v2 edit fixture root")?;
+        "wired_edit_single_op_50k" => {
+            let directory = tempfile::TempDir::new().context("create wired edit fixture root")?;
             let content = phase0_workloads::generate_corpus(50_000, 0xED17_0001);
             std::fs::write(directory.path().join("corpus.rs"), &content)
-                .context("write v2 edit corpus")?;
+                .context("write wired edit corpus")?;
             let workspace = Workspace::new(directory.path().to_path_buf(), false);
             let request = single_replace_request(&content, "corpus.rs")?;
             let runtime = probe_runtime()?;
