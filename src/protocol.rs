@@ -18,6 +18,7 @@ use std::{
     borrow::Cow,
     fmt::{self, Display, Write as _},
     str::FromStr,
+    time::SystemTime,
 };
 
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
@@ -36,6 +37,9 @@ pub const MAX_PAGE_LINES: u16 = 2_000;
 /// Default and maximum number of grep match lines.
 pub const MAX_GREP_MATCHES: u16 = 200;
 
+/// Default and maximum number of glob result paths.
+pub const MAX_GLOB_RESULTS: u16 = 1_000;
+
 /// Maximum context distance accepted by grep.
 pub const MAX_CONTEXT_LINES: u16 = 2_000;
 
@@ -49,15 +53,17 @@ pub const MAX_FILE_BYTES: u64 = i64::MAX as u64;
 pub const CONFLICT_CONTEXT_LINES: usize = 5;
 
 const SNAPSHOT_CONFLICT_MESSAGE: &str = "the file no longer matches the requested snapshot";
+const ALREADY_EXISTS_MESSAGE: &str = "the destination file already exists";
 
 /// Frozen semantic rules covered by the Phase 1 exit gate.
-pub const SEMANTIC_RULE_IDS: [&str; 22] = [
+pub const SEMANTIC_RULE_IDS: [&str; 24] = [
     "R001", "R002", "R003", "R004", "R005", "R006", "R007", "R008", "R009", "R010", "R011", "R012",
-    "R013", "R014", "R015", "R016", "R017", "R018", "R019", "R020", "R021", "R022",
+    "R013", "R014", "R015", "R016", "R017", "R018", "R019", "R020", "R021", "R022", "R023", "R024",
 ];
 
 const SNAPSHOT_ID_PATTERN: &str = "^[0-9a-f]{32}$";
 const POSITION_PATTERN: &str = "^[1-9][0-9]*@(0|[1-9][0-9]*)$";
+const WRITE_EXPECT_PATTERN: &str = "^(absent|[0-9a-f]{32})$";
 
 /// An opaque, process-scoped identity for one exact file byte sequence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -596,6 +602,121 @@ impl EditRequest {
     }
 }
 
+/// The destination precondition named by one write request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum WriteExpect {
+    /// The destination must not exist; the write creates it.
+    Absent,
+    /// The destination bytes must currently have this exact identity.
+    Snapshot(SnapshotId),
+}
+
+impl Display for WriteExpect {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Absent => formatter.write_str("absent"),
+            Self::Snapshot(snapshot) => Display::fmt(snapshot, formatter),
+        }
+    }
+}
+
+/// Error returned when parsing a write destination precondition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum WriteExpectParseError {
+    /// The token is neither the literal absent nor a canonical snapshot ID.
+    #[error("write expect must be \"absent\" or 32 lowercase hexadecimal characters")]
+    Invalid,
+}
+
+impl FromStr for WriteExpect {
+    type Err = WriteExpectParseError;
+
+    fn from_str(input: &str) -> Result<Self, Self::Err> {
+        if input == "absent" {
+            return Ok(Self::Absent);
+        }
+        input
+            .parse()
+            .map(Self::Snapshot)
+            .map_err(|_| WriteExpectParseError::Invalid)
+    }
+}
+
+impl Serialize for WriteExpect {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for WriteExpect {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        String::deserialize(deserializer)?
+            .parse()
+            .map_err(serde::de::Error::custom)
+    }
+}
+
+impl JsonSchema for WriteExpect {
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn schema_name() -> Cow<'static, str> {
+        "WriteExpect".into()
+    }
+
+    fn schema_id() -> Cow<'static, str> {
+        concat!(module_path!(), "::WriteExpect").into()
+    }
+
+    fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
+        json_schema!({
+            "type": "string",
+            "pattern": WRITE_EXPECT_PATTERN,
+            "minLength": 6,
+            "maxLength": SNAPSHOT_ID_HEX_LEN,
+        })
+    }
+}
+
+/// Frozen input schema for `write`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WriteRequest {
+    /// Target file path.
+    pub file_path: String,
+    /// Complete new file content; NUL is forbidden.
+    pub content: String,
+    /// Destination precondition: the literal absent or an exact snapshot.
+    pub expect: WriteExpect,
+}
+
+impl WriteRequest {
+    /// Validate content shape before any file work begins.
+    ///
+    /// Destination-state validation requires current file bytes and is
+    /// performed by validate_reference_write or its optimized equivalent.
+    ///
+    /// # Errors
+    ///
+    /// Returns a contract error for NUL content or content above the size cap.
+    pub fn validate(&self) -> Result<(), ContractError> {
+        if let Some(byte) = self.content.bytes().position(|byte| byte == 0) {
+            return Err(ContractError::NulWriteContent { byte });
+        }
+        validate_file_size(
+            u64::try_from(self.content.len())
+                .map_err(|_| ContractError::FileTooLarge { bytes: u64::MAX })?,
+        )
+    }
+}
+
 /// Whether a rendered grep line is a match or context.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -653,6 +774,81 @@ impl GrepSummary {
             self.matches, self.truncated, self.skipped_binary, self.skipped_invalid_utf8
         )
     }
+}
+
+const fn default_max_results() -> u16 {
+    MAX_GLOB_RESULTS
+}
+
+/// Frozen input schema for `glob`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GlobRequest {
+    /// Glob pattern matched case-sensitively against workspace-relative paths.
+    pub pattern: String,
+    /// Directory the walk starts from; absent means the workspace root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// Exact global result cap.
+    #[serde(default = "default_max_results")]
+    #[schemars(default = "default_max_results", range(min = 1, max = 1_000))]
+    pub max_results: u16,
+}
+
+impl GlobRequest {
+    /// Validate the result cap before traversal or pattern compilation.
+    ///
+    /// # Errors
+    ///
+    /// Returns InvalidGlobLimit unless the cap is in the fixed range.
+    pub fn validate(&self) -> Result<(), ContractError> {
+        if self.max_results == 0 || self.max_results > MAX_GLOB_RESULTS {
+            return Err(ContractError::InvalidGlobLimit {
+                limit: self.max_results,
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Terminal counters emitted after a glob response.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GlobSummary {
+    /// Number of reported file paths.
+    pub files: u64,
+    /// Whether the exact global result cap stopped reporting.
+    pub truncated: bool,
+}
+
+impl GlobSummary {
+    /// Render the exact terminal glob summary.
+    #[must_use]
+    pub fn render(self) -> String {
+        format!(
+            "[hashline files={} truncated={}]",
+            self.files, self.truncated
+        )
+    }
+}
+
+/// One discovered file before deterministic glob ordering.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GlobEntry {
+    /// Workspace-relative path.
+    pub path: String,
+    /// Last modification time; entries without one use the epoch.
+    pub modified: SystemTime,
+}
+
+/// Order glob entries newest-first with an ascending bytewise path tie-break.
+pub fn sort_reference_glob_entries(entries: &mut [GlobEntry]) {
+    entries.sort_by(|left, right| {
+        right
+            .modified
+            .cmp(&left.modified)
+            .then_with(|| left.path.as_bytes().cmp(right.path.as_bytes()))
+    });
 }
 
 /// Whether grep was explicitly given one file or is traversing a tree.
@@ -749,6 +945,8 @@ pub enum ErrorCode {
     RootEscape,
     /// Current exact bytes do not match the requested snapshot.
     SnapshotConflict,
+    /// Exclusive-create destination already exists.
+    AlreadyExists,
     /// Grep pattern cannot compile.
     InvalidPattern,
     /// Other file-system failure.
@@ -757,7 +955,7 @@ pub enum ErrorCode {
 
 impl ErrorCode {
     /// Complete stable tool-error code set.
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 16] = [
         Self::InvalidRequest,
         Self::InvalidSnapshot,
         Self::InvalidPosition,
@@ -771,6 +969,7 @@ impl ErrorCode {
         Self::PermissionDenied,
         Self::RootEscape,
         Self::SnapshotConflict,
+        Self::AlreadyExists,
         Self::InvalidPattern,
         Self::Io,
     ];
@@ -780,7 +979,11 @@ impl ErrorCode {
     pub const fn retryable(self) -> bool {
         matches!(
             self,
-            Self::NotFound | Self::PermissionDenied | Self::SnapshotConflict | Self::Io
+            Self::NotFound
+                | Self::PermissionDenied
+                | Self::SnapshotConflict
+                | Self::AlreadyExists
+                | Self::Io
         )
     }
 }
@@ -792,6 +995,16 @@ pub struct SnapshotConflict {
     /// Snapshot named by the failed request.
     pub requested_snapshot: SnapshotId,
     /// Fresh metadata for current exact bytes.
+    pub current_header: SnapshotHeader,
+    /// At most five current context lines.
+    pub context: Vec<ContextLine>,
+}
+
+/// Typed data attached only to an already-exists failure.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExistingFile {
+    /// Fresh metadata for the current destination bytes.
     pub current_header: SnapshotHeader,
     /// At most five current context lines.
     pub context: Vec<ContextLine>,
@@ -810,6 +1023,9 @@ pub struct ProtocolError {
     /// Present only for snapshot_conflict.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conflict: Option<Box<SnapshotConflict>>,
+    /// Present only for already_exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub existing: Option<Box<ExistingFile>>,
 }
 
 impl ProtocolError {
@@ -821,6 +1037,7 @@ impl ProtocolError {
             message,
             retryable: code.retryable(),
             conflict: None,
+            existing: None,
         }
     }
 
@@ -846,6 +1063,34 @@ impl ProtocolError {
             retryable: true,
             conflict: Some(Box::new(SnapshotConflict {
                 requested_snapshot,
+                current_header,
+                context,
+            })),
+            existing: None,
+        })
+    }
+
+    /// Construct a fully populated already-exists failure.
+    ///
+    /// # Errors
+    ///
+    /// Returns TooManyConflictLines when context exceeds the fixed cap.
+    pub fn already_exists(
+        current_header: SnapshotHeader,
+        context: Vec<ContextLine>,
+        message: String,
+    ) -> Result<Self, ContractError> {
+        if context.len() > CONFLICT_CONTEXT_LINES {
+            return Err(ContractError::TooManyConflictLines {
+                lines: context.len(),
+            });
+        }
+        Ok(Self {
+            code: ErrorCode::AlreadyExists,
+            message,
+            retryable: true,
+            conflict: None,
+            existing: Some(Box::new(ExistingFile {
                 current_header,
                 context,
             })),
@@ -925,6 +1170,39 @@ impl EditSuccess {
     }
 }
 
+/// Structured content returned after persistence of a successful write.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WriteSuccess {
+    /// Fixed protocol tag.
+    pub protocol: ProtocolTag,
+    /// Written path.
+    pub path: String,
+    /// Snapshot of successfully persisted destination bytes.
+    pub snapshot: SnapshotId,
+    /// Persisted byte count.
+    pub bytes: u64,
+    /// Persisted logical line count.
+    pub lines: u64,
+    /// Whether the write created the destination.
+    pub created: bool,
+}
+
+impl WriteSuccess {
+    /// Construct a successful persisted-write response.
+    #[must_use]
+    pub fn new(path: String, snapshot: SnapshotId, bytes: u64, lines: u64, created: bool) -> Self {
+        Self {
+            protocol: ProtocolTag::Hashline,
+            path,
+            snapshot,
+            bytes,
+            lines,
+            created,
+        }
+    }
+}
+
 /// Errors produced by request validation and the slow reference model.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ContractError {
@@ -946,6 +1224,12 @@ pub enum ContractError {
         /// Rejected value.
         limit: u16,
     },
+    /// Glob result cap is outside the normative range.
+    #[error("glob max_results must be in 1..={MAX_GLOB_RESULTS}, got {limit}")]
+    InvalidGlobLimit {
+        /// Rejected value.
+        limit: u16,
+    },
     /// Edit batch is empty.
     #[error("edit batch must contain at least one operation")]
     EmptyEditBatch,
@@ -961,6 +1245,12 @@ pub enum ContractError {
         /// Request-order operation index.
         index: usize,
         /// Byte offset inside replacement content.
+        byte: usize,
+    },
+    /// Write content contains NUL.
+    #[error("write content contains NUL at byte {byte}")]
+    NulWriteContent {
+        /// Byte offset inside write content.
         byte: usize,
     },
     /// File contains NUL.
@@ -1025,11 +1315,14 @@ impl ContractError {
             Self::InvalidReadLimit { .. }
             | Self::InvalidGrepLimit { .. }
             | Self::InvalidContextLimit { .. }
+            | Self::InvalidGlobLimit { .. }
             | Self::EmptyEditBatch
             | Self::TooManyEdits { .. }
             | Self::InvalidLineCount
             | Self::TooManyConflictLines { .. } => ErrorCode::InvalidRequest,
-            Self::NulReplacement { .. } | Self::NulFile { .. } => ErrorCode::BinaryFile,
+            Self::NulReplacement { .. } | Self::NulWriteContent { .. } | Self::NulFile { .. } => {
+                ErrorCode::BinaryFile
+            }
             Self::InvalidUtf8 { .. } => ErrorCode::InvalidUtf8,
             Self::FileTooLarge { .. } | Self::OutputLengthOverflow => ErrorCode::FileTooLarge,
             Self::InvalidPosition { .. } => ErrorCode::InvalidPosition,
@@ -1412,9 +1705,64 @@ pub fn validate_reference_cursor(
     Ok(cursor.next)
 }
 
+/// Decide one write request against the current destination state.
+///
+/// current carries freshly read exact destination bytes and their identity,
+/// or None when the destination does not exist. On success the returned flag
+/// is whether the write creates the destination; the bytes to persist are
+/// always exactly the request content.
+///
+/// # Errors
+///
+/// Returns already_exists, not_found, or a structured snapshot conflict per
+/// R023, or a stable content error for invalid request shape.
+pub fn validate_reference_write(
+    current: Option<(&[u8], SnapshotId)>,
+    request: &WriteRequest,
+) -> Result<bool, ProtocolError> {
+    request.validate().map_err(ProtocolError::from)?;
+    match (request.expect, current) {
+        (WriteExpect::Absent, None) => Ok(true),
+        (WriteExpect::Absent, Some((bytes, snapshot))) => {
+            let header = reference_header(request.file_path.clone(), snapshot, bytes)
+                .map_err(ProtocolError::from)?;
+            let context = reference_context(bytes, 1).map_err(ProtocolError::from)?;
+            Err(
+                ProtocolError::already_exists(header, context, ALREADY_EXISTS_MESSAGE.to_owned())
+                    .map_err(ProtocolError::from)?,
+            )
+        }
+        (WriteExpect::Snapshot(_), None) => Err(ProtocolError::new(
+            ErrorCode::NotFound,
+            format!(
+                "no file exists at {}; use expect \"absent\" to create it",
+                request.file_path
+            ),
+        )),
+        (WriteExpect::Snapshot(requested), Some((bytes, current_snapshot))) => {
+            if requested != current_snapshot {
+                let header = reference_header(request.file_path.clone(), current_snapshot, bytes)
+                    .map_err(ProtocolError::from)?;
+                let context = reference_context(bytes, 1).map_err(ProtocolError::from)?;
+                return Err(ProtocolError::snapshot_conflict(
+                    requested,
+                    header,
+                    context,
+                    SNAPSHOT_CONFLICT_MESSAGE.to_owned(),
+                )
+                .map_err(ProtocolError::from)?);
+            }
+            Ok(false)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
+    use std::{
+        collections::BTreeSet,
+        time::{Duration, UNIX_EPOCH},
+    };
 
     use schemars::schema_for;
     use serde_json::{Value, json};
@@ -1999,6 +2347,7 @@ mod tests {
                 json!("permission_denied"),
                 json!("root_escape"),
                 json!("snapshot_conflict"),
+                json!("already_exists"),
                 json!("invalid_pattern"),
                 json!("io"),
             ]
@@ -2012,6 +2361,7 @@ mod tests {
                 ErrorCode::NotFound,
                 ErrorCode::PermissionDenied,
                 ErrorCode::SnapshotConflict,
+                ErrorCode::AlreadyExists,
                 ErrorCode::Io,
             ]
         );
@@ -2208,6 +2558,197 @@ mod tests {
     }
 
     #[test]
+    fn r023_write_expect_grammar_and_reference_decisions() {
+        for (input, expected) in [
+            ("absent", WriteExpect::Absent),
+            (
+                "00000000000000000000000000000001",
+                WriteExpect::Snapshot(SnapshotId::from_u128(1)),
+            ),
+        ] {
+            assert_eq!(input.parse::<WriteExpect>(), Ok(expected), "{input:?}");
+            assert_eq!(expected.to_string(), input);
+        }
+        for invalid in [
+            "",
+            "Absent",
+            "ABSENT",
+            " absent",
+            "absent ",
+            "0000000000000000000000000000001",
+            "000000000000000000000000000000001",
+            "7D9C3AF08E1B4F6C9A2D1137F68582A1",
+        ] {
+            assert!(invalid.parse::<WriteExpect>().is_err(), "{invalid:?}");
+        }
+
+        let create: WriteRequest = serde_json::from_value(json!({
+            "file_path": "src/new.rs",
+            "content": "mod fresh;\n",
+            "expect": "absent"
+        }))
+        .expect("canonical create request");
+        create.validate().expect("NUL-free content");
+        assert_eq!(
+            serde_json::to_value(&create).expect("serialize create")["expect"],
+            json!("absent")
+        );
+        assert!(
+            serde_json::from_value::<WriteRequest>(json!({
+                "file_path": "src/new.rs",
+                "content": "x",
+                "expect": "absent",
+                "force": true
+            }))
+            .is_err()
+        );
+        let nul = WriteRequest {
+            file_path: "x".to_owned(),
+            content: "bad\0content".to_owned(),
+            expect: WriteExpect::Absent,
+        };
+        assert!(matches!(
+            nul.validate(),
+            Err(ContractError::NulWriteContent { byte: 3 })
+        ));
+
+        assert_eq!(validate_reference_write(None, &create), Ok(true));
+
+        let current = b"mod old;\nmod other;\n";
+        let current_snapshot = test_snapshot(0x71, current);
+        let error = validate_reference_write(Some((current, current_snapshot)), &create)
+            .expect_err("an existing destination rejects an exclusive create");
+        assert_eq!(error.code, ErrorCode::AlreadyExists);
+        assert!(error.retryable);
+        assert!(error.conflict.is_none());
+        let existing = error.existing.clone().expect("already-exists payload");
+        assert_eq!(existing.current_header.snapshot, current_snapshot);
+        assert_eq!(existing.current_header.path, "src/new.rs");
+        assert_eq!(
+            existing.context.first().map(|line| line.position.line()),
+            Some(1)
+        );
+        let envelope = serde_json::to_value(ErrorResponse::new(error)).expect("serialize envelope");
+        assert_eq!(envelope["error"]["code"], "already_exists");
+        assert!(envelope["error"].get("conflict").is_none());
+        assert!(envelope["error"]["existing"]["current_header"].is_object());
+
+        let overwrite = WriteRequest {
+            file_path: "src/new.rs".to_owned(),
+            content: "mod newer;\n".to_owned(),
+            expect: WriteExpect::Snapshot(current_snapshot),
+        };
+        assert_eq!(
+            serde_json::to_value(&overwrite).expect("serialize overwrite")["expect"],
+            json!(current_snapshot.to_string())
+        );
+        assert_eq!(
+            validate_reference_write(Some((current, current_snapshot)), &overwrite),
+            Ok(false)
+        );
+        assert_eq!(
+            validate_reference_write(None, &overwrite)
+                .expect_err("an overwrite never creates")
+                .code,
+            ErrorCode::NotFound
+        );
+        let stale =
+            validate_reference_write(Some((current, test_snapshot(0x72, current))), &overwrite)
+                .expect_err("a stale overwrite conflicts");
+        assert_eq!(stale.code, ErrorCode::SnapshotConflict);
+        assert_eq!(
+            stale.conflict.expect("conflict payload").requested_snapshot,
+            current_snapshot
+        );
+
+        let success = WriteSuccess::new("src/new.rs".to_owned(), current_snapshot, 11, 2, true);
+        let value = serde_json::to_value(success).expect("serialize write success");
+        let keys = value
+            .as_object()
+            .expect("success is an object")
+            .keys()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            keys,
+            ["bytes", "created", "lines", "path", "protocol", "snapshot"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect()
+        );
+    }
+
+    #[test]
+    fn r024_glob_request_order_and_summary_are_deterministic() {
+        let defaults: GlobRequest =
+            serde_json::from_value(json!({"pattern": "**/*.rs"})).expect("glob defaults");
+        assert_eq!(defaults.max_results, MAX_GLOB_RESULTS);
+        assert_eq!(defaults.path, None);
+        defaults.validate().expect("default glob request");
+
+        for limit in [0_u16, 1_001] {
+            let request: GlobRequest = serde_json::from_value(json!({
+                "pattern": "*",
+                "max_results": limit
+            }))
+            .expect("numeric shape deserializes before semantic validation");
+            assert!(matches!(
+                request.validate(),
+                Err(ContractError::InvalidGlobLimit { limit: rejected }) if rejected == limit
+            ));
+        }
+        assert!(
+            serde_json::from_value::<GlobRequest>(json!({
+                "pattern": "*",
+                "recursive": true
+            }))
+            .is_err()
+        );
+
+        let newer = UNIX_EPOCH + Duration::from_secs(20);
+        let older = UNIX_EPOCH + Duration::from_secs(10);
+        let mut entries = vec![
+            GlobEntry {
+                path: "src/z.rs".to_owned(),
+                modified: older,
+            },
+            GlobEntry {
+                path: "src/b.rs".to_owned(),
+                modified: newer,
+            },
+            GlobEntry {
+                path: "src/A.rs".to_owned(),
+                modified: newer,
+            },
+            GlobEntry {
+                path: "src/a.rs".to_owned(),
+                modified: newer,
+            },
+        ];
+        let mut reversed = entries.clone();
+        reversed.reverse();
+        sort_reference_glob_entries(&mut entries);
+        sort_reference_glob_entries(&mut reversed);
+        assert_eq!(entries, reversed, "ordering is independent of input order");
+        assert_eq!(
+            entries
+                .iter()
+                .map(|entry| entry.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["src/A.rs", "src/a.rs", "src/b.rs", "src/z.rs"]
+        );
+
+        assert_eq!(
+            GlobSummary {
+                files: 4,
+                truncated: true
+            }
+            .render(),
+            "[hashline files=4 truncated=true]"
+        );
+    }
+
+    #[test]
     fn randomized_utf8_crlf_ranges_match_direct_byte_splice() {
         const BODIES: [&str; 7] = [
             "",
@@ -2315,6 +2856,8 @@ mod tests {
             serde_json::to_value(schema_for!(ReadRequest)).expect("read schema"),
             serde_json::to_value(schema_for!(GrepRequest)).expect("grep schema"),
             serde_json::to_value(schema_for!(EditRequest)).expect("edit schema"),
+            serde_json::to_value(schema_for!(WriteRequest)).expect("write schema"),
+            serde_json::to_value(schema_for!(GlobRequest)).expect("glob schema"),
             serde_json::to_value(schema_for!(ErrorResponse)).expect("error schema"),
         ] {
             assert_eq!(schema["additionalProperties"], Value::Bool(false));

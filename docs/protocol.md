@@ -361,11 +361,13 @@ The complete, stable code set is:
 | `permission_denied` | Access was denied | true |
 | `root_escape` | Restricted workspace boundary was crossed | false |
 | `snapshot_conflict` | Current exact bytes have another identity | true |
+| `already_exists` | Exclusive-create destination already exists | true |
 | `invalid_pattern` | Grep pattern cannot compile | false |
 | `io` | Other file-system failure, including failure to obtain stable bytes after one concurrent-read retry | true |
 
-`conflict` is present only for `snapshot_conflict`. Error messages are
-diagnostic, while `code` and typed fields carry semantics.
+`conflict` is present only for `snapshot_conflict`, and `existing` — the
+current header plus at most five context lines — only for `already_exists`.
+Error messages are diagnostic, while `code` and typed fields carry semantics.
 
 ### R018: MCP error boundary
 
@@ -421,6 +423,89 @@ Edit accepts only `replace { start, end, content }`. It rejects the legacy
 arrays, and bare-object edit shorthands. Read rejects `offset`. No source,
 CLI, schema, wire, anchor, or persisted-reference compatibility is promised.
 
+### R023: Versioned write
+
+The exact write input is:
+
+```json
+{
+  "file_path": "src/new.rs",
+  "content": "mod fresh;\n",
+  "expect": "absent"
+}
+```
+
+`file_path` and `content` are required. `expect` is required and is either
+the literal string `absent` or one canonical R001 snapshot ID. Unknown
+properties are invalid. There is no unconditional overwrite: every write
+names the destination state it was decided against, exactly as R005 edits
+name their snapshot. Mutation tools name their target `file_path`; read-only
+tools use `path`.
+
+`content` is the complete new file byte sequence, decoded from the JSON
+string as exact UTF-8. R007 applies: NUL anywhere in the content is
+`binary_file`. R010 applies to the decoded length. The server never appends,
+strips, or normalizes a trailing newline; an empty `content` creates the
+R009 empty-file model.
+
+`expect: "absent"` is an exclusive create. When the destination already
+exists, the write fails with `already_exists` and leaves the destination
+untouched. The structured error carries an `existing` payload with the
+current R002 header and at most five current context lines from the start of
+the file, mirroring the R011 recovery shape: the model can immediately read,
+edit, or overwrite against the returned identity. A destination that exists
+but is unreadable or non-text returns its specific file/text error because no
+truthful header can be supplied. Missing parent directories are created;
+under `--restrict` a destination or parent outside the workspace root is
+`root_escape` before any directory is created.
+
+`expect: <snapshot>` is a versioned overwrite. The freshly computed identity
+of the current destination bytes must equal the named snapshot; a mismatch is
+an R011 `snapshot_conflict` with the standard conflict payload and context
+centered on line one. A missing destination is `not_found` — an overwrite
+never creates, and `absent` is never satisfied by an existing file, so the
+two forms cannot drift into each other under retry.
+
+A successful write returns structured content with exactly: `protocol`,
+`path`, `snapshot`, `bytes`, `lines`, and `created`. R019 ordering applies
+verbatim: the response snapshot describes persisted destination bytes, and
+success is never published before persistence. Creates are exclusive at the
+filesystem level: two concurrent creates of one path produce exactly one
+success and one `already_exists`. The R019 residual TOCTOU window with a
+noncooperating external writer applies to versioned overwrites and is
+documented rather than hidden.
+
+### R024: Deterministic glob
+
+The exact glob input fields are `pattern`, `path`, and `max_results`.
+Unknown properties are invalid. `pattern` is required and is matched
+case-sensitively against workspace-relative file paths. `path` defaults to
+null and names the directory the walk starts from. `max_results` defaults to
+and cannot exceed 1000.
+
+The walk shares the R015/R016 traversal stance: `.gitignore` is respected,
+hidden entries are skipped, and symbolic links are not followed. Glob reports
+paths only — file bytes are never read, so text validation and binary
+skipping do not apply. Only regular files are reported. A pattern that cannot
+compile is `invalid_pattern`; a `path` that does not exist is `not_found`.
+
+Output is one workspace-relative path per line, ordered by last modification
+time descending with ties broken by ascending bytewise path comparison. An
+entry whose modification time cannot be read sorts as the epoch (oldest).
+When more than `max_results` paths match, the newest `max_results` under
+this same ordering are reported and `truncated` is true. The ordering is
+fully deterministic for a fixed set of path and modification-time pairs.
+
+The final summary is:
+
+```text
+[hashline files=<COUNT> truncated=<true|false>]
+```
+
+The count is the number of reported paths. The cap is exact; truncation is
+terminal and asks for a narrower pattern rather than a cursor, matching the
+R015 grep stance.
+
 ## 2. Canonical requests
 
 Read first page:
@@ -473,6 +558,36 @@ Grep:
   "before_context": 1,
   "after_context": 1,
   "max_matches": 200
+}
+```
+
+Write, creating a new file:
+
+```json
+{
+  "file_path": "src/new.rs",
+  "content": "mod fresh;\n",
+  "expect": "absent"
+}
+```
+
+Write, replacing a previously read file:
+
+```json
+{
+  "file_path": "src/lib.rs",
+  "content": "pub mod protocol;\n",
+  "expect": "7d9c3af08e1b4f6c9a2d1137f68582a1"
+}
+```
+
+Glob:
+
+```json
+{
+  "pattern": "**/*.rs",
+  "path": "src",
+  "max_results": 1000
 }
 ```
 
@@ -727,8 +842,9 @@ assert_eq!(
 ```rust
 use hashline::protocol::ErrorCode;
 
-assert_eq!(ErrorCode::ALL.len(), 15);
+assert_eq!(ErrorCode::ALL.len(), 16);
 assert!(ErrorCode::SnapshotConflict.retryable());
+assert!(ErrorCode::AlreadyExists.retryable());
 assert!(!ErrorCode::InvalidPosition.retryable());
 ```
 
@@ -836,4 +952,73 @@ assert!(serde_json::from_value::<EditRequest>(json!({
     "snapshot": "00000000000000000000000000000001",
     "edits": [{"op": "insert_after", "anchor": "0:", "content": "x"}]
 })).is_err());
+```
+
+### R023
+
+```rust
+use hashline::protocol::{
+    ErrorCode, SnapshotId, WriteExpect, WriteRequest, validate_reference_write,
+};
+
+let create = WriteRequest {
+    file_path: "src/new.rs".to_owned(),
+    content: "mod fresh;\n".to_owned(),
+    expect: "absent".parse()?,
+};
+assert_eq!(validate_reference_write(None, &create), Ok(true));
+
+let current = b"mod old;\n";
+let current_id = SnapshotId::from_u128(1);
+let error = validate_reference_write(Some((current, current_id)), &create).unwrap_err();
+assert_eq!(error.code, ErrorCode::AlreadyExists);
+assert!(error.retryable);
+assert_eq!(error.existing.unwrap().current_header.snapshot, current_id);
+
+let overwrite = WriteRequest {
+    file_path: "src/new.rs".to_owned(),
+    content: "mod newer;\n".to_owned(),
+    expect: WriteExpect::Snapshot(current_id),
+};
+assert_eq!(
+    validate_reference_write(Some((current, current_id)), &overwrite),
+    Ok(false)
+);
+assert_eq!(
+    validate_reference_write(Some((current, SnapshotId::from_u128(2))), &overwrite)
+        .unwrap_err()
+        .code,
+    ErrorCode::SnapshotConflict
+);
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+### R024
+
+```rust
+use std::time::{Duration, UNIX_EPOCH};
+
+use hashline::protocol::{
+    GlobEntry, GlobRequest, GlobSummary, MAX_GLOB_RESULTS, sort_reference_glob_entries,
+};
+
+let request: GlobRequest = serde_json::from_value(serde_json::json!({"pattern": "**/*.rs"}))?;
+assert_eq!(request.max_results, MAX_GLOB_RESULTS);
+request.validate()?;
+
+let newer = UNIX_EPOCH + Duration::from_secs(2);
+let older = UNIX_EPOCH + Duration::from_secs(1);
+let mut entries = vec![
+    GlobEntry { path: "src/b.rs".to_owned(), modified: older },
+    GlobEntry { path: "src/a.rs".to_owned(), modified: newer },
+    GlobEntry { path: "src/A.rs".to_owned(), modified: newer },
+];
+sort_reference_glob_entries(&mut entries);
+let paths = entries.iter().map(|entry| entry.path.as_str()).collect::<Vec<_>>();
+assert_eq!(paths, ["src/A.rs", "src/a.rs", "src/b.rs"]);
+assert_eq!(
+    GlobSummary { files: 3, truncated: false }.render(),
+    "[hashline files=3 truncated=false]"
+);
+# Ok::<(), Box<dyn std::error::Error>>(())
 ```
