@@ -27,7 +27,7 @@ use crate::{
         validate_reference_cursor,
     },
     render::render_snapshot_page,
-    snapshot::{Snapshot, SnapshotError},
+    snapshot::Snapshot,
     util::{
         ToolOutcome, Workspace, join_protocol_error, protocol_outcome, resolve_workspace_path,
         snapshot_protocol_error,
@@ -43,15 +43,6 @@ pub const MAX_LINES_READ: usize = crate::protocol::MAX_PAGE_LINES as usize;
 /// construction is panic-free (unlike the old partial FileIndex), so small
 /// files avoid the spawn_blocking hop.
 const BLOCKING_READ_BYTES: usize = 256 * 1024;
-
-fn render_loaded(
-    snapshot: &Snapshot,
-    display_path: &str,
-    start_line: u64,
-    limit: u16,
-) -> Result<String, SnapshotError> {
-    render_snapshot_page(snapshot, display_path, start_line, limit)
-}
 
 fn validate_cursor_on_snapshot(
     snapshot: &Snapshot,
@@ -136,7 +127,7 @@ pub async fn run(workspace: &Workspace, input: &ReadRequest) -> Result<String, P
     let display = display_path.to_owned();
     if snap.byte_len() > BLOCKING_READ_BYTES as u64 {
         match tokio::task::spawn_blocking(move || {
-            render_loaded(snap.as_ref(), &display, start_line, limit)
+            render_snapshot_page(snap.as_ref(), &display, start_line, limit)
         })
         .await
         {
@@ -145,7 +136,7 @@ pub async fn run(workspace: &Workspace, input: &ReadRequest) -> Result<String, P
             Err(join) => Err(join_protocol_error("read", &path_for_err, join)),
         }
     } else {
-        render_loaded(snap.as_ref(), &display, start_line, limit)
+        render_snapshot_page(snap.as_ref(), &display, start_line, limit)
             .map_err(|error| snapshot_protocol_error("read", &path_for_err, error))
     }
 }
