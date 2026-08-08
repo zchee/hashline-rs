@@ -117,6 +117,15 @@ pub(crate) fn snapshot_error_outcome(
             "Failed to {io_operation} {}: {source}",
             io_path.display()
         )),
+        SnapshotError::ConcurrentModification { path: changed } => {
+            protocol_outcome(ProtocolError::new(
+                ErrorCode::Io,
+                format!(
+                    "file changed during both snapshot read attempts: {}",
+                    changed.display()
+                ),
+            ))
+        }
         other => ToolOutcome::error(format!("Failed to {operation} {}: {other}", path.display())),
     }
 }

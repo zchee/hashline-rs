@@ -287,8 +287,18 @@ The exact read input is:
 ```
 
 `path` is required. `limit` defaults to 2000 and is in `1..=2000`.
-`cursor` defaults to null. Unknown properties are invalid. The first page
-omits the cursor. A cursor controls the start; the legacy `offset` is not accepted.
+`cursor` and `start_line` default to null. Unknown properties are invalid.
+The first page omits the cursor. A cursor or `start_line` controls the
+start; the legacy `offset` is not accepted.
+
+`start_line` is a 1-based logical line at which the page begins and needs
+no prior snapshot: the response carries a fresh header exactly as a first
+page does. Zero is invalid, and combining `start_line` with a cursor is
+`invalid_request` — a cursor already names its own start. A `start_line`
+beyond `LINE_COUNT` returns the snapshot header with zero content lines and
+no footer; the header carries the real line and byte counts, so the answer
+is truthful and immediately retryable in range. A cursor start beyond the
+last line remains `invalid_position` under R013.
 
 ### R015: Grep sections and positions
 
@@ -799,6 +809,19 @@ assert_eq!(request.limit, MAX_PAGE_LINES);
 assert!(serde_json::from_value::<ReadRequest>(
     json!({"path": "src/lib.rs", "offset": 2})
 ).is_err());
+
+let random_access: ReadRequest = serde_json::from_value(json!({
+    "path": "src/lib.rs",
+    "start_line": 5000
+}))?;
+random_access.validate()?;
+
+let conflicted: ReadRequest = serde_json::from_value(json!({
+    "path": "src/lib.rs",
+    "start_line": 2,
+    "cursor": {"snapshot": "00000000000000000000000000000001", "next": "2@4"}
+}))?;
+assert!(conflicted.validate().is_err());
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 

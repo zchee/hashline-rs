@@ -67,7 +67,8 @@ Pagination footer: [hashline next snapshot=<ID> position=LINE@BYTE]
 Usage:
 - path is workspace-relative or absolute
 - limit defaults to {max_lines_read} (max {max_lines_read})
-- optional cursor continues a prior page
+- optional start_line begins the page at that 1-based line (no cursor needed)
+- optional cursor continues a prior page (never combined with start_line)
 "#;
 
 const EDIT_TEMPLATE: &str = r#"Edit a file using versioned byte-range replace operations.
@@ -518,6 +519,7 @@ mod tests {
             assert_eq!(schema["additionalProperties"], false);
         }
         assert_eq!(read["required"], json!(["path"]));
+        assert!(read["properties"].get("start_line").is_some());
 
         assert_eq!(write["required"], json!(["file_path", "content", "expect"]));
         assert_eq!(

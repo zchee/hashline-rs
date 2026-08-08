@@ -18,7 +18,7 @@
 //! followed by `LINE@BYTE|CONTENT` lines. When more lines remain, a
 //! [`PageCursor`](crate::protocol::PageCursor) footer continues the same snapshot.
 
-use std::{ops::Range, path::Path, sync::Arc};
+use std::{ops::Range, sync::Arc};
 
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -27,13 +27,13 @@ use crate::{
     cache,
     index::FileIndex,
     protocol::{
-        ContractError, ErrorCode, ErrorResponse, PageCursor, ProtocolError, ReadRequest,
+        ContractError, PageCursor, ProtocolError, ReadRequest, SnapshotHeader,
         validate_reference_cursor,
     },
     render::{render_range, render_snapshot_page},
     scheme::Scheme,
     snapshot::{Snapshot, SnapshotError},
-    util::{ToolOutcome, Workspace},
+    util::{ToolOutcome, Workspace, protocol_outcome, snapshot_error_outcome},
 };
 
 /// Maximum number of lines returned by a single read page (wire max).
@@ -84,38 +84,6 @@ fn windowed_index<'a>(content: &'a str, window: Range<usize>, scheme: Scheme) ->
     FileIndex::new_partial(content, &[span])
 }
 
-fn protocol_outcome(error: ProtocolError) -> ToolOutcome {
-    let envelope = ErrorResponse::new(error);
-    match serde_json::to_string_pretty(&envelope) {
-        Ok(text) => ToolOutcome::error(text),
-        Err(_) => ToolOutcome::error(envelope.error.message),
-    }
-}
-
-fn map_snapshot_error(path: &Path, error: SnapshotError) -> ToolOutcome {
-    match error {
-        SnapshotError::Contract(contract) => protocol_outcome(ProtocolError::from(contract)),
-        SnapshotError::Io {
-            operation,
-            path: io_path,
-            source,
-        } => ToolOutcome::error(format!(
-            "Failed to {operation} {}: {source}",
-            io_path.display()
-        )),
-        SnapshotError::ConcurrentModification { path: changed } => {
-            protocol_outcome(ProtocolError::new(
-                ErrorCode::Io,
-                format!(
-                    "file changed during both snapshot read attempts: {}",
-                    changed.display()
-                ),
-            ))
-        }
-        other => ToolOutcome::error(format!("Failed to read {}: {other}", path.display())),
-    }
-}
-
 fn render_loaded(
     snapshot: &Snapshot,
     display_path: &str,
@@ -160,7 +128,7 @@ pub async fn run_read(workspace: &Workspace, input: &ReadRequest) -> ToolOutcome
         .await
         {
             Ok(Ok(snapshot)) => snapshot,
-            Ok(Err(error)) => return map_snapshot_error(&path, error),
+            Ok(Err(error)) => return snapshot_error_outcome("read", &path, error),
             Err(join) => {
                 return ToolOutcome::error(format!("Failed to read {}: {join}", path.display()));
             }
@@ -168,7 +136,7 @@ pub async fn run_read(workspace: &Workspace, input: &ReadRequest) -> ToolOutcome
     } else {
         match cache::process_cache().get_or_load(&path, || Snapshot::load(&path)) {
             Ok(snapshot) => snapshot,
-            Err(error) => return map_snapshot_error(&path, error),
+            Err(error) => return snapshot_error_outcome("read", &path, error),
         }
     };
 
@@ -179,13 +147,27 @@ pub async fn run_read(workspace: &Workspace, input: &ReadRequest) -> ToolOutcome
             Err(error) => return protocol_outcome(error),
         }
     } else {
-        1
+        input.start_line.unwrap_or(1)
     };
 
     if start_line > snapshot.line_count() {
-        return protocol_outcome(ProtocolError::from(ContractError::InvalidPosition {
-            position: cursor_position_or_first(input.cursor.as_ref(), start_line),
-        }));
+        if input.cursor.is_some() {
+            return protocol_outcome(ProtocolError::from(ContractError::InvalidPosition {
+                position: cursor_position_or_first(input.cursor.as_ref(), start_line),
+            }));
+        }
+        // R014: an explicit start beyond the last line answers with the header
+        // alone — it carries the real line and byte counts, so the model can
+        // immediately retry inside range.
+        return match SnapshotHeader::new(
+            display_path.to_owned(),
+            snapshot.id(),
+            snapshot.line_count(),
+            snapshot.byte_len(),
+        ) {
+            Ok(header) => ToolOutcome::success(header.render()),
+            Err(error) => protocol_outcome(ProtocolError::from(error)),
+        };
     }
 
     let limit = input.limit;
@@ -199,7 +181,7 @@ pub async fn run_read(workspace: &Workspace, input: &ReadRequest) -> ToolOutcome
         .await
         {
             Ok(Ok(text)) => text,
-            Ok(Err(error)) => return map_snapshot_error(&path_for_err, error),
+            Ok(Err(error)) => return snapshot_error_outcome("read", &path_for_err, error),
             Err(join) => {
                 return ToolOutcome::error(format!(
                     "Failed to read {}: {join}",
@@ -210,7 +192,7 @@ pub async fn run_read(workspace: &Workspace, input: &ReadRequest) -> ToolOutcome
     } else {
         match render_loaded(snap.as_ref(), &display, start_line, limit) {
             Ok(text) => text,
-            Err(error) => return map_snapshot_error(&path_for_err, error),
+            Err(error) => return snapshot_error_outcome("read", &path_for_err, error),
         }
     };
 
@@ -296,6 +278,7 @@ mod tests {
                 path: "e.txt".into(),
                 limit: 2000,
                 cursor: None,
+                start_line: None,
             },
         )
         .await;
@@ -318,6 +301,7 @@ mod tests {
                 path: "p.txt".into(),
                 limit: 2,
                 cursor: None,
+                start_line: None,
             },
         )
         .await;
@@ -346,6 +330,7 @@ mod tests {
                 path: "p.txt".into(),
                 limit: 10,
                 cursor: Some(PageCursor { snapshot, next }),
+                start_line: None,
             },
         )
         .await;
@@ -367,6 +352,7 @@ mod tests {
                     snapshot: SnapshotId::from_u128(0xdead),
                     next: Position::new(1, 0).unwrap(),
                 }),
+                start_line: None,
             },
         )
         .await;
@@ -391,10 +377,94 @@ mod tests {
                 path: "x.txt".into(),
                 limit: 0,
                 cursor: None,
+                start_line: None,
             },
         )
         .await;
         assert!(outcome.is_error);
+    }
+
+    #[tokio::test]
+    async fn start_line_begins_the_page_without_a_cursor() {
+        let tmp = tempdir().unwrap();
+        let mut body = String::new();
+        for i in 1..=6 {
+            body.push_str(&format!("line {i}\n"));
+        }
+        std::fs::write(tmp.path().join("r.txt"), body).unwrap();
+        let outcome = run_read(
+            &ws(tmp.path()),
+            &ReadRequest {
+                path: "r.txt".into(),
+                limit: 2,
+                cursor: None,
+                start_line: Some(4),
+            },
+        )
+        .await;
+        assert!(!outcome.is_error, "{}", outcome.text);
+        assert!(outcome.text.contains("|line 4"), "{}", outcome.text);
+        assert!(outcome.text.contains("|line 5"), "{}", outcome.text);
+        assert!(!outcome.text.contains("|line 3"), "{}", outcome.text);
+        assert!(
+            outcome.text.contains("[hashline next"),
+            "remaining lines keep the cursor footer: {}",
+            outcome.text
+        );
+    }
+
+    #[tokio::test]
+    async fn start_line_beyond_eof_returns_the_header_alone() {
+        let tmp = tempdir().unwrap();
+        std::fs::write(tmp.path().join("h.txt"), b"alpha\nbeta\n").unwrap();
+        let outcome = run_read(
+            &ws(tmp.path()),
+            &ReadRequest {
+                path: "h.txt".into(),
+                limit: 2000,
+                cursor: None,
+                start_line: Some(99),
+            },
+        )
+        .await;
+        assert!(!outcome.is_error, "{}", outcome.text);
+        assert_eq!(outcome.text.lines().count(), 1, "{}", outcome.text);
+        assert!(
+            outcome.text.starts_with("[hashline snapshot="),
+            "{}",
+            outcome.text
+        );
+        assert!(
+            outcome.text.contains("lines=3 bytes=11"),
+            "{}",
+            outcome.text
+        );
+        assert!(!outcome.text.contains("[hashline next"), "{}", outcome.text);
+    }
+
+    #[tokio::test]
+    async fn start_line_with_cursor_is_invalid_request() {
+        let tmp = tempdir().unwrap();
+        std::fs::write(tmp.path().join("b.txt"), b"alpha\n").unwrap();
+        let outcome = run_read(
+            &ws(tmp.path()),
+            &ReadRequest {
+                path: "b.txt".into(),
+                limit: 10,
+                cursor: Some(PageCursor {
+                    snapshot: SnapshotId::from_u128(1),
+                    next: Position::new(1, 0).unwrap(),
+                }),
+                start_line: Some(2),
+            },
+        )
+        .await;
+        assert!(outcome.is_error, "{}", outcome.text);
+        assert!(
+            outcome.text.contains("\"invalid_request\""),
+            "{}",
+            outcome.text
+        );
     }
 
     #[tokio::test]
@@ -407,6 +477,7 @@ mod tests {
                 path: "c.txt".into(),
                 limit: 10,
                 cursor: None,
+                start_line: None,
             },
         )
         .await;

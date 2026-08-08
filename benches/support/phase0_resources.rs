@@ -272,6 +272,7 @@ async fn read_all_pages(workspace: &Workspace, path: &str) -> Result<usize> {
         path: path.to_owned(),
         limit: 2_000,
         cursor: None,
+        start_line: None,
     };
     let mut total = 0usize;
     loop {

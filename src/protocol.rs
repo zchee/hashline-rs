@@ -428,6 +428,10 @@ pub struct ReadRequest {
     /// Continuation cursor; absent for the first page.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor: Option<PageCursor>,
+    /// 1-based logical line the page starts at; requires no cursor.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1))]
+    pub start_line: Option<u64>,
 }
 
 impl ReadRequest {
@@ -435,10 +439,17 @@ impl ReadRequest {
     ///
     /// # Errors
     ///
-    /// Returns InvalidReadLimit unless the limit is in the fixed range.
+    /// Returns InvalidReadLimit unless the limit is in the fixed range, or
+    /// a start-line error for zero or a cursor combination.
     pub fn validate(&self) -> Result<(), ContractError> {
         if self.limit == 0 || self.limit > MAX_PAGE_LINES {
             return Err(ContractError::InvalidReadLimit { limit: self.limit });
+        }
+        if self.start_line == Some(0) {
+            return Err(ContractError::ZeroStartLine);
+        }
+        if self.start_line.is_some() && self.cursor.is_some() {
+            return Err(ContractError::StartLineWithCursor);
         }
         Ok(())
     }
@@ -1256,6 +1267,12 @@ pub enum ContractError {
     /// Context lines were requested outside content output.
     #[error("grep context requires output_mode \"content\"")]
     ContextOutsideContentMode,
+    /// Read start line is zero.
+    #[error("read start_line must be at least 1")]
+    ZeroStartLine,
+    /// Read combined a start line with a continuation cursor.
+    #[error("read start_line cannot be combined with a cursor")]
+    StartLineWithCursor,
     /// Edit batch is empty.
     #[error("edit batch must contain at least one operation")]
     EmptyEditBatch,
@@ -1343,6 +1360,8 @@ impl ContractError {
             | Self::InvalidContextLimit { .. }
             | Self::InvalidGlobLimit { .. }
             | Self::ContextOutsideContentMode
+            | Self::ZeroStartLine
+            | Self::StartLineWithCursor
             | Self::EmptyEditBatch
             | Self::TooManyEdits { .. }
             | Self::InvalidLineCount
@@ -2249,7 +2268,36 @@ mod tests {
             serde_json::from_value(json!({"path": "src/lib.rs"})).expect("defaults apply");
         assert_eq!(request.limit, MAX_PAGE_LINES);
         assert_eq!(request.cursor, None);
+        assert_eq!(request.start_line, None);
         request.validate().expect("default request is valid");
+
+        let random_access: ReadRequest = serde_json::from_value(json!({
+            "path": "src/lib.rs",
+            "start_line": 5_000
+        }))
+        .expect("cursor-free random access");
+        random_access.validate().expect("start_line stands alone");
+
+        let zero: ReadRequest = serde_json::from_value(json!({
+            "path": "src/lib.rs",
+            "start_line": 0
+        }))
+        .expect("numeric shape deserializes before semantic validation");
+        assert!(matches!(zero.validate(), Err(ContractError::ZeroStartLine)));
+
+        let conflicted: ReadRequest = serde_json::from_value(json!({
+            "path": "src/lib.rs",
+            "start_line": 2,
+            "cursor": {
+                "snapshot": "00000000000000000000000000000001",
+                "next": "2@4"
+            }
+        }))
+        .expect("both fields deserialize");
+        assert!(matches!(
+            conflicted.validate(),
+            Err(ContractError::StartLineWithCursor)
+        ));
 
         assert!(
             serde_json::from_value::<ReadRequest>(json!({
@@ -2259,13 +2307,13 @@ mod tests {
             .is_err()
         );
 
-        let zero: ReadRequest = serde_json::from_value(json!({
+        let zero_limit: ReadRequest = serde_json::from_value(json!({
             "path": "src/lib.rs",
             "limit": 0
         }))
         .expect("numeric shape deserializes before semantic validation");
         assert!(matches!(
-            zero.validate(),
+            zero_limit.validate(),
             Err(ContractError::InvalidReadLimit { limit: 0 })
         ));
 
