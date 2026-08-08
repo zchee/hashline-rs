@@ -80,6 +80,30 @@ Or in `.mcp.json`:
 }
 ```
 
+### Embedding in another crate
+
+Depend on the library through git, pinned to a revision:
+
+```toml
+[dependencies]
+hashline = { git = "https://github.com/zchee/hashline-rs", rev = "<commit>" }
+```
+
+The supported embedding surface is the typed runners — `read::run`,
+`edit::run`, `write::run` (async) and `grep::run`, `glob::run` (blocking) —
+returning `Result<_, protocol::ProtocolError>` with every failure drawn from
+the stable R017 taxonomy, plus the `protocol` request/response types,
+`util::Workspace`, and `HashlineServer` for serving MCP in-process. The
+`run_*` variants render the same results as MCP text.
+
+Since the Phase 8 cleanup the crate has **no cargo features and no
+target-feature requirements**: snapshot identity hashes with seeded XXH3, so
+the former gxhash `+aes` build caveat is gone and any supported 64-bit
+target builds out of the box.
+
+The crate is not yet published to crates.io and makes no semver promises;
+pin a `rev` and re-read [docs/protocol.md](docs/protocol.md) when moving it.
+
 ### Replace Claude Code's built-in file tools
 
 [docs/claude-code.md](docs/claude-code.md) is a copy-paste recipe that
