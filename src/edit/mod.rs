@@ -111,8 +111,7 @@ fn publish(
     // construction; the R010 size cap is re-checked inside
     // `from_validated_bytes`. Debug builds re-verify both text properties.
     let new_snapshot = unsafe { Snapshot::from_validated_bytes(applied) }
-        .map_err(|error| snapshot_protocol_error("edit", path, error))?
-        .with_stamp(stamp);
+        .map_err(|error| snapshot_protocol_error("edit", path, error))?;
     let success = EditSuccess::new(
         input.file_path.clone(),
         previous,
@@ -121,9 +120,13 @@ fn publish(
         new_snapshot.byte_len(),
         new_snapshot.line_count(),
     );
-    // The stamp describes exactly these persisted bytes, so the resident
-    // entry hits on FileStamp without a post-persist disk re-read.
-    cache::process_cache().insert(path.to_path_buf(), Arc::new(new_snapshot));
+    // The confirmed post-rename stamp describes exactly these persisted
+    // bytes, so the resident entry hits on FileStamp without a content
+    // re-read; with no confirmed stamp (raced rename) there is nothing a
+    // future stat could match, so the insert is skipped.
+    if let Some(stamp) = stamp {
+        cache::process_cache().insert(path.to_path_buf(), Arc::new(new_snapshot.with_stamp(stamp)));
+    }
     Ok(success)
 }
 
@@ -212,6 +215,41 @@ mod tests {
         assert_eq!(std::fs::read(&file).unwrap(), b"alpha\nBETA\n");
         assert!(outcome.text.contains("\"protocol\""));
         assert!(outcome.text.contains("previous_snapshot"));
+    }
+
+    #[tokio::test]
+    async fn read_after_edit_hits_the_stamped_cache_entry() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let file = tmp.path().join("cached.txt");
+        std::fs::write(&file, b"alpha\nbeta\n").unwrap();
+        let workspace = ws(tmp.path());
+        let snap = Snapshot::load(&file).unwrap();
+
+        let success = run(
+            &workspace,
+            &EditRequest {
+                file_path: "cached.txt".into(),
+                snapshot: snap.id(),
+                edits: vec![EditOperation::replace(
+                    pos(1, 0),
+                    pos(2, 6),
+                    "ALPHA\n".into(),
+                )],
+            },
+        )
+        .await
+        .expect("edit succeeds");
+
+        // The canonical read-after-edit flow must be served by the confirmed
+        // post-rename stamp without re-reading or re-hashing the file.
+        let resolved = workspace.resolve("cached.txt").expect("resolve");
+        let resident = cache::process_cache()
+            .get_or_load(&resolved, || {
+                panic!("read-after-edit must hit the stamped cache entry")
+            })
+            .expect("cache hit");
+        assert_eq!(resident.id(), success.snapshot);
+        assert_eq!(resident.bytes(), b"ALPHA\nbeta\n");
     }
 
     #[tokio::test]

@@ -100,8 +100,7 @@ fn run_blocking(
     // `input.validate()` at entry (and the cap is re-checked inside
     // `from_validated_bytes`). Debug builds re-verify both text properties.
     let persisted = unsafe { Snapshot::from_validated_bytes(bytes) }
-        .map_err(|error| snapshot_protocol_error("write", path, error))?
-        .with_stamp(stamp);
+        .map_err(|error| snapshot_protocol_error("write", path, error))?;
     let success = WriteSuccess::new(
         input.file_path.clone(),
         persisted.id(),
@@ -109,9 +108,12 @@ fn run_blocking(
         persisted.line_count(),
         created,
     );
-    // The stamp describes exactly these persisted bytes, so the resident
-    // entry hits on FileStamp without a post-persist disk re-read.
-    cache::process_cache().insert(path.to_path_buf(), Arc::new(persisted));
+    // The confirmed post-rename stamp describes exactly these persisted
+    // bytes, so the resident entry hits on FileStamp without a content
+    // re-read; with no confirmed stamp (raced rename) the insert is skipped.
+    if let Some(stamp) = stamp {
+        cache::process_cache().insert(path.to_path_buf(), Arc::new(persisted.with_stamp(stamp)));
+    }
     Ok(success)
 }
 
@@ -245,6 +247,23 @@ mod tests {
         let value = parse(&replaced);
         assert_eq!(value["created"], Value::Bool(false));
         assert_eq!(std::fs::read(&file).unwrap(), b"ONE\n");
+    }
+
+    #[tokio::test]
+    async fn read_after_write_hits_the_stamped_cache_entry() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let workspace = ws(tmp.path());
+        let success = run(&workspace, &create_request("cached.txt", "one\ntwo\n"))
+            .await
+            .expect("create succeeds");
+
+        let resolved = workspace.resolve("cached.txt").expect("resolve");
+        let resident = crate::cache::process_cache()
+            .get_or_load(&resolved, || {
+                panic!("read-after-write must hit the stamped cache entry")
+            })
+            .expect("cache hit");
+        assert_eq!(resident.id(), success.snapshot);
     }
 
     #[tokio::test]

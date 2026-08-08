@@ -123,10 +123,12 @@ fn io_err(operation: &'static str, path: &Path, source: io::Error) -> PersistErr
 ///
 /// When `expected` is `Some`, the destination's current [`FileStamp`] must
 /// still match before rename; a mismatch leaves the destination untouched.
-/// On success returns the [`FileStamp`] the destination carries after the
-/// rename — captured from the temp file's descriptor before rename, under
-/// the path lock, so it describes exactly the persisted bytes (rename
-/// preserves inode, size, and mtime).
+/// On success returns the destination's confirmed post-rename [`FileStamp`]
+/// — one stat under the path lock, adopted only when its rename-invariant
+/// fields (identity, length, mtime) match the temp descriptor's stamp;
+/// `None` means an external writer raced the rename and no truthful stamp
+/// exists (rename itself updates the inode change time, so the temp stamp
+/// alone can never match a later path stat).
 ///
 /// # Errors
 ///
@@ -136,7 +138,7 @@ pub fn atomic_write(
     bytes: &[u8],
     expected: Option<FileStamp>,
     durability: Durability,
-) -> Result<FileStamp, PersistError> {
+) -> Result<Option<FileStamp>, PersistError> {
     let _guard = path_lock(path);
 
     if let Some(parent) = path.parent() {
@@ -182,7 +184,16 @@ pub fn atomic_write(
     if durability == Durability::Full {
         fsync_parent(parent);
     }
-    Ok(stamp)
+    Ok(confirm_stamp(path, stamp))
+}
+
+/// One post-rename stat (still under the path lock) validating the temp
+/// stamp's rename-invariant fields; see `FileStamp::confirmed_after_rename`.
+fn confirm_stamp(path: &Path, temp_stamp: FileStamp) -> Option<FileStamp> {
+    fs::metadata(path)
+        .ok()
+        .and_then(|metadata| FileStamp::from_metadata_public(&metadata).ok())
+        .and_then(|current| temp_stamp.confirmed_after_rename(current))
 }
 
 /// Monotone per-process discriminator for temp-file names.
@@ -209,9 +220,9 @@ fn unique_temp_name() -> String {
 /// Write `bytes` to a unique temporary file beside the destination.
 ///
 /// Returns the temp path and the temp file's post-sync [`FileStamp`] on
-/// success; the temp file is removed on failure. The stamp survives the
-/// caller's rename/link unchanged (both preserve inode, size, and mtime),
-/// so it is the destination's stamp once the entry lands.
+/// success; the temp file is removed on failure. rename/link preserve the
+/// stamp's identity, length, and mtime but update the change time, so the
+/// caller confirms it against a post-rename stat before adopting it.
 fn write_unique_temp(
     parent: &Path,
     path: &Path,
@@ -269,8 +280,8 @@ fn fsync_parent(_parent: &Path) {}
 /// The link into place fails when the destination already exists, so two
 /// concurrent creates of one path have exactly one winner even across
 /// processes. Missing parent directories are created first. On success
-/// returns the destination's [`FileStamp`] (captured from the temp
-/// descriptor; a hard link shares the inode, so it is exact).
+/// returns the destination's confirmed post-link [`FileStamp`], or `None`
+/// when an external writer raced the link (see [`atomic_write`]).
 ///
 /// # Errors
 ///
@@ -279,7 +290,7 @@ pub fn atomic_create(
     path: &Path,
     bytes: &[u8],
     durability: Durability,
-) -> Result<FileStamp, PersistError> {
+) -> Result<Option<FileStamp>, PersistError> {
     let _guard = path_lock(path);
 
     if let Some(parent) = path.parent() {
@@ -303,7 +314,7 @@ pub fn atomic_create(
     if durability == Durability::Full {
         fsync_parent(parent);
     }
-    Ok(stamp)
+    Ok(confirm_stamp(path, stamp))
 }
 
 #[cfg(test)]
@@ -339,6 +350,16 @@ mod tests {
                 matches!(err, PersistError::DestinationExists { .. }),
                 "{durability:?}"
             );
+
+            // Fail-closed stamp recheck is mode-independent: the pre-replace
+            // stamp is stale now, so a guarded overwrite must refuse.
+            let stale = stamp.expect("create stamp confirmed");
+            let err = atomic_write(&path, b"third\n", Some(stale), durability).unwrap_err();
+            assert!(
+                matches!(err, PersistError::DestinationChanged { .. }),
+                "{durability:?}"
+            );
+            assert_eq!(fs::read(&path).unwrap(), b"replaced\n");
         }
     }
 

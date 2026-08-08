@@ -204,6 +204,22 @@ impl FileStamp {
         Self::from_metadata(metadata)
     }
 
+    /// Adopt the destination's post-rename stamp when every rename-invariant
+    /// field (identity, length, modification time) still matches this
+    /// pre-rename temp stamp.
+    ///
+    /// rename(2) and link(2) preserve inode, size, and mtime but update the
+    /// inode change time, so a temp-descriptor stamp can never equal a fresh
+    /// path stat directly. The confirming stat runs under the persist path
+    /// lock; `None` means an external writer raced the rename and no
+    /// truthful stamp exists, so callers skip their cache insert.
+    pub(crate) fn confirmed_after_rename(self, current: Self) -> Option<Self> {
+        (self.identity == current.identity
+            && self.len == current.len
+            && self.modified == current.modified)
+            .then_some(current)
+    }
+
     #[cfg(unix)]
     fn from_metadata(metadata: &Metadata) -> io::Result<Self> {
         use std::os::unix::fs::MetadataExt as _;
@@ -529,10 +545,11 @@ impl Snapshot {
 
     /// Attach a filesystem stamp to a detached snapshot.
     ///
-    /// Used by the wired mutation paths: the stamp captured from the persist
-    /// temp file (before rename, under the path lock) describes exactly the
-    /// bytes this snapshot holds, so the cache entry hits on [`FileStamp`]
-    /// without a post-persist disk re-read.
+    /// Used by the wired mutation paths: the confirmed post-rename stamp
+    /// (one stat under the persist path lock, validated against the temp
+    /// descriptor's rename-invariant fields) describes exactly the bytes
+    /// this snapshot holds, so the cache entry hits on [`FileStamp`]
+    /// without a post-persist content re-read.
     #[must_use]
     pub fn with_stamp(mut self, stamp: FileStamp) -> Self {
         self.stamp = Some(stamp);
