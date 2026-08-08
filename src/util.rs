@@ -22,6 +22,12 @@ use std::{
     sync::OnceLock,
 };
 
+use crate::{
+    persist::PersistError,
+    protocol::{ErrorCode, ErrorResponse, ProtocolError},
+    snapshot::SnapshotError,
+};
+
 /// Return one unpredictable seed shared by this process.
 ///
 /// `RandomState` supplies the operating-system-seeded key material used by the
@@ -83,6 +89,60 @@ impl ToolOutcome {
             text,
             is_error: true,
         }
+    }
+}
+
+/// Render a structured protocol error as a model-visible tool failure.
+pub(crate) fn protocol_outcome(error: ProtocolError) -> ToolOutcome {
+    let envelope = ErrorResponse::new(error);
+    match serde_json::to_string_pretty(&envelope) {
+        Ok(text) => ToolOutcome::error(text),
+        Err(_) => ToolOutcome::error(envelope.error.message),
+    }
+}
+
+/// Render a snapshot-load failure for one tool `operation` on `path`.
+pub(crate) fn snapshot_error_outcome(
+    operation: &str,
+    path: &Path,
+    error: SnapshotError,
+) -> ToolOutcome {
+    match error {
+        SnapshotError::Contract(contract) => protocol_outcome(ProtocolError::from(contract)),
+        SnapshotError::Io {
+            operation: io_operation,
+            path: io_path,
+            source,
+        } => ToolOutcome::error(format!(
+            "Failed to {io_operation} {}: {source}",
+            io_path.display()
+        )),
+        other => ToolOutcome::error(format!("Failed to {operation} {}: {other}", path.display())),
+    }
+}
+
+/// Render an atomic-persistence failure as its taxonomy error or I/O text.
+pub(crate) fn persist_error_outcome(error: PersistError) -> ToolOutcome {
+    match error {
+        PersistError::DestinationChanged { path } => protocol_outcome(ProtocolError::new(
+            ErrorCode::SnapshotConflict,
+            format!(
+                "destination changed before atomic rename: {}",
+                path.display()
+            ),
+        )),
+        PersistError::DestinationExists { path } => protocol_outcome(ProtocolError::new(
+            ErrorCode::AlreadyExists,
+            format!("destination already exists: {}", path.display()),
+        )),
+        PersistError::Io {
+            operation,
+            path,
+            source,
+        } => ToolOutcome::error(format!(
+            "Failed to {operation} {}: {source}",
+            path.display()
+        )),
     }
 }
 

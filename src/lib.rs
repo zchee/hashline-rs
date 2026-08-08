@@ -37,6 +37,7 @@ pub mod scheme;
 pub mod server;
 pub mod snapshot;
 pub mod util;
+pub mod write;
 
 #[cfg(test)]
 mod testutil;

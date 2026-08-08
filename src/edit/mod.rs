@@ -29,63 +29,22 @@ use types::{HashlineEditError, HashlineEditErrorKind, HashlineEditsApplied};
 pub use types::{HashlineEditInput, HashlineEditOutput, HashlineOp};
 
 use crate::{
-    cache,
-    persist::{self, PersistError},
+    cache, persist,
     protocol::{
-        EditRequest, EditSuccess, ErrorResponse, ProtocolError, apply_versioned_reference_edits,
+        EditRequest, EditSuccess, ProtocolError, apply_versioned_reference_edits,
         reference_context, reference_header,
     },
     scheme::Scheme,
     snapshot::{Snapshot, SnapshotError},
-    util::{ToolOutcome, Workspace, decode_utf8},
+    util::{
+        ToolOutcome, Workspace, decode_utf8, persist_error_outcome, protocol_outcome,
+        snapshot_error_outcome,
+    },
 };
 
 // Re-export for apply_versioned tests; message is crate-private in protocol.
 // Use the same wording without importing the private const.
 const CONFLICT_MSG: &str = "the file no longer matches the requested snapshot";
-
-fn protocol_outcome(error: ProtocolError) -> ToolOutcome {
-    let envelope = ErrorResponse::new(error);
-    match serde_json::to_string_pretty(&envelope) {
-        Ok(text) => ToolOutcome::error(text),
-        Err(_) => ToolOutcome::error(envelope.error.message),
-    }
-}
-
-fn map_snapshot_error(path: &Path, error: SnapshotError) -> ToolOutcome {
-    match error {
-        SnapshotError::Contract(contract) => protocol_outcome(ProtocolError::from(contract)),
-        SnapshotError::Io {
-            operation,
-            path: io_path,
-            source,
-        } => ToolOutcome::error(format!(
-            "Failed to {operation} {}: {source}",
-            io_path.display()
-        )),
-        other => ToolOutcome::error(format!("Failed to edit {}: {other}", path.display())),
-    }
-}
-
-fn map_persist_error(error: PersistError) -> ToolOutcome {
-    match error {
-        PersistError::DestinationChanged { path } => protocol_outcome(ProtocolError::new(
-            crate::protocol::ErrorCode::SnapshotConflict,
-            format!(
-                "destination changed before atomic rename: {}",
-                path.display()
-            ),
-        )),
-        PersistError::Io {
-            operation,
-            path,
-            source,
-        } => ToolOutcome::error(format!(
-            "Failed to {operation} {}: {source}",
-            path.display()
-        )),
-    }
-}
 
 /// Execute an `edit` request against the local filesystem.
 pub async fn run_edit(workspace: &Workspace, input: &EditRequest) -> ToolOutcome {
@@ -111,7 +70,7 @@ pub async fn run_edit(workspace: &Workspace, input: &EditRequest) -> ToolOutcome
             // Require the request snapshot to match an empty snapshot identity.
             return create_new_file(&path, input).await;
         }
-        Ok(Err(error)) => return map_snapshot_error(&path, error),
+        Ok(Err(error)) => return snapshot_error_outcome("edit", &path, error),
         Err(join) => {
             return ToolOutcome::error(format!("Failed to edit {}: {join}", path.display()));
         }
@@ -143,7 +102,7 @@ pub async fn run_edit(workspace: &Workspace, input: &EditRequest) -> ToolOutcome
     .await;
     match write_result {
         Ok(Ok(())) => {}
-        Ok(Err(error)) => return map_persist_error(error),
+        Ok(Err(error)) => return persist_error_outcome(error),
         Err(join) => {
             return ToolOutcome::error(format!("Failed to persist {}: {join}", path.display()));
         }
@@ -151,7 +110,7 @@ pub async fn run_edit(workspace: &Workspace, input: &EditRequest) -> ToolOutcome
 
     let new_snapshot = match Snapshot::from_bytes(applied) {
         Ok(snap) => snap,
-        Err(error) => return map_snapshot_error(&path, error),
+        Err(error) => return snapshot_error_outcome("edit", &path, error),
     };
     let success = EditSuccess::new(
         display,
@@ -177,7 +136,7 @@ async fn create_new_file(path: &Path, input: &EditRequest) -> ToolOutcome {
     // Empty pre-image: compute empty snapshot id and require request match.
     let empty = match Snapshot::from_bytes(Vec::new()) {
         Ok(s) => s,
-        Err(error) => return map_snapshot_error(path, error),
+        Err(error) => return snapshot_error_outcome("edit", path, error),
     };
     if input.snapshot != empty.id() {
         let header = reference_header(input.file_path.clone(), empty.id(), b"")
@@ -220,7 +179,7 @@ async fn create_new_file(path: &Path, input: &EditRequest) -> ToolOutcome {
     .await
     {
         Ok(Ok(())) => {}
-        Ok(Err(error)) => return map_persist_error(error),
+        Ok(Err(error)) => return persist_error_outcome(error),
         Err(join) => {
             return ToolOutcome::error(format!("Failed to persist {}: {join}", path.display()));
         }
@@ -228,7 +187,7 @@ async fn create_new_file(path: &Path, input: &EditRequest) -> ToolOutcome {
 
     let new_snapshot = match Snapshot::from_bytes(applied) {
         Ok(snap) => snap,
-        Err(error) => return map_snapshot_error(path, error),
+        Err(error) => return snapshot_error_outcome("edit", path, error),
     };
     let success = EditSuccess::new(
         input.file_path.clone(),

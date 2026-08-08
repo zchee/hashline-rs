@@ -48,10 +48,11 @@ use crate::{
     config::{ConfigError, SchemeConfig},
     edit::run_edit,
     grep::run_grep,
-    protocol::{EditRequest, GrepRequest, ReadRequest},
+    protocol::{EditRequest, GrepRequest, ReadRequest, WriteRequest},
     read::{MAX_LINES_READ, run_read},
     scheme::Scheme,
     util::{ToolOutcome, Workspace},
+    write::run_write,
 };
 
 const READ_TEMPLATE: &str = r#"Read a file with versioned positional output for use with edit.
@@ -80,6 +81,21 @@ const EDIT_TEMPLATE: &str = r#"Edit a file using versioned byte-range replace op
 }
 
 start inclusive, end exclusive. Stale snapshot fails closed with snapshot_conflict.
+"#;
+
+const WRITE_TEMPLATE: &str = r#"Create a new file, or replace a whole file you have read, with versioned safety.
+
+{
+  "file_path": "src/new.rs",
+  "content": "mod fresh;\n",
+  "expect": "absent"
+}
+
+expect "absent" creates the file exclusively; if it already exists the error
+returns the current snapshot header so you can read or overwrite instead.
+expect <32-hex snapshot from read> replaces exactly that version; a stale
+snapshot fails closed with snapshot_conflict. Success returns the new
+snapshot for immediate use with edit. Parent directories are created.
 "#;
 
 const GREP_TEMPLATE: &str = r#"Search file contents with anchor-annotated results for use with edit.
@@ -140,6 +156,7 @@ pub struct HashlineServer {
     scheme: Scheme,
     read_description: Arc<str>,
     edit_description: Arc<str>,
+    write_description: Arc<str>,
     grep_description: Arc<str>,
     /// Tool listing, rendered on first use and shared across clones — schema
     /// generation and JSON serialization are far too costly to repeat per
@@ -166,6 +183,7 @@ impl HashlineServer {
             scheme,
             read_description: read_description.into(),
             edit_description: config.render_description(EDIT_TEMPLATE).into(),
+            write_description: config.render_description(WRITE_TEMPLATE).into(),
             grep_description: config.render_description(GREP_TEMPLATE).into(),
             tools: Arc::new(OnceLock::new()),
         })
@@ -289,6 +307,7 @@ impl HashlineServer {
             vec![
                 Self::tool::<ReadRequest>("read", &self.read_description),
                 Self::tool::<EditRequest>("edit", &self.edit_description),
+                Self::tool::<WriteRequest>("write", &self.write_description),
                 Self::tool::<GrepRequest>("grep", &self.grep_description),
             ]
         })
@@ -307,6 +326,10 @@ impl HashlineServer {
             "edit" => match serde_json::from_value::<EditRequest>(arguments) {
                 Ok(input) => run_edit(&self.workspace(), &input).await,
                 Err(e) => ToolOutcome::error(format!("Invalid arguments for edit: {e}")),
+            },
+            "write" => match serde_json::from_value::<WriteRequest>(arguments) {
+                Ok(input) => run_write(&self.workspace(), &input).await,
+                Err(e) => ToolOutcome::error(format!("Invalid arguments for write: {e}")),
             },
             "grep" => match serde_json::from_value::<GrepRequest>(arguments) {
                 Ok(input) => {
@@ -341,11 +364,12 @@ impl ServerHandler for HashlineServer {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("hashline", env!("CARGO_PKG_VERSION")))
             .with_instructions(
-                "Hashline anchor-based file tools. Workflow: read (or \
-                 grep) a file to obtain per-line anchors, then pass those \
-                 anchors to edit to make validated edits. Anchors verify the \
-                 target still matches the snapshot you saw; after an edit, use the \
-                 fresh anchors it returns.",
+                "Hashline versioned file tools. Workflow: read (or grep) a \
+                 file to obtain its snapshot and positions, then pass them to \
+                 edit for validated in-place edits. Use write to create new \
+                 files (expect \"absent\") or to replace a whole read file \
+                 against its exact snapshot. Stale snapshots fail closed and \
+                 return fresh recovery context.",
             )
     }
 
@@ -398,7 +422,7 @@ mod tests {
         let server = server(tmp.path());
         let tools = server.tools();
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
-        assert_eq!(names, ["read", "edit", "grep"]);
+        assert_eq!(names, ["read", "edit", "write", "grep"]);
 
         for tool in tools {
             let desc = tool.description.as_deref().unwrap();
@@ -434,6 +458,10 @@ mod tests {
         assert!(edit_schema["properties"].get("file_path").is_some());
         assert!(edit_schema["properties"].get("snapshot").is_some());
         assert!(edit_schema["properties"].get("edits").is_some());
+        let write_schema = serde_json::to_value(tools[2].input_schema.as_ref()).unwrap();
+        assert!(write_schema["properties"].get("file_path").is_some());
+        assert!(write_schema["properties"].get("content").is_some());
+        assert!(write_schema["properties"].get("expect").is_some());
     }
 
     #[test]
@@ -444,14 +472,22 @@ mod tests {
             .expect("edit schema serializes");
         let operation = serde_json::to_value(schemars::schema_for!(crate::protocol::EditOperation))
             .expect("edit operation schema serializes");
+        let write = serde_json::to_value(schemars::schema_for!(crate::protocol::WriteRequest))
+            .expect("write schema serializes");
         let grep = serde_json::to_value(schemars::schema_for!(crate::protocol::GrepRequest))
             .expect("grep schema serializes");
 
-        for schema in [&read, &edit, &grep] {
+        for schema in [&read, &edit, &write, &grep] {
             assert_eq!(schema["type"], "object");
             assert_eq!(schema["additionalProperties"], false);
         }
         assert_eq!(read["required"], json!(["path"]));
+
+        assert_eq!(write["required"], json!(["file_path", "content", "expect"]));
+        assert_eq!(
+            write["properties"]["expect"]["pattern"],
+            json!("^(absent|[0-9a-f]{32})$")
+        );
         assert!(read["properties"].get("cursor").is_some());
         assert!(read["properties"].get("offset").is_none());
 
@@ -618,6 +654,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn dispatch_write_create_and_versioned_replace() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let server = server(tmp.path());
+
+        let result = server
+            .dispatch(
+                "write",
+                json!({"file_path": "made.txt", "content": "alpha\n", "expect": "absent"}),
+            )
+            .await
+            .unwrap();
+        assert_ne!(result.is_error, Some(true), "{result:?}");
+        let text = match &result.content[0] {
+            ContentBlock::Text(t) => t.text.clone(),
+            other => panic!("expected text, {other:?}"),
+        };
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(value["created"], json!(true));
+        let snapshot = value["snapshot"].as_str().unwrap().to_owned();
+
+        let duplicate = server
+            .dispatch(
+                "write",
+                json!({"file_path": "made.txt", "content": "beta\n", "expect": "absent"}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(duplicate.is_error, Some(true), "{duplicate:?}");
+
+        let replaced = server
+            .dispatch(
+                "write",
+                json!({"file_path": "made.txt", "content": "beta\n", "expect": snapshot}),
+            )
+            .await
+            .unwrap();
+        assert_ne!(replaced.is_error, Some(true), "{replaced:?}");
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("made.txt")).unwrap(),
+            "beta\n"
+        );
+    }
+
+    #[tokio::test]
     async fn restrict_blocks_absolute_paths_outside_root() {
         let tmp = tempfile::TempDir::new().unwrap();
         let outside = tempfile::TempDir::new().unwrap();
@@ -633,6 +713,14 @@ mod tests {
                     "file_path": secret.to_str().unwrap(),
                     "snapshot": "00000000000000000000000000000000",
                     "edits": [{"op": "replace", "start": "1@0", "end": "2@0", "content": "x"}]
+                }),
+            ),
+            (
+                "write",
+                json!({
+                    "file_path": secret.to_str().unwrap(),
+                    "content": "overwritten",
+                    "expect": "absent"
                 }),
             ),
             (

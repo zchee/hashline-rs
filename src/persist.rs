@@ -67,6 +67,12 @@ pub enum PersistError {
         /// Destination path.
         path: PathBuf,
     },
+    /// Destination already exists for an exclusive create.
+    #[error("destination already exists: {path}")]
+    DestinationExists {
+        /// Destination path.
+        path: PathBuf,
+    },
 }
 
 fn io_err(operation: &'static str, path: &Path, source: io::Error) -> PersistError {
@@ -97,30 +103,7 @@ pub fn atomic_write(
     }
 
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let temp_name = format!(".hashline-{}.tmp", nanos);
-    let temp_path = parent.join(temp_name);
-
-    let write_temp = || -> Result<(), PersistError> {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temp_path)
-            .map_err(|source| io_err("create temp for", path, source))?;
-        file.write_all(bytes)
-            .map_err(|source| io_err("write temp for", path, source))?;
-        file.sync_all()
-            .map_err(|source| io_err("fsync temp for", path, source))?;
-        Ok(())
-    };
-
-    if let Err(error) = write_temp() {
-        let _ = fs::remove_file(&temp_path);
-        return Err(error);
-    }
+    let temp_path = write_unique_temp(parent, path, bytes)?;
 
     // Re-stat destination immediately before rename.
     if let Some(expected) = expected {
@@ -155,14 +138,83 @@ pub fn atomic_write(
         io_err("rename into", path, source)
     })?;
 
-    // Best-effort parent fsync on Unix for directory durability.
-    #[cfg(unix)]
-    {
-        if let Ok(dir) = File::open(parent) {
-            let _ = dir.sync_all();
+    fsync_parent(parent);
+    Ok(())
+}
+
+/// Write `bytes` to a unique temporary file beside the destination.
+///
+/// Returns the temp path on success; the temp file is removed on failure.
+fn write_unique_temp(parent: &Path, path: &Path, bytes: &[u8]) -> Result<PathBuf, PersistError> {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let temp_path = parent.join(format!(".hashline-{nanos}.tmp"));
+
+    let write_temp = || -> Result<(), PersistError> {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)
+            .map_err(|source| io_err("create temp for", path, source))?;
+        file.write_all(bytes)
+            .map_err(|source| io_err("write temp for", path, source))?;
+        file.sync_all()
+            .map_err(|source| io_err("fsync temp for", path, source))?;
+        Ok(())
+    };
+
+    if let Err(error) = write_temp() {
+        let _ = fs::remove_file(&temp_path);
+        return Err(error);
+    }
+    Ok(temp_path)
+}
+
+/// Best-effort parent-directory fsync for durability of the entry itself.
+#[cfg(unix)]
+fn fsync_parent(parent: &Path) {
+    if let Ok(dir) = File::open(parent) {
+        let _ = dir.sync_all();
+    }
+}
+
+/// Parent fsync is a Unix-only durability refinement.
+#[cfg(not(unix))]
+fn fsync_parent(_parent: &Path) {}
+
+/// Write `bytes` to a brand-new `path` via temp file + atomic hard link.
+///
+/// The link into place fails when the destination already exists, so two
+/// concurrent creates of one path have exactly one winner even across
+/// processes. Missing parent directories are created first.
+///
+/// # Errors
+///
+/// Returns DestinationExists when `path` already exists, or an I/O error.
+pub fn atomic_create(path: &Path, bytes: &[u8]) -> Result<(), PersistError> {
+    let _guard = path_lock(path);
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|source| io_err("create parent of", path, source))?;
+    }
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let temp_path = write_unique_temp(parent, path, bytes)?;
+
+    let linked = fs::hard_link(&temp_path, path);
+    let _ = fs::remove_file(&temp_path);
+    match linked {
+        Ok(()) => {}
+        Err(source) if source.kind() == io::ErrorKind::AlreadyExists => {
+            return Err(PersistError::DestinationExists {
+                path: path.to_path_buf(),
+            });
         }
+        Err(source) => return Err(io_err("link into", path, source)),
     }
 
+    fsync_parent(parent);
     Ok(())
 }
 
@@ -180,6 +232,29 @@ mod tests {
         let snap = Snapshot::load(&path).unwrap();
         atomic_write(&path, b"world\n", snap.stamp()).unwrap();
         assert_eq!(fs::read(&path).unwrap(), b"world\n");
+    }
+
+    #[test]
+    fn atomic_create_is_exclusive_and_creates_parents() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("nested").join("fresh.txt");
+        atomic_create(&path, b"first\n").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"first\n");
+
+        let err = atomic_create(&path, b"second\n").unwrap_err();
+        assert!(matches!(err, PersistError::DestinationExists { .. }));
+        assert_eq!(fs::read(&path).unwrap(), b"first\n");
+
+        // The losing temp file must not linger beside the destination.
+        assert!(
+            fs::read_dir(path.parent().unwrap())
+                .unwrap()
+                .filter_map(Result::ok)
+                .all(|entry| !entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".hashline-"))
+        );
     }
 
     #[test]
