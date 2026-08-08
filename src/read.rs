@@ -33,7 +33,10 @@ use crate::{
     render::{render_range, render_snapshot_page},
     scheme::Scheme,
     snapshot::{Snapshot, SnapshotError},
-    util::{ToolOutcome, Workspace, protocol_outcome, snapshot_error_outcome},
+    util::{
+        ToolOutcome, Workspace, join_protocol_error, protocol_outcome, resolve_workspace_path,
+        snapshot_protocol_error,
+    },
 };
 
 /// Maximum number of lines returned by a single read page (wire max).
@@ -104,16 +107,18 @@ fn validate_cursor_on_snapshot(
         .map(|position| position.line())
 }
 
-/// Execute a `read` request against the local filesystem.
-pub async fn run_read(workspace: &Workspace, input: &ReadRequest) -> ToolOutcome {
-    if let Err(error) = input.validate() {
-        return protocol_outcome(ProtocolError::from(error));
-    }
-
-    let path = match workspace.resolve(&input.path) {
-        Ok(path) => path,
-        Err(reason) => return ToolOutcome::error(reason),
-    };
+/// Execute a `read` request, returning the rendered R002/R014 page text.
+///
+/// This is the typed embedding surface; every failure is a stable R017
+/// taxonomy error. [`run_read`] renders the same result for MCP transport.
+///
+/// # Errors
+///
+/// Returns not_found, snapshot_conflict (stale cursor), invalid_position,
+/// invalid_request, root_escape, or a text/io taxonomy error.
+pub async fn run(workspace: &Workspace, input: &ReadRequest) -> Result<String, ProtocolError> {
+    input.validate().map_err(ProtocolError::from)?;
+    let path = resolve_workspace_path(workspace, &input.path)?;
 
     // Snapshot load (cached by path+stamp when metadata is stable).
     let load_path = path.clone();
@@ -128,75 +133,67 @@ pub async fn run_read(workspace: &Workspace, input: &ReadRequest) -> ToolOutcome
         .await
         {
             Ok(Ok(snapshot)) => snapshot,
-            Ok(Err(error)) => return snapshot_error_outcome("read", &path, error),
-            Err(join) => {
-                return ToolOutcome::error(format!("Failed to read {}: {join}", path.display()));
-            }
+            Ok(Err(error)) => return Err(snapshot_protocol_error("read", &path, error)),
+            Err(join) => return Err(join_protocol_error("read", &path, join)),
         }
     } else {
-        match cache::process_cache().get_or_load(&path, || Snapshot::load(&path)) {
-            Ok(snapshot) => snapshot,
-            Err(error) => return snapshot_error_outcome("read", &path, error),
-        }
+        cache::process_cache()
+            .get_or_load(&path, || Snapshot::load(&path))
+            .map_err(|error| snapshot_protocol_error("read", &path, error))?
     };
 
     let display_path = input.path.as_str();
     let start_line = if let Some(cursor) = input.cursor.as_ref() {
-        match validate_cursor_on_snapshot(snapshot.as_ref(), display_path, cursor) {
-            Ok(line) => line,
-            Err(error) => return protocol_outcome(error),
-        }
+        validate_cursor_on_snapshot(snapshot.as_ref(), display_path, cursor)?
     } else {
         input.start_line.unwrap_or(1)
     };
 
     if start_line > snapshot.line_count() {
         if input.cursor.is_some() {
-            return protocol_outcome(ProtocolError::from(ContractError::InvalidPosition {
+            return Err(ProtocolError::from(ContractError::InvalidPosition {
                 position: cursor_position_or_first(input.cursor.as_ref(), start_line),
             }));
         }
         // R014: an explicit start beyond the last line answers with the header
         // alone — it carries the real line and byte counts, so the model can
         // immediately retry inside range.
-        return match SnapshotHeader::new(
+        return SnapshotHeader::new(
             display_path.to_owned(),
             snapshot.id(),
             snapshot.line_count(),
             snapshot.byte_len(),
-        ) {
-            Ok(header) => ToolOutcome::success(header.render()),
-            Err(error) => protocol_outcome(ProtocolError::from(error)),
-        };
+        )
+        .map(|header| header.render())
+        .map_err(ProtocolError::from);
     }
 
     let limit = input.limit;
     let snap = Arc::clone(&snapshot);
     let path_for_err = path.clone();
     let display = display_path.to_owned();
-    let rendered = if snap.byte_len() > BLOCKING_READ_BYTES as u64 {
+    if snap.byte_len() > BLOCKING_READ_BYTES as u64 {
         match tokio::task::spawn_blocking(move || {
             render_loaded(snap.as_ref(), &display, start_line, limit)
         })
         .await
         {
-            Ok(Ok(text)) => text,
-            Ok(Err(error)) => return snapshot_error_outcome("read", &path_for_err, error),
-            Err(join) => {
-                return ToolOutcome::error(format!(
-                    "Failed to read {}: {join}",
-                    path_for_err.display()
-                ));
-            }
+            Ok(Ok(text)) => Ok(text),
+            Ok(Err(error)) => Err(snapshot_protocol_error("read", &path_for_err, error)),
+            Err(join) => Err(join_protocol_error("read", &path_for_err, join)),
         }
     } else {
-        match render_loaded(snap.as_ref(), &display, start_line, limit) {
-            Ok(text) => text,
-            Err(error) => return snapshot_error_outcome("read", &path_for_err, error),
-        }
-    };
+        render_loaded(snap.as_ref(), &display, start_line, limit)
+            .map_err(|error| snapshot_protocol_error("read", &path_for_err, error))
+    }
+}
 
-    ToolOutcome::success(rendered)
+/// Execute a `read` request against the local filesystem (MCP text skin).
+pub async fn run_read(workspace: &Workspace, input: &ReadRequest) -> ToolOutcome {
+    match run(workspace, input).await {
+        Ok(text) => ToolOutcome::success(text),
+        Err(error) => protocol_outcome(error),
+    }
 }
 
 fn cursor_position_or_first(
@@ -382,6 +379,40 @@ mod tests {
         )
         .await;
         assert!(outcome.is_error);
+    }
+
+    #[tokio::test]
+    async fn typed_run_returns_page_text_and_taxonomy_errors() {
+        let tmp = tempdir().unwrap();
+        std::fs::write(tmp.path().join("t.txt"), b"alpha\nbeta\n").unwrap();
+        let workspace = ws(tmp.path());
+
+        let text = run(
+            &workspace,
+            &ReadRequest {
+                path: "t.txt".into(),
+                limit: 2000,
+                cursor: None,
+                start_line: None,
+            },
+        )
+        .await
+        .expect("typed read succeeds");
+        assert!(text.starts_with("[hashline snapshot="), "{text}");
+
+        let error = run(
+            &workspace,
+            &ReadRequest {
+                path: "missing.txt".into(),
+                limit: 2000,
+                cursor: None,
+                start_line: None,
+            },
+        )
+        .await
+        .expect_err("missing file fails typed");
+        assert_eq!(error.code, crate::protocol::ErrorCode::NotFound);
+        assert!(error.retryable);
     }
 
     #[tokio::test]

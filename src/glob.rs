@@ -14,9 +14,10 @@
 //
 //! `glob` — deterministic gitignore-respecting file discovery.
 //!
-//! [`run_glob`] walks like grep (same ignore semantics), matches the pattern
+//! [`run`] walks like grep (same ignore semantics), matches the pattern
 //! against walk-root-relative paths, and reports matches newest-first under
 //! the R024 ordering so discovery output chains directly into read and edit.
+//! [`run_glob`] renders the same result for MCP transport.
 
 use std::{fs, path::Path, time::UNIX_EPOCH};
 
@@ -27,47 +28,41 @@ use crate::{
     protocol::{
         ErrorCode, GlobEntry, GlobRequest, GlobSummary, ProtocolError, sort_reference_glob_entries,
     },
-    util::{ToolOutcome, Workspace, protocol_outcome},
+    util::{ToolOutcome, Workspace, protocol_outcome, resolve_workspace_path},
 };
 
-/// Execute a `glob` request against the local filesystem.
+/// Execute a `glob` request, returning the rendered R024 listing.
 ///
-/// Blocking — call via `spawn_blocking` from async contexts.
-pub fn run_glob(workspace: &Workspace, input: &GlobRequest) -> ToolOutcome {
-    if let Err(error) = input.validate() {
-        return protocol_outcome(ProtocolError::from(error));
-    }
+/// This is the typed embedding surface; every failure is a stable R017
+/// taxonomy error. Blocking — call via `spawn_blocking` from async contexts.
+///
+/// # Errors
+///
+/// Returns invalid_pattern, not_found, not_a_file, root_escape, or an
+/// invalid_request cap error per R024.
+pub fn run(workspace: &Workspace, input: &GlobRequest) -> Result<String, ProtocolError> {
+    input.validate().map_err(ProtocolError::from)?;
 
-    let matcher = match GlobBuilder::new(&input.pattern)
+    let matcher = GlobBuilder::new(&input.pattern)
         .literal_separator(true)
         .build()
-    {
-        Ok(glob) => glob.compile_matcher(),
-        Err(e) => {
-            return protocol_outcome(ProtocolError::new(
+        .map_err(|e| {
+            ProtocolError::new(
                 ErrorCode::InvalidPattern,
                 format!("Invalid glob pattern \"{}\": {e}", input.pattern),
-            ));
-        }
-    };
+            )
+        })?
+        .compile_matcher();
 
-    let walk_root = match workspace.resolve(input.path.as_deref().unwrap_or(".")) {
-        Ok(path) => path,
-        Err(reason) => {
-            return protocol_outcome(ProtocolError::new(ErrorCode::RootEscape, reason));
-        }
-    };
-    let meta = match fs::metadata(&walk_root) {
-        Ok(meta) => meta,
-        Err(_) => {
-            return protocol_outcome(ProtocolError::new(
-                ErrorCode::NotFound,
-                format!("Glob path not found: {}", walk_root.display()),
-            ));
-        }
-    };
+    let walk_root = resolve_workspace_path(workspace, input.path.as_deref().unwrap_or("."))?;
+    let meta = fs::metadata(&walk_root).map_err(|_| {
+        ProtocolError::new(
+            ErrorCode::NotFound,
+            format!("Glob path not found: {}", walk_root.display()),
+        )
+    })?;
     if !meta.is_dir() {
-        return protocol_outcome(ProtocolError::new(
+        return Err(ProtocolError::new(
             ErrorCode::NotAFile,
             format!("Glob path is not a directory: {}", walk_root.display()),
         ));
@@ -123,7 +118,17 @@ pub fn run_glob(workspace: &Workspace, input: &GlobRequest) -> ToolOutcome {
         output.push('\n');
     }
     output.push_str(&summary.render());
-    ToolOutcome::success(output)
+    Ok(output)
+}
+
+/// Execute a `glob` request against the local filesystem (MCP text skin).
+///
+/// Blocking — call via `spawn_blocking` from async contexts.
+pub fn run_glob(workspace: &Workspace, input: &GlobRequest) -> ToolOutcome {
+    match run(workspace, input) {
+        Ok(text) => ToolOutcome::success(text),
+        Err(error) => protocol_outcome(error),
+    }
 }
 
 #[cfg(test)]
@@ -297,5 +302,21 @@ mod tests {
         let outcome = run_glob(&ws(tmp.path()), &req("*.zig"));
         assert!(!outcome.is_error, "{}", outcome.text);
         assert_eq!(outcome.text, "[hashline files=0 truncated=false]");
+    }
+
+    #[test]
+    fn typed_run_returns_listing_and_taxonomy_errors() {
+        let tmp = fixture();
+        let workspace = ws(tmp.path());
+
+        let listing = run(&workspace, &req("**/*.rs")).expect("typed glob succeeds");
+        assert!(
+            listing.ends_with("[hashline files=2 truncated=false]"),
+            "{listing}"
+        );
+
+        let error = run(&workspace, &req("a{")).expect_err("bad pattern fails typed");
+        assert_eq!(error.code, ErrorCode::InvalidPattern);
+        assert!(!error.retryable);
     }
 }

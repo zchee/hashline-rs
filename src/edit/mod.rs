@@ -14,10 +14,11 @@
 //
 //! `edit` — versioned byte-range file editing for the hashline protocol.
 //!
-//! Production path: [`run_edit`] takes an [`EditRequest`], validates the
-//! named snapshot, applies half-open ranges against exact bytes, and persists
-//! atomically. The transitional legacy anchor engine remains in [`apply`] for
-//! benches until Phase 8 deletes it.
+//! Production path: [`run`] takes an [`EditRequest`], validates the named
+//! snapshot, applies half-open ranges against exact bytes, and persists
+//! atomically; [`run_edit`] renders the same result for MCP transport. The
+//! transitional legacy anchor engine remains in [`apply`] for benches until
+//! Phase 8 deletes it.
 
 pub mod apply;
 pub mod range_policy;
@@ -31,14 +32,14 @@ pub use types::{HashlineEditInput, HashlineEditOutput, HashlineOp};
 use crate::{
     cache, persist,
     protocol::{
-        EditRequest, EditSuccess, ProtocolError, apply_versioned_reference_edits,
+        EditRequest, EditSuccess, ErrorCode, ProtocolError, apply_versioned_reference_edits,
         reference_context, reference_header,
     },
     scheme::Scheme,
     snapshot::{Snapshot, SnapshotError},
     util::{
-        ToolOutcome, Workspace, decode_utf8, persist_error_outcome, protocol_outcome,
-        snapshot_error_outcome,
+        ToolOutcome, Workspace, decode_utf8, join_protocol_error, persist_protocol_error,
+        protocol_outcome, resolve_workspace_path, snapshot_protocol_error, success_outcome,
     },
 };
 
@@ -46,16 +47,19 @@ use crate::{
 // Use the same wording without importing the private const.
 const CONFLICT_MSG: &str = "the file no longer matches the requested snapshot";
 
-/// Execute an `edit` request against the local filesystem.
-pub async fn run_edit(workspace: &Workspace, input: &EditRequest) -> ToolOutcome {
-    if let Err(error) = input.validate() {
-        return protocol_outcome(ProtocolError::from(error));
-    }
-
-    let path = match workspace.resolve(&input.file_path) {
-        Ok(path) => path,
-        Err(reason) => return ToolOutcome::error(reason),
-    };
+/// Execute an `edit` request, returning the typed persisted result.
+///
+/// This is the typed embedding surface; every failure is a stable R017
+/// taxonomy error. [`run_edit`] renders the same result for MCP transport.
+///
+/// # Errors
+///
+/// Returns snapshot_conflict, position/range/batch contract errors,
+/// root_escape, or a text/io taxonomy error; the success is published only
+/// after persistence (R019).
+pub async fn run(workspace: &Workspace, input: &EditRequest) -> Result<EditSuccess, ProtocolError> {
+    input.validate().map_err(ProtocolError::from)?;
+    let path = resolve_workspace_path(workspace, &input.file_path)?;
 
     let load_path = path.clone();
     let snapshot = match tokio::task::spawn_blocking(move || Snapshot::load(&load_path)).await {
@@ -70,10 +74,8 @@ pub async fn run_edit(workspace: &Workspace, input: &EditRequest) -> ToolOutcome
             // Require the request snapshot to match an empty snapshot identity.
             return create_new_file(&path, input).await;
         }
-        Ok(Err(error)) => return snapshot_error_outcome("edit", &path, error),
-        Err(join) => {
-            return ToolOutcome::error(format!("Failed to edit {}: {join}", path.display()));
-        }
+        Ok(Err(error)) => return Err(snapshot_protocol_error("edit", &path, error)),
+        Err(join) => return Err(join_protocol_error("edit", &path, join)),
     };
 
     let previous = snapshot.id();
@@ -87,31 +89,24 @@ pub async fn run_edit(workspace: &Workspace, input: &EditRequest) -> ToolOutcome
     })
     .await
     {
-        Ok(Ok(bytes)) => bytes,
-        Ok(Err(error)) => return protocol_outcome(error),
-        Err(join) => {
-            return ToolOutcome::error(format!("Failed to edit {}: {join}", path.display()));
-        }
+        Ok(result) => result?,
+        Err(join) => return Err(join_protocol_error("edit", &path, join)),
     };
 
     let path_for_write = path.clone();
     let bytes_for_write = applied.clone();
-    let write_result = tokio::task::spawn_blocking(move || {
+    match tokio::task::spawn_blocking(move || {
         persist::atomic_write(&path_for_write, &bytes_for_write, stamp)
     })
-    .await;
-    match write_result {
+    .await
+    {
         Ok(Ok(())) => {}
-        Ok(Err(error)) => return persist_error_outcome(error),
-        Err(join) => {
-            return ToolOutcome::error(format!("Failed to persist {}: {join}", path.display()));
-        }
+        Ok(Err(error)) => return Err(persist_protocol_error(error)),
+        Err(join) => return Err(join_protocol_error("persist", &path, join)),
     }
 
-    let new_snapshot = match Snapshot::from_bytes(applied) {
-        Ok(snap) => snap,
-        Err(error) => return snapshot_error_outcome("edit", &path, error),
-    };
+    let new_snapshot = Snapshot::from_bytes(applied)
+        .map_err(|error| snapshot_protocol_error("edit", &path, error))?;
     let success = EditSuccess::new(
         display,
         previous,
@@ -126,48 +121,45 @@ pub async fn run_edit(workspace: &Workspace, input: &EditRequest) -> ToolOutcome
     } else {
         cache::process_cache().insert(path.clone(), Arc::new(new_snapshot));
     }
-    match serde_json::to_string_pretty(&success) {
-        Ok(text) => ToolOutcome::success(text),
-        Err(e) => ToolOutcome::error(format!("Failed to encode edit success: {e}")),
+    Ok(success)
+}
+
+/// Execute an `edit` request against the local filesystem (MCP text skin).
+pub async fn run_edit(workspace: &Workspace, input: &EditRequest) -> ToolOutcome {
+    match run(workspace, input).await {
+        Ok(success) => success_outcome(&success),
+        Err(error) => protocol_outcome(error),
     }
 }
 
-async fn create_new_file(path: &Path, input: &EditRequest) -> ToolOutcome {
+async fn create_new_file(path: &Path, input: &EditRequest) -> Result<EditSuccess, ProtocolError> {
     // Empty pre-image: compute empty snapshot id and require request match.
-    let empty = match Snapshot::from_bytes(Vec::new()) {
-        Ok(s) => s,
-        Err(error) => return snapshot_error_outcome("edit", path, error),
-    };
+    let empty = Snapshot::from_bytes(Vec::new())
+        .map_err(|error| snapshot_protocol_error("edit", path, error))?;
     if input.snapshot != empty.id() {
         let header = reference_header(input.file_path.clone(), empty.id(), b"")
-            .map_err(|e| protocol_outcome(ProtocolError::from(e)));
-        let header = match header {
-            Ok(h) => h,
-            Err(outcome) => return outcome,
-        };
+            .map_err(ProtocolError::from)?;
         let context = reference_context(b"", 1).unwrap_or_default();
-        return protocol_outcome(
-            ProtocolError::snapshot_conflict(
-                input.snapshot,
-                header,
-                context,
-                CONFLICT_MSG.to_owned(),
-            )
-            .unwrap_or_else(ProtocolError::from),
-        );
+        return Err(ProtocolError::snapshot_conflict(
+            input.snapshot,
+            header,
+            context,
+            CONFLICT_MSG.to_owned(),
+        )
+        .unwrap_or_else(ProtocolError::from));
     }
 
-    let applied = match apply_versioned_reference_edits(b"", empty.id(), input) {
-        Ok(bytes) => bytes,
-        Err(error) => return protocol_outcome(error),
-    };
+    let applied = apply_versioned_reference_edits(b"", empty.id(), input)?;
 
     if let Some(parent) = path.parent()
         && let Err(e) = tokio::fs::create_dir_all(parent).await
     {
-        return ToolOutcome::error(format!(
-            "Failed to create parent directory for {}: {e}",
-            path.display()
+        return Err(ProtocolError::new(
+            ErrorCode::Io,
+            format!(
+                "Failed to create parent directory for {}: {e}",
+                path.display()
+            ),
         ));
     }
 
@@ -179,16 +171,12 @@ async fn create_new_file(path: &Path, input: &EditRequest) -> ToolOutcome {
     .await
     {
         Ok(Ok(())) => {}
-        Ok(Err(error)) => return persist_error_outcome(error),
-        Err(join) => {
-            return ToolOutcome::error(format!("Failed to persist {}: {join}", path.display()));
-        }
+        Ok(Err(error)) => return Err(persist_protocol_error(error)),
+        Err(join) => return Err(join_protocol_error("persist", path, join)),
     }
 
-    let new_snapshot = match Snapshot::from_bytes(applied) {
-        Ok(snap) => snap,
-        Err(error) => return snapshot_error_outcome("edit", path, error),
-    };
+    let new_snapshot = Snapshot::from_bytes(applied)
+        .map_err(|error| snapshot_protocol_error("edit", path, error))?;
     let success = EditSuccess::new(
         input.file_path.clone(),
         empty.id(),
@@ -202,10 +190,7 @@ async fn create_new_file(path: &Path, input: &EditRequest) -> ToolOutcome {
     } else {
         cache::process_cache().insert(path.to_path_buf(), Arc::new(new_snapshot));
     }
-    match serde_json::to_string_pretty(&success) {
-        Ok(text) => ToolOutcome::success(text),
-        Err(e) => ToolOutcome::error(format!("Failed to encode edit success: {e}")),
-    }
+    Ok(success)
 }
 
 /// Render a successful v1 edit application as model-facing text.
@@ -368,6 +353,36 @@ mod tests {
         assert_eq!(std::fs::read(&file).unwrap(), b"alpha\nBETA\n");
         assert!(outcome.text.contains("\"protocol\""));
         assert!(outcome.text.contains("previous_snapshot"));
+    }
+
+    #[tokio::test]
+    async fn typed_run_returns_success_and_conflict() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let file = tmp.path().join("typed.txt");
+        std::fs::write(&file, b"alpha\nbeta\n").unwrap();
+        let snap = Snapshot::load(&file).unwrap();
+        let request = EditRequest {
+            file_path: "typed.txt".into(),
+            snapshot: snap.id(),
+            edits: vec![EditOperation::replace(
+                pos(1, 0),
+                pos(2, 6),
+                "ALPHA\n".into(),
+            )],
+        };
+
+        let success = run(&ws(tmp.path()), &request)
+            .await
+            .expect("typed edit succeeds");
+        assert_eq!(success.applied, 1);
+        assert_eq!(success.previous_snapshot, snap.id());
+        assert_eq!(std::fs::read(&file).unwrap(), b"ALPHA\nbeta\n");
+
+        let stale = run(&ws(tmp.path()), &request)
+            .await
+            .expect_err("replaying the consumed snapshot conflicts");
+        assert_eq!(stale.code, ErrorCode::SnapshotConflict);
+        assert!(stale.conflict.is_some());
     }
 
     #[tokio::test]

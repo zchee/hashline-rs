@@ -45,7 +45,7 @@ use crate::{
         Position, ProtocolError, SnapshotHeader, classify_grep_text,
     },
     snapshot::Snapshot,
-    util::{ToolOutcome, Workspace, protocol_outcome},
+    util::{ToolOutcome, Workspace, protocol_outcome, resolve_workspace_path},
 };
 
 /// Default cap on reported match lines.
@@ -477,42 +477,38 @@ fn assemble_output(
     out
 }
 
-/// Execute a `grep` request against the local filesystem.
+/// Execute a `grep` request, returning the rendered R015 response.
 ///
-/// Blocking — call via `spawn_blocking` from async contexts.
-pub fn run_grep(workspace: &Workspace, input: &GrepRequest) -> ToolOutcome {
-    if let Err(error) = input.validate() {
-        return protocol_outcome(ProtocolError::from(error));
-    }
+/// This is the typed embedding surface; every failure is a stable R017
+/// taxonomy error. Blocking — call via `spawn_blocking` from async contexts.
+///
+/// # Errors
+///
+/// Returns invalid_pattern (regex or glob override), not_found, root_escape,
+/// binary_file/invalid_utf8 for an explicit file, or an invalid_request cap
+/// error per R015/R016.
+pub fn run(workspace: &Workspace, input: &GrepRequest) -> Result<String, ProtocolError> {
+    input.validate().map_err(ProtocolError::from)?;
 
-    let matcher = match build_matcher(&input.pattern, input.ignore_case) {
-        Ok(matcher) => matcher,
-        Err(e) => {
-            return protocol_outcome(ProtocolError::new(
-                crate::protocol::ErrorCode::InvalidPattern,
-                format!("Invalid regex pattern \"{}\": {e}", input.pattern),
-            ));
-        }
-    };
+    let matcher = build_matcher(&input.pattern, input.ignore_case).map_err(|e| {
+        ProtocolError::new(
+            crate::protocol::ErrorCode::InvalidPattern,
+            format!("Invalid regex pattern \"{}\": {e}", input.pattern),
+        )
+    })?;
 
     let (before_u16, after_u16) = input.effective_context();
     let before = usize::from(before_u16);
     let after = usize::from(after_u16);
     let max_matches = usize::from(input.max_matches.max(1));
 
-    let search_root = match workspace.resolve(input.path.as_deref().unwrap_or(".")) {
-        Ok(path) => path,
-        Err(reason) => return ToolOutcome::error(reason),
-    };
-    let meta = match std::fs::metadata(&search_root) {
-        Ok(m) => m,
-        Err(_) => {
-            return protocol_outcome(ProtocolError::new(
-                crate::protocol::ErrorCode::NotFound,
-                format!("Search path not found: {}", search_root.display()),
-            ));
-        }
-    };
+    let search_root = resolve_workspace_path(workspace, input.path.as_deref().unwrap_or("."))?;
+    let meta = std::fs::metadata(&search_root).map_err(|_| {
+        ProtocolError::new(
+            crate::protocol::ErrorCode::NotFound,
+            format!("Search path not found: {}", search_root.display()),
+        )
+    })?;
 
     let skipped_binary = AtomicUsize::new(0);
     let skipped_utf8 = AtomicUsize::new(0);
@@ -537,7 +533,7 @@ pub fn run_grep(workspace: &Workspace, input: &GrepRequest) -> ToolOutcome {
         .into_iter()
         .collect();
         if hits.is_empty() {
-            return ToolOutcome::success(assemble_output(
+            return Ok(assemble_output(
                 input.output_mode,
                 &[],
                 max_matches,
@@ -545,7 +541,7 @@ pub fn run_grep(workspace: &Workspace, input: &GrepRequest) -> ToolOutcome {
                 skipped_utf8.load(Ordering::Relaxed) as u64,
             ));
         }
-        return ToolOutcome::success(assemble_output(
+        return Ok(assemble_output(
             input.output_mode,
             &hits,
             max_matches,
@@ -558,14 +554,20 @@ pub fn run_grep(workspace: &Workspace, input: &GrepRequest) -> ToolOutcome {
     if let Some(ref glob) = input.glob {
         let mut overrides = OverrideBuilder::new(&search_root);
         if let Err(e) = overrides.add(glob) {
-            return ToolOutcome::error(format!("Invalid glob \"{glob}\": {e}"));
+            return Err(ProtocolError::new(
+                crate::protocol::ErrorCode::InvalidPattern,
+                format!("Invalid glob \"{glob}\": {e}"),
+            ));
         }
         match overrides.build() {
             Ok(ov) => {
                 builder.overrides(ov);
             }
             Err(e) => {
-                return ToolOutcome::error(format!("Invalid glob \"{glob}\": {e}"));
+                return Err(ProtocolError::new(
+                    crate::protocol::ErrorCode::InvalidPattern,
+                    format!("Invalid glob \"{glob}\": {e}"),
+                ));
             }
         }
     }
@@ -595,13 +597,23 @@ pub fn run_grep(workspace: &Workspace, input: &GrepRequest) -> ToolOutcome {
     let mut hits: Vec<FileHit> = batches.into_iter().flatten().collect();
     hits.sort_by(|a, b| a.rel.cmp(&b.rel));
 
-    ToolOutcome::success(assemble_output(
+    Ok(assemble_output(
         input.output_mode,
         &hits,
         max_matches,
         ctx.skipped_binary.load(Ordering::Relaxed) as u64,
         ctx.skipped_invalid_utf8.load(Ordering::Relaxed) as u64,
     ))
+}
+
+/// Execute a `grep` request against the local filesystem (MCP text skin).
+///
+/// Blocking — call via `spawn_blocking` from async contexts.
+pub fn run_grep(workspace: &Workspace, input: &GrepRequest) -> ToolOutcome {
+    match run(workspace, input) {
+        Ok(text) => ToolOutcome::success(text),
+        Err(error) => protocol_outcome(error),
+    }
 }
 
 #[cfg(test)]
@@ -704,6 +716,19 @@ mod tests {
                 "[hashline matches=2 truncated=true skipped_binary=0 skipped_invalid_utf8=0]",
             ]
         );
+    }
+
+    #[test]
+    fn typed_run_returns_rendered_text_and_taxonomy_errors() {
+        let tmp = mode_fixture();
+        let workspace = ws(tmp.path());
+
+        let text = run(&workspace, &req("needle")).expect("typed grep succeeds");
+        assert!(text.contains("matches=3"), "{text}");
+
+        let error = run(&workspace, &req("(unclosed")).expect_err("bad regex fails typed");
+        assert_eq!(error.code, crate::protocol::ErrorCode::InvalidPattern);
+        assert!(!error.retryable);
     }
 
     #[test]

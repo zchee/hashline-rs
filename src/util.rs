@@ -101,58 +101,98 @@ pub(crate) fn protocol_outcome(error: ProtocolError) -> ToolOutcome {
     }
 }
 
-/// Render a snapshot-load failure for one tool `operation` on `path`.
-pub(crate) fn snapshot_error_outcome(
+/// Render a typed tool success as its pretty JSON structured content.
+pub(crate) fn success_outcome<T: serde::Serialize>(value: &T) -> ToolOutcome {
+    match serde_json::to_string_pretty(value) {
+        Ok(text) => ToolOutcome::success(text),
+        Err(e) => ToolOutcome::error(format!("Failed to encode tool success: {e}")),
+    }
+}
+
+/// Resolve a tool path, mapping confinement violations to root_escape.
+pub(crate) fn resolve_workspace_path(
+    workspace: &Workspace,
+    path: &str,
+) -> Result<PathBuf, ProtocolError> {
+    workspace
+        .resolve(path)
+        .map_err(|reason| ProtocolError::new(ErrorCode::RootEscape, reason))
+}
+
+/// Map a snapshot-load failure for one tool `operation` on `path` into the
+/// stable taxonomy: contract errors keep their code, a missing file is
+/// not_found, and every other filesystem failure is io.
+pub(crate) fn snapshot_protocol_error(
     operation: &str,
     path: &Path,
     error: SnapshotError,
-) -> ToolOutcome {
+) -> ProtocolError {
     match error {
-        SnapshotError::Contract(contract) => protocol_outcome(ProtocolError::from(contract)),
+        SnapshotError::Contract(contract) => ProtocolError::from(contract),
         SnapshotError::Io {
             operation: io_operation,
             path: io_path,
             source,
-        } => ToolOutcome::error(format!(
-            "Failed to {io_operation} {}: {source}",
-            io_path.display()
-        )),
-        SnapshotError::ConcurrentModification { path: changed } => {
-            protocol_outcome(ProtocolError::new(
-                ErrorCode::Io,
-                format!(
-                    "file changed during both snapshot read attempts: {}",
-                    changed.display()
-                ),
-            ))
+        } => {
+            let code = if source.kind() == std::io::ErrorKind::NotFound {
+                ErrorCode::NotFound
+            } else {
+                ErrorCode::Io
+            };
+            ProtocolError::new(
+                code,
+                format!("Failed to {io_operation} {}: {source}", io_path.display()),
+            )
         }
-        other => ToolOutcome::error(format!("Failed to {operation} {}: {other}", path.display())),
+        SnapshotError::ConcurrentModification { path: changed } => ProtocolError::new(
+            ErrorCode::Io,
+            format!(
+                "file changed during both snapshot read attempts: {}",
+                changed.display()
+            ),
+        ),
+        other => ProtocolError::new(
+            ErrorCode::Io,
+            format!("Failed to {operation} {}: {other}", path.display()),
+        ),
     }
 }
 
-/// Render an atomic-persistence failure as its taxonomy error or I/O text.
-pub(crate) fn persist_error_outcome(error: PersistError) -> ToolOutcome {
+/// Map an atomic-persistence failure into the stable taxonomy.
+pub(crate) fn persist_protocol_error(error: PersistError) -> ProtocolError {
     match error {
-        PersistError::DestinationChanged { path } => protocol_outcome(ProtocolError::new(
+        PersistError::DestinationChanged { path } => ProtocolError::new(
             ErrorCode::SnapshotConflict,
             format!(
                 "destination changed before atomic rename: {}",
                 path.display()
             ),
-        )),
-        PersistError::DestinationExists { path } => protocol_outcome(ProtocolError::new(
+        ),
+        PersistError::DestinationExists { path } => ProtocolError::new(
             ErrorCode::AlreadyExists,
             format!("destination already exists: {}", path.display()),
-        )),
+        ),
         PersistError::Io {
             operation,
             path,
             source,
-        } => ToolOutcome::error(format!(
-            "Failed to {operation} {}: {source}",
-            path.display()
-        )),
+        } => ProtocolError::new(
+            ErrorCode::Io,
+            format!("Failed to {operation} {}: {source}", path.display()),
+        ),
     }
+}
+
+/// Map a blocking-task join failure for one tool `operation` on `path`.
+pub(crate) fn join_protocol_error(
+    operation: &str,
+    path: &Path,
+    join: tokio::task::JoinError,
+) -> ProtocolError {
+    ProtocolError::new(
+        ErrorCode::Io,
+        format!("Failed to {operation} {}: {join}", path.display()),
+    )
 }
 
 /// Path-resolution context shared by all tools: the workspace root plus the

@@ -15,10 +15,13 @@
 //! `write` — versioned file creation and replacement for the hashline
 //! protocol.
 //!
-//! [`run_write`] decides one [`WriteRequest`] against the freshly loaded
-//! destination state with [`validate_reference_write`], then persists either
-//! exclusively ([`persist::atomic_create`], `expect: "absent"`) or atomically
-//! over the validated stamp ([`persist::atomic_write`], versioned overwrite).
+//! [`run`] is the typed embedding surface: it decides one [`WriteRequest`]
+//! against the freshly loaded destination state with
+//! [`validate_reference_write`], persists either exclusively
+//! ([`persist::atomic_create`], `expect: "absent"`) or atomically over the
+//! validated stamp ([`persist::atomic_write`]), and returns the typed
+//! [`WriteSuccess`] or a stable R017 taxonomy error. [`run_write`] renders
+//! the same result as MCP text.
 
 use std::{path::Path, sync::Arc};
 
@@ -28,22 +31,24 @@ use crate::{
     protocol::{ErrorCode, ProtocolError, WriteRequest, WriteSuccess, validate_reference_write},
     snapshot::{Snapshot, SnapshotError},
     util::{
-        ToolOutcome, Workspace, persist_error_outcome, protocol_outcome, snapshot_error_outcome,
+        ToolOutcome, Workspace, join_protocol_error, persist_protocol_error, protocol_outcome,
+        resolve_workspace_path, snapshot_protocol_error, success_outcome,
     },
 };
 
-/// Execute a `write` request against the local filesystem.
-pub async fn run_write(workspace: &Workspace, input: &WriteRequest) -> ToolOutcome {
-    if let Err(error) = input.validate() {
-        return protocol_outcome(ProtocolError::from(error));
-    }
-
-    let path = match workspace.resolve(&input.file_path) {
-        Ok(path) => path,
-        Err(reason) => {
-            return protocol_outcome(ProtocolError::new(ErrorCode::RootEscape, reason));
-        }
-    };
+/// Execute a `write` request, returning the typed persisted result.
+///
+/// # Errors
+///
+/// Returns already_exists, not_found, snapshot_conflict, root_escape, or a
+/// content/io taxonomy error per R023; the success is published only after
+/// persistence (R019).
+pub async fn run(
+    workspace: &Workspace,
+    input: &WriteRequest,
+) -> Result<WriteSuccess, ProtocolError> {
+    input.validate().map_err(ProtocolError::from)?;
+    let path = resolve_workspace_path(workspace, &input.file_path)?;
 
     let load_path = path.clone();
     let current = match tokio::task::spawn_blocking(move || Snapshot::load(&load_path)).await {
@@ -53,21 +58,16 @@ pub async fn run_write(workspace: &Workspace, input: &WriteRequest) -> ToolOutco
         {
             None
         }
-        Ok(Err(error)) => return snapshot_error_outcome("write", &path, error),
-        Err(join) => {
-            return ToolOutcome::error(format!("Failed to write {}: {join}", path.display()));
-        }
+        Ok(Err(error)) => return Err(snapshot_protocol_error("write", &path, error)),
+        Err(join) => return Err(join_protocol_error("write", &path, join)),
     };
 
-    let created = match validate_reference_write(
+    let created = validate_reference_write(
         current
             .as_ref()
             .map(|snapshot| (snapshot.bytes(), snapshot.id())),
         input,
-    ) {
-        Ok(created) => created,
-        Err(error) => return protocol_outcome(error),
-    };
+    )?;
 
     let bytes = input.content.clone().into_bytes();
     let path_for_write = path.clone();
@@ -81,18 +81,14 @@ pub async fn run_write(workspace: &Workspace, input: &WriteRequest) -> ToolOutco
     match persist_result {
         Ok(Ok(())) => {}
         Ok(Err(PersistError::DestinationExists { .. })) => {
-            return lose_create_race(&path, input).await;
+            return Err(lose_create_race(&path, input).await);
         }
-        Ok(Err(error)) => return persist_error_outcome(error),
-        Err(join) => {
-            return ToolOutcome::error(format!("Failed to persist {}: {join}", path.display()));
-        }
+        Ok(Err(error)) => return Err(persist_protocol_error(error)),
+        Err(join) => return Err(join_protocol_error("persist", &path, join)),
     }
 
-    let persisted = match Snapshot::from_bytes(input.content.clone().into_bytes()) {
-        Ok(snapshot) => snapshot,
-        Err(error) => return snapshot_error_outcome("write", &path, error),
-    };
+    let persisted = Snapshot::from_bytes(input.content.clone().into_bytes())
+        .map_err(|error| snapshot_protocol_error("write", &path, error))?;
     let success = WriteSuccess::new(
         input.file_path.clone(),
         persisted.id(),
@@ -106,9 +102,14 @@ pub async fn run_write(workspace: &Workspace, input: &WriteRequest) -> ToolOutco
     } else {
         cache::process_cache().insert(path.clone(), Arc::new(persisted));
     }
-    match serde_json::to_string_pretty(&success) {
-        Ok(text) => ToolOutcome::success(text),
-        Err(e) => ToolOutcome::error(format!("Failed to encode write success: {e}")),
+    Ok(success)
+}
+
+/// Execute a `write` request against the local filesystem (MCP text skin).
+pub async fn run_write(workspace: &Workspace, input: &WriteRequest) -> ToolOutcome {
+    match run(workspace, input).await {
+        Ok(success) => success_outcome(&success),
+        Err(error) => protocol_outcome(error),
     }
 }
 
@@ -117,30 +118,36 @@ pub async fn run_write(workspace: &Workspace, input: &WriteRequest) -> ToolOutco
 /// The absent check passed but another writer created the destination before
 /// our hard link landed. Decide against the fresh state so the error carries
 /// a truthful current header, exactly as if the winner had been there first.
-async fn lose_create_race(path: &Path, input: &WriteRequest) -> ToolOutcome {
+async fn lose_create_race(path: &Path, input: &WriteRequest) -> ProtocolError {
     let load_path = path.to_path_buf();
     match tokio::task::spawn_blocking(move || Snapshot::load(&load_path)).await {
         Ok(Ok(snapshot)) => {
             match validate_reference_write(Some((snapshot.bytes(), snapshot.id())), input) {
-                Ok(_) => ToolOutcome::error(format!(
-                    "Failed to write {}: lost a create race but the destination no \
-                     longer conflicts; retry",
-                    path.display()
-                )),
-                Err(error) => protocol_outcome(error),
+                Ok(_) => ProtocolError::new(
+                    ErrorCode::Io,
+                    format!(
+                        "Failed to write {}: lost a create race but the destination no \
+                         longer conflicts; retry",
+                        path.display()
+                    ),
+                ),
+                Err(error) => error,
             }
         }
         Ok(Err(SnapshotError::Io { source, .. }))
             if source.kind() == std::io::ErrorKind::NotFound =>
         {
-            ToolOutcome::error(format!(
-                "Failed to write {}: destination appeared and vanished during create; \
-                 retry",
-                path.display()
-            ))
+            ProtocolError::new(
+                ErrorCode::Io,
+                format!(
+                    "Failed to write {}: destination appeared and vanished during create; \
+                     retry",
+                    path.display()
+                ),
+            )
         }
-        Ok(Err(error)) => snapshot_error_outcome("write", path, error),
-        Err(join) => ToolOutcome::error(format!("Failed to write {}: {join}", path.display())),
+        Ok(Err(error)) => snapshot_protocol_error("write", path, error),
+        Err(join) => join_protocol_error("write", path, join),
     }
 }
 
@@ -173,6 +180,40 @@ mod tests {
 
     fn parse(outcome: &ToolOutcome) -> Value {
         serde_json::from_str(&outcome.text).expect("structured JSON outcome")
+    }
+
+    #[tokio::test]
+    async fn typed_run_returns_success_and_taxonomy_errors() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let workspace = ws(tmp.path());
+
+        let success = run(&workspace, &create_request("typed.txt", "one\ntwo\n"))
+            .await
+            .expect("typed create succeeds");
+        assert!(success.created);
+        assert_eq!(success.bytes, 8);
+        assert_eq!(success.lines, 3);
+
+        let error = run(&workspace, &create_request("typed.txt", "usurper\n"))
+            .await
+            .expect_err("second exclusive create fails typed");
+        assert_eq!(error.code, ErrorCode::AlreadyExists);
+        assert!(error.retryable);
+        assert_eq!(
+            error
+                .existing
+                .as_ref()
+                .map(|existing| existing.current_header.snapshot),
+            Some(success.snapshot)
+        );
+
+        let missing = run(
+            &workspace,
+            &overwrite_request("absent.txt", "next\n", success.snapshot),
+        )
+        .await
+        .expect_err("overwrite of a missing file fails typed");
+        assert_eq!(missing.code, ErrorCode::NotFound);
     }
 
     #[tokio::test]

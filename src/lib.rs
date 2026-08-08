@@ -20,6 +20,12 @@
 //! independent of the optimized snapshot, read, edit, grep, persistence, and
 //! cache engines that later gated phases compare against it.
 //!
+//! For embedding without MCP, each tool module exposes a typed runner —
+//! [`read::run`], [`edit::run`], [`write::run`], [`grep::run`], and
+//! [`glob::run`] — returning `Result<_, `[`protocol::ProtocolError`]`>` with
+//! every failure drawn from the stable R017 taxonomy. The `run_*` variants
+//! render the same results as MCP text for [`server::HashlineServer`].
+//!
 //! The other modules retain the measured anchor engine used as the Phase 0
 //! baseline until its scheduled deletion.
 
