@@ -41,11 +41,11 @@ use serde::Deserialize;
 
 use crate::{
     protocol::{
-        ErrorResponse, GrepLine, GrepLineKind, GrepRequest, GrepSummary, GrepTarget, GrepText,
+        GrepLine, GrepLineKind, GrepOutputMode, GrepRequest, GrepSummary, GrepTarget, GrepText,
         Position, ProtocolError, SnapshotHeader, classify_grep_text,
     },
     snapshot::Snapshot,
-    util::{ToolOutcome, Workspace},
+    util::{ToolOutcome, Workspace, protocol_outcome},
 };
 
 /// Default cap on reported match lines.
@@ -422,7 +422,13 @@ impl<'a> ParallelVisitorBuilder<'a> for GrepVisitorBuilder<'a> {
 }
 
 /// Assemble the final output text from sorted per-file hits.
+/// Render hits in the requested shape under one shared match budget.
+///
+/// Every mode walks files in the same ascending path order and consumes the
+/// same global match budget, so the reported file set — and the summary —
+/// stay equal to an aggregation of the content response for the request.
 fn assemble_output(
+    mode: GrepOutputMode,
     hits: &[FileHit],
     max_matches: usize,
     skipped_binary: u64,
@@ -437,13 +443,24 @@ fn assemble_output(
             truncated = true;
             break;
         }
-        out.reserve(hit.header.len() + hit.body.len() + 2);
-        if !out.is_empty() {
-            out.push('\n');
+        match mode {
+            GrepOutputMode::Content => {
+                out.reserve(hit.header.len() + hit.body.len() + 2);
+                if !out.is_empty() {
+                    out.push('\n');
+                }
+                out.push_str(&hit.header);
+                out.push('\n');
+                out.push_str(&hit.body);
+            }
+            GrepOutputMode::FilesWithMatches => {
+                out.push_str(&hit.rel.to_string_lossy());
+                out.push('\n');
+            }
+            GrepOutputMode::Count => {
+                out.push_str(&format!("{}: {}\n", hit.rel.to_string_lossy(), hit.matches));
+            }
         }
-        out.push_str(&hit.header);
-        out.push('\n');
-        out.push_str(&hit.body);
         shown_matches = shown_matches.saturating_add(hit.matches);
     }
 
@@ -453,19 +470,11 @@ fn assemble_output(
         skipped_binary,
         skipped_invalid_utf8,
     };
-    if !out.is_empty() {
+    if !out.is_empty() && mode == GrepOutputMode::Content {
         out.push('\n');
     }
     out.push_str(&summary.render());
     out
-}
-
-fn protocol_outcome(error: ProtocolError) -> ToolOutcome {
-    let envelope = ErrorResponse::new(error);
-    match serde_json::to_string_pretty(&envelope) {
-        Ok(text) => ToolOutcome::error(text),
-        Err(_) => ToolOutcome::error(envelope.error.message),
-    }
 }
 
 /// Execute a `grep` request against the local filesystem.
@@ -529,6 +538,7 @@ pub fn run_grep(workspace: &Workspace, input: &GrepRequest) -> ToolOutcome {
         .collect();
         if hits.is_empty() {
             return ToolOutcome::success(assemble_output(
+                input.output_mode,
                 &[],
                 max_matches,
                 skipped_binary.load(Ordering::Relaxed) as u64,
@@ -536,6 +546,7 @@ pub fn run_grep(workspace: &Workspace, input: &GrepRequest) -> ToolOutcome {
             ));
         }
         return ToolOutcome::success(assemble_output(
+            input.output_mode,
             &hits,
             max_matches,
             skipped_binary.load(Ordering::Relaxed) as u64,
@@ -585,6 +596,7 @@ pub fn run_grep(workspace: &Workspace, input: &GrepRequest) -> ToolOutcome {
     hits.sort_by(|a, b| a.rel.cmp(&b.rel));
 
     ToolOutcome::success(assemble_output(
+        input.output_mode,
         &hits,
         max_matches,
         ctx.skipped_binary.load(Ordering::Relaxed) as u64,
@@ -611,7 +623,102 @@ mod tests {
             after_context: None,
             context: None,
             max_matches: 200,
+            output_mode: GrepOutputMode::Content,
         }
+    }
+
+    /// Fixture with deterministic per-file match counts for mode agreement.
+    fn mode_fixture() -> tempfile::TempDir {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir(tmp.path().join("sub")).unwrap();
+        std::fs::write(tmp.path().join("a.txt"), "needle\nhay\nneedle\n").unwrap();
+        std::fs::write(tmp.path().join("c.txt"), "hay\n").unwrap();
+        std::fs::write(tmp.path().join("sub/b.txt"), "needle\n").unwrap();
+        tmp
+    }
+
+    #[test]
+    fn alternate_modes_agree_with_content_aggregation() {
+        let tmp = mode_fixture();
+        let workspace = ws(tmp.path());
+
+        let content = run_grep(&workspace, &req("needle"));
+        assert!(!content.is_error, "{}", content.text);
+        let content_match_lines = content
+            .text
+            .lines()
+            .filter(|line| {
+                line.split_once(':')
+                    .is_some_and(|(prefix, _)| prefix.parse::<crate::protocol::Position>().is_ok())
+            })
+            .count();
+        assert_eq!(content_match_lines, 3, "{}", content.text);
+        assert!(content.text.contains("matches=3"), "{}", content.text);
+
+        let mut files_request = req("needle");
+        files_request.output_mode = GrepOutputMode::FilesWithMatches;
+        let files = run_grep(&workspace, &files_request);
+        assert!(!files.is_error, "{}", files.text);
+        assert_eq!(
+            files.text.lines().collect::<Vec<_>>(),
+            vec![
+                "a.txt",
+                "sub/b.txt",
+                "[hashline matches=3 truncated=false skipped_binary=0 skipped_invalid_utf8=0]",
+            ],
+            "files mode must equal the content-mode file set"
+        );
+        assert!(
+            !files.text.contains("[hashline snapshot="),
+            "{}",
+            files.text
+        );
+
+        let mut count_request = req("needle");
+        count_request.output_mode = GrepOutputMode::Count;
+        let counts = run_grep(&workspace, &count_request);
+        assert!(!counts.is_error, "{}", counts.text);
+        assert_eq!(
+            counts.text.lines().collect::<Vec<_>>(),
+            vec![
+                "a.txt: 2",
+                "sub/b.txt: 1",
+                "[hashline matches=3 truncated=false skipped_binary=0 skipped_invalid_utf8=0]",
+            ],
+            "count mode must equal the content-mode per-file match counts"
+        );
+    }
+
+    #[test]
+    fn alternate_modes_share_the_match_budget() {
+        let tmp = mode_fixture();
+        let mut input = req("needle");
+        input.max_matches = 2;
+        input.output_mode = GrepOutputMode::FilesWithMatches;
+        let outcome = run_grep(&ws(tmp.path()), &input);
+        assert!(!outcome.is_error, "{}", outcome.text);
+        assert_eq!(
+            outcome.text.lines().collect::<Vec<_>>(),
+            vec![
+                "a.txt",
+                "[hashline matches=2 truncated=true skipped_binary=0 skipped_invalid_utf8=0]",
+            ]
+        );
+    }
+
+    #[test]
+    fn context_outside_content_mode_is_invalid_request() {
+        let tmp = mode_fixture();
+        let mut input = req("needle");
+        input.output_mode = GrepOutputMode::Count;
+        input.context = Some(1);
+        let outcome = run_grep(&ws(tmp.path()), &input);
+        assert!(outcome.is_error, "{}", outcome.text);
+        assert!(
+            outcome.text.contains("\"invalid_request\""),
+            "{}",
+            outcome.text
+        );
     }
 
     #[test]

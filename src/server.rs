@@ -114,6 +114,8 @@ Usage:
 - pattern is a regex: `log.*Error`, `function\s+\w+`, `TODO`
 - Search scope defaults to the workspace root; narrow it with path and glob
 - Use after_context/before_context/context for context lines around matches (like -A/-B/-C)
+- output_mode "files_with_matches" lists matching paths only; "count" lists PATH: N
+  match counts; both are cheap discovery modes (context only applies to "content")
 - Respects .gitignore; hidden files and binary files are skipped
 - Results are capped; truncated results show "at least" counts"#;
 
@@ -546,7 +548,7 @@ mod tests {
         assert!(operation_text.contains("\"replace\""));
 
         let grep_properties = grep["properties"].as_object().expect("grep properties");
-        assert_eq!(grep_properties.len(), 8);
+        assert_eq!(grep_properties.len(), 9);
         for field in [
             "pattern",
             "path",
@@ -556,6 +558,7 @@ mod tests {
             "after_context",
             "context",
             "max_matches",
+            "output_mode",
         ] {
             assert!(grep_properties.contains_key(field), "missing {field}");
         }

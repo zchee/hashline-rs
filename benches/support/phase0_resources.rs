@@ -32,7 +32,9 @@ use hashline::{
     edit::{HashlineOp, apply::apply_edits, run_edit},
     grep::run_grep,
     index::FileIndex,
-    protocol::{EditOperation, EditRequest, GrepRequest, PageCursor, Position, ReadRequest},
+    protocol::{
+        EditOperation, EditRequest, GrepOutputMode, GrepRequest, PageCursor, Position, ReadRequest,
+    },
     read::{format_hashline_content, run_read},
     scheme::Scheme,
     snapshot::Snapshot,
@@ -251,6 +253,7 @@ fn grep_input(pattern: &str, path: Option<String>) -> GrepRequest {
         before_context: None,
         context: None,
         max_matches: 200,
+        output_mode: GrepOutputMode::Content,
     }
 }
 

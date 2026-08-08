@@ -293,11 +293,21 @@ omits the cursor. A cursor controls the start; the legacy `offset` is not accept
 ### R015: Grep sections and positions
 
 The exact grep input fields are `pattern`, `path`, `glob`,
-`ignore_case`, `before_context`, `after_context`, `context`, and
-`max_matches`. Unknown properties are invalid. `pattern` is required.
-`path` and `glob` default to null; `ignore_case` defaults to false.
-Context counts are in `0..=2000`; `context` overrides before/after.
-`max_matches` defaults to and cannot exceed 200.
+`ignore_case`, `before_context`, `after_context`, `context`,
+`max_matches`, and `output_mode`. Unknown properties are invalid.
+`pattern` is required. `path` and `glob` default to null; `ignore_case`
+defaults to false. Context counts are in `0..=2000`; `context` overrides
+before/after. `max_matches` defaults to and cannot exceed 200.
+
+`output_mode` selects the response shape and defaults to `content` — the
+R002-headed match/context sections below. `files_with_matches` emits one
+matching file path per line; `count` emits one `PATH: N` match-count line
+per matching file. Every mode walks files in the same ascending path order
+and consumes the same global match budget, so the reported file set and
+per-file counts equal an aggregation of the `content` response for the same
+request. Context fields combined with a non-content mode are
+`invalid_request`. The final summary is emitted in every mode and its match
+count keeps its `content` meaning: match lines inside reported files.
 
 Each matching file has one R002 header. A match line is
 `POSITION:CONTENT`, a context line is `POSITION-CONTENT`, and `--`
@@ -796,7 +806,7 @@ assert!(serde_json::from_value::<ReadRequest>(
 
 ```rust
 use hashline::protocol::{
-    GrepRequest, GrepSummary, MAX_GREP_MATCHES, remaining_match_capacity,
+    GrepOutputMode, GrepRequest, GrepSummary, MAX_GREP_MATCHES, remaining_match_capacity,
 };
 use serde_json::json;
 
@@ -808,6 +818,14 @@ let request: GrepRequest = serde_json::from_value(json!({
 }))?;
 assert_eq!(request.effective_context(), (3, 3));
 assert_eq!(request.max_matches, MAX_GREP_MATCHES);
+assert_eq!(request.output_mode, GrepOutputMode::Content);
+
+let counted: GrepRequest = serde_json::from_value(json!({
+    "pattern": "SnapshotId",
+    "output_mode": "count",
+    "context": 1
+}))?;
+assert!(counted.validate().is_err());
 assert_eq!(remaining_match_capacity(200, 199)?, 1);
 assert_eq!(
     GrepSummary {

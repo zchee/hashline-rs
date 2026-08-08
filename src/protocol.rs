@@ -448,6 +448,19 @@ const fn default_max_matches() -> u16 {
     MAX_GREP_MATCHES
 }
 
+/// Output shape for one grep response.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum GrepOutputMode {
+    /// R002-headed sections with position-annotated match and context lines.
+    #[default]
+    Content,
+    /// One matching file path per line.
+    FilesWithMatches,
+    /// One `PATH: N` match-count line per matching file.
+    Count,
+}
+
 /// Frozen input schema for `grep`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -479,6 +492,9 @@ pub struct GrepRequest {
     #[serde(default = "default_max_matches")]
     #[schemars(default = "default_max_matches", range(min = 1, max = 200))]
     pub max_matches: u16,
+    /// Response shape; content is the default.
+    #[serde(default)]
+    pub output_mode: GrepOutputMode,
 }
 
 impl GrepRequest {
@@ -512,6 +528,13 @@ impl GrepRequest {
             if value > MAX_CONTEXT_LINES {
                 return Err(ContractError::InvalidContextLimit { limit: value });
             }
+        }
+        if self.output_mode != GrepOutputMode::Content
+            && (self.before_context.is_some()
+                || self.after_context.is_some()
+                || self.context.is_some())
+        {
+            return Err(ContractError::ContextOutsideContentMode);
         }
         Ok(())
     }
@@ -1230,6 +1253,9 @@ pub enum ContractError {
         /// Rejected value.
         limit: u16,
     },
+    /// Context lines were requested outside content output.
+    #[error("grep context requires output_mode \"content\"")]
+    ContextOutsideContentMode,
     /// Edit batch is empty.
     #[error("edit batch must contain at least one operation")]
     EmptyEditBatch,
@@ -1316,6 +1342,7 @@ impl ContractError {
             | Self::InvalidGrepLimit { .. }
             | Self::InvalidContextLimit { .. }
             | Self::InvalidGlobLimit { .. }
+            | Self::ContextOutsideContentMode
             | Self::EmptyEditBatch
             | Self::TooManyEdits { .. }
             | Self::InvalidLineCount
@@ -2272,7 +2299,35 @@ mod tests {
             serde_json::from_value(json!({"pattern": "beta"})).expect("grep defaults");
         assert_eq!(defaults.max_matches, MAX_GREP_MATCHES);
         assert_eq!(defaults.effective_context(), (0, 0));
+        assert_eq!(defaults.output_mode, GrepOutputMode::Content);
         defaults.validate().expect("default grep request");
+
+        for mode in ["files_with_matches", "count"] {
+            let alternate: GrepRequest = serde_json::from_value(json!({
+                "pattern": "beta",
+                "output_mode": mode
+            }))
+            .expect("alternate output mode");
+            alternate.validate().expect("context-free alternate mode");
+
+            let with_context: GrepRequest = serde_json::from_value(json!({
+                "pattern": "beta",
+                "output_mode": mode,
+                "context": 1
+            }))
+            .expect("shape deserializes before semantic validation");
+            assert!(matches!(
+                with_context.validate(),
+                Err(ContractError::ContextOutsideContentMode)
+            ));
+        }
+        assert!(
+            serde_json::from_value::<GrepRequest>(json!({
+                "pattern": "beta",
+                "output_mode": "paths"
+            }))
+            .is_err()
+        );
 
         let overridden: GrepRequest = serde_json::from_value(json!({
             "pattern": "beta",

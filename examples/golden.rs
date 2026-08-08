@@ -39,7 +39,7 @@ use hashline::{
     config::{SchemeConfig, SchemeKind},
     edit::{HashlineOp, apply::apply_edits},
     grep::run_grep,
-    protocol::GrepRequest,
+    protocol::{GrepOutputMode, GrepRequest},
     read::format_hashline_content,
     util::Workspace,
 };
@@ -303,6 +303,7 @@ fn main() {
                 before_context: None,
                 context,
                 max_matches: 40,
+                output_mode: GrepOutputMode::Content,
             };
             let outcome = run_grep(&ws, &input);
             println!("-- grep {label} is_error={}", outcome.is_error);

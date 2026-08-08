@@ -36,7 +36,7 @@ use hashline::{
     grep::run_grep,
     hash::{encode_hash, fnv1a_32, line_hash},
     index::{FileIndex, split_lines},
-    protocol::{EditRequest, GrepRequest, apply_versioned_reference_edits},
+    protocol::{EditRequest, GrepOutputMode, GrepRequest, apply_versioned_reference_edits},
     read::format_hashline_content,
     scheme::{Anchor, Scheme},
     snapshot::Snapshot,
@@ -281,6 +281,7 @@ fn grep_input(pattern: &str) -> GrepRequest {
         before_context: None,
         context: None,
         max_matches: 200,
+        output_mode: GrepOutputMode::Content,
     }
 }
 
