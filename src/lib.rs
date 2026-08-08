@@ -26,6 +26,7 @@
 pub mod cache;
 pub mod config;
 pub mod edit;
+pub mod glob;
 pub mod grep;
 pub mod hash;
 pub mod index;

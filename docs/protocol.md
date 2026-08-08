@@ -479,9 +479,11 @@ documented rather than hidden.
 
 The exact glob input fields are `pattern`, `path`, and `max_results`.
 Unknown properties are invalid. `pattern` is required and is matched
-case-sensitively against workspace-relative file paths. `path` defaults to
-null and names the directory the walk starts from. `max_results` defaults to
-and cannot exceed 1000.
+case-sensitively against walk-root-relative file paths, with `*` stopping at
+path separators and `**` crossing them. `path` defaults to null, names the
+directory the walk starts from, and must resolve to a directory — a
+resolvable non-directory is `not_a_file`. `max_results` defaults to and
+cannot exceed 1000.
 
 The walk shares the R015/R016 traversal stance: `.gitignore` is respected,
 hidden entries are skipped, and symbolic links are not followed. Glob reports
@@ -489,12 +491,15 @@ paths only — file bytes are never read, so text validation and binary
 skipping do not apply. Only regular files are reported. A pattern that cannot
 compile is `invalid_pattern`; a `path` that does not exist is `not_found`.
 
-Output is one workspace-relative path per line, ordered by last modification
-time descending with ties broken by ascending bytewise path comparison. An
-entry whose modification time cannot be read sorts as the epoch (oldest).
-When more than `max_results` paths match, the newest `max_results` under
-this same ordering are reported and `truncated` is true. The ordering is
-fully deterministic for a fixed set of path and modification-time pairs.
+Output is one path per line: each walk-root-relative match re-prefixed with
+the request `path`, so reported paths feed read, edit, and write directly.
+Paths are ordered by last modification time descending with ties broken by
+ascending bytewise path comparison. An entry whose modification time cannot
+be read sorts as the epoch (oldest), and a path that cannot round-trip
+through UTF-8 tool arguments is not reported. When more than `max_results`
+paths match, the newest `max_results` under this same ordering are reported
+and `truncated` is true. The ordering is fully deterministic for a fixed set
+of path and modification-time pairs.
 
 The final summary is:
 

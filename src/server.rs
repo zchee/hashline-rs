@@ -47,8 +47,9 @@ use serde_json::Value;
 use crate::{
     config::{ConfigError, SchemeConfig},
     edit::run_edit,
+    glob::run_glob,
     grep::run_grep,
-    protocol::{EditRequest, GrepRequest, ReadRequest, WriteRequest},
+    protocol::{EditRequest, GlobRequest, GrepRequest, ReadRequest, WriteRequest},
     read::{MAX_LINES_READ, run_read},
     scheme::Scheme,
     util::{ToolOutcome, Workspace},
@@ -116,6 +117,20 @@ Usage:
 - Respects .gitignore; hidden files and binary files are skipped
 - Results are capped; truncated results show "at least" counts"#;
 
+const GLOB_TEMPLATE: &str = r#"Find files by glob pattern, newest first, for use with read and edit.
+
+{
+  "pattern": "**/*.rs",
+  "path": "src",
+  "max_results": 1000
+}
+
+`*` stops at path separators; `**` crosses them. The walk respects
+.gitignore and skips hidden files. Results are paths you can pass directly
+to read, edit, and write, sorted by modification time (newest first), and
+end with: [hashline files=<N> truncated=<true|false>]
+"#;
+
 /// Convert a `file://` URI into a filesystem path.
 ///
 /// Accepts an empty or `localhost` authority; any other host (or scheme)
@@ -158,6 +173,7 @@ pub struct HashlineServer {
     edit_description: Arc<str>,
     write_description: Arc<str>,
     grep_description: Arc<str>,
+    glob_description: Arc<str>,
     /// Tool listing, rendered on first use and shared across clones — schema
     /// generation and JSON serialization are far too costly to repeat per
     /// `tools/list` request.
@@ -185,6 +201,7 @@ impl HashlineServer {
             edit_description: config.render_description(EDIT_TEMPLATE).into(),
             write_description: config.render_description(WRITE_TEMPLATE).into(),
             grep_description: config.render_description(GREP_TEMPLATE).into(),
+            glob_description: config.render_description(GLOB_TEMPLATE).into(),
             tools: Arc::new(OnceLock::new()),
         })
     }
@@ -309,6 +326,7 @@ impl HashlineServer {
                 Self::tool::<EditRequest>("edit", &self.edit_description),
                 Self::tool::<WriteRequest>("write", &self.write_description),
                 Self::tool::<GrepRequest>("grep", &self.grep_description),
+                Self::tool::<GlobRequest>("glob", &self.glob_description),
             ]
         })
     }
@@ -341,6 +359,17 @@ impl HashlineServer {
                         })?
                 }
                 Err(e) => ToolOutcome::error(format!("Invalid arguments for grep: {e}")),
+            },
+            "glob" => match serde_json::from_value::<GlobRequest>(arguments) {
+                Ok(input) => {
+                    let workspace = self.workspace();
+                    tokio::task::spawn_blocking(move || run_glob(&workspace, &input))
+                        .await
+                        .map_err(|e| {
+                            McpError::internal_error(format!("glob task failed: {e}"), None)
+                        })?
+                }
+                Err(e) => ToolOutcome::error(format!("Invalid arguments for glob: {e}")),
             },
             other => {
                 return Err(McpError::invalid_params(
@@ -422,7 +451,7 @@ mod tests {
         let server = server(tmp.path());
         let tools = server.tools();
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
-        assert_eq!(names, ["read", "edit", "write", "grep"]);
+        assert_eq!(names, ["read", "edit", "write", "grep", "glob"]);
 
         for tool in tools {
             let desc = tool.description.as_deref().unwrap();
@@ -462,6 +491,9 @@ mod tests {
         assert!(write_schema["properties"].get("file_path").is_some());
         assert!(write_schema["properties"].get("content").is_some());
         assert!(write_schema["properties"].get("expect").is_some());
+        let glob_schema = serde_json::to_value(tools[4].input_schema.as_ref()).unwrap();
+        assert!(glob_schema["properties"].get("pattern").is_some());
+        assert!(glob_schema["properties"].get("max_results").is_some());
     }
 
     #[test]
@@ -476,8 +508,10 @@ mod tests {
             .expect("write schema serializes");
         let grep = serde_json::to_value(schemars::schema_for!(crate::protocol::GrepRequest))
             .expect("grep schema serializes");
+        let glob = serde_json::to_value(schemars::schema_for!(crate::protocol::GlobRequest))
+            .expect("glob schema serializes");
 
-        for schema in [&read, &edit, &write, &grep] {
+        for schema in [&read, &edit, &write, &grep, &glob] {
             assert_eq!(schema["type"], "object");
             assert_eq!(schema["additionalProperties"], false);
         }
@@ -488,6 +522,8 @@ mod tests {
             write["properties"]["expect"]["pattern"],
             json!("^(absent|[0-9a-f]{32})$")
         );
+        assert_eq!(glob["required"], json!(["pattern"]));
+        assert_eq!(glob["properties"]["max_results"]["maximum"], json!(1000));
         assert!(read["properties"].get("cursor").is_some());
         assert!(read["properties"].get("offset").is_none());
 
@@ -727,6 +763,10 @@ mod tests {
                 "grep",
                 json!({"pattern": "secret", "path": outside.path().to_str().unwrap()}),
             ),
+            (
+                "glob",
+                json!({"pattern": "*", "path": outside.path().to_str().unwrap()}),
+            ),
         ] {
             let result = server.dispatch(tool, args).await.unwrap();
             assert_eq!(result.is_error, Some(true), "{tool} must be confined");
@@ -788,6 +828,28 @@ mod tests {
                 error.message
             );
         }
+    }
+
+    #[tokio::test]
+    async fn dispatch_glob_lists_files() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("x.rs"), "fn x() {}\n").unwrap();
+        std::fs::write(tmp.path().join("y.txt"), "text\n").unwrap();
+        let result = server(tmp.path())
+            .dispatch("glob", json!({"pattern": "*.rs"}))
+            .await
+            .unwrap();
+        assert_ne!(result.is_error, Some(true));
+        let text = match &result.content[0] {
+            ContentBlock::Text(t) => t.text.clone(),
+            other => panic!("expected text content, got {other:?}"),
+        };
+        assert!(text.contains("x.rs"), "{text}");
+        assert!(!text.contains("y.txt"), "{text}");
+        assert!(
+            text.contains("[hashline files=1 truncated=false]"),
+            "{text}"
+        );
     }
 
     #[tokio::test]

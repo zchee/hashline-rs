@@ -627,6 +627,7 @@ dependencies = [
  "blake3",
  "clap",
  "criterion",
+ "globset",
  "grep-matcher",
  "grep-regex",
  "grep-searcher",

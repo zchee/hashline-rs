@@ -31,6 +31,9 @@ clap = { version = "4", features = ["derive", "env"] }
 grep-matcher = "0.1"
 grep-regex = "0.1"
 grep-searcher = "0.1"
+# Direct use for the glob tool's path matching; already transitive via ignore,
+# so this pins no new code into the build.
+globset = "0.4"
 # Line hash on targets with AES intrinsics; see src/hash.rs and
 # .cargo/config.toml. Gated behind the `gxhash` feature (on by default) because
 # the crate emits a `compile_error!` on any build without `+aes`, so a build
