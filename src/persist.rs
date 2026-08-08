@@ -24,7 +24,10 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{self, Write},
     path::{Path, PathBuf},
-    sync::{Mutex, OnceLock},
+    sync::{
+        Mutex, OnceLock,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -142,15 +145,32 @@ pub fn atomic_write(
     Ok(())
 }
 
-/// Write `bytes` to a unique temporary file beside the destination.
+/// Monotone per-process discriminator for temp-file names.
+static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Build a temp-file name no concurrent writer can collide with.
 ///
-/// Returns the temp path on success; the temp file is removed on failure.
-fn write_unique_temp(parent: &Path, path: &Path, bytes: &[u8]) -> Result<PathBuf, PersistError> {
+/// The process id separates processes, the counter separates threads inside
+/// one process, and the timestamp separates process-id reuse across reboots —
+/// so a same-nanosecond race can no longer surface as a spurious
+/// `create_new` failure.
+fn unique_temp_name() -> String {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    let temp_path = parent.join(format!(".hashline-{nanos}.tmp"));
+    let discriminator = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!(
+        ".hashline-{}-{discriminator}-{nanos}.tmp",
+        std::process::id()
+    )
+}
+
+/// Write `bytes` to a unique temporary file beside the destination.
+///
+/// Returns the temp path on success; the temp file is removed on failure.
+fn write_unique_temp(parent: &Path, path: &Path, bytes: &[u8]) -> Result<PathBuf, PersistError> {
+    let temp_path = parent.join(unique_temp_name());
 
     let write_temp = || -> Result<(), PersistError> {
         let mut file = OpenOptions::new()
@@ -232,6 +252,20 @@ mod tests {
         let snap = Snapshot::load(&path).unwrap();
         atomic_write(&path, b"world\n", snap.stamp()).unwrap();
         assert_eq!(fs::read(&path).unwrap(), b"world\n");
+    }
+
+    #[test]
+    fn unique_temp_names_never_collide_in_process() {
+        let prefix = format!(".hashline-{}-", std::process::id());
+        let names: Vec<String> = (0..64).map(|_| unique_temp_name()).collect();
+        let mut deduplicated = names.clone();
+        deduplicated.sort();
+        deduplicated.dedup();
+        assert_eq!(deduplicated.len(), names.len(), "{names:?}");
+        for name in &names {
+            assert!(name.starts_with(&prefix), "{name}");
+            assert!(name.ends_with(".tmp"), "{name}");
+        }
     }
 
     #[test]

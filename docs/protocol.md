@@ -328,8 +328,11 @@ The final summary is:
 [hashline matches=<COUNT> truncated=<true|false> skipped_binary=<COUNT> skipped_invalid_utf8=<COUNT>]
 ```
 
-The count is the number of match lines, excluding context. The cap is exact;
-workers stop at the actual remaining global capacity.
+The count is the number of match lines, excluding context. The match budget
+is checked between files: a reported file renders whole, so the final count
+may exceed `max_matches` inside the last reported file, and `truncated` is
+true exactly when matching files were withheld. Workers stop collecting at
+the actual remaining global capacity.
 
 ### R016: Grep invalid-text behavior
 

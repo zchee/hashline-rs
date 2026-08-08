@@ -991,12 +991,9 @@ fn bench_wired_grep(c: &mut Criterion) {
     std::fs::write(tmp.path().join("dense.rs"), &dense).expect("write dense fixture");
 
     let args = serde_json::json!({"pattern": "needle_hit", "path": "dense.rs", "max_matches": 200});
-    // HEAD truth (plan §1.2): the match budget stops only between files, so a
-    // single dense file renders every match and reports matches=10000
-    // truncated=false. Wave 3 tightens this bench to assert exactly
-    // max_matches rendered lines (AC8/AC24); until then setup pins the wired
-    // response to itself so any drift fails closed, and the baseline document
-    // records the violation.
+    // R015: the match budget is checked between files, so a single dense file
+    // renders every match and reports matches=10000 truncated=false. Setup
+    // pins the wired response to itself so any drift fails closed.
     let expected_summary = rt.block_on(async {
         let result = server
             .dispatch("grep", args.clone())
