@@ -1,16 +1,16 @@
 # hashline-rs
 
-A standalone [Model Context Protocol] server implementing the hashline
-anchor-based file toolset from [xai-org/grok-build]
-(`crates/codegen/xai-grok-tools/src/implementations/grok_build_hashline`),
-written in Rust on top of the official [rmcp] SDK.
+A standalone [Model Context Protocol] server providing versioned, fail-closed
+file tools, written in Rust on top of the official [rmcp] SDK. It grew out of
+the hashline anchor toolset in [xai-org/grok-build]
+(`crates/codegen/xai-grok-tools/src/implementations/grok_build_hashline`) and
+now implements a single snapshot-based protocol.
 
-Every line of a file gets a compact anchor (`LINE:HASH` or `LINE:HASH:HASH`)
-derived from whitespace-normalized content hashes. Models reference lines by
-anchor instead of raw line numbers, so edits are validated against the
-snapshot the model actually saw — stale or shifted anchors are rejected with
-recovery hints (fresh anchors, shift suggestions) instead of silently
-corrupting the file.
+Every read and grep response names the exact bytes it saw: a 128-bit
+process-scoped snapshot identity plus `LINE@BYTE` positions at logical line
+starts. Edits and writes are validated against that exact snapshot and fail
+closed with recovery context — a fresh header and context lines — instead of
+silently corrupting the file.
 
 [Model Context Protocol]: https://modelcontextprotocol.io
 [xai-org/grok-build]: https://github.com/xai-org/grok-build
@@ -20,13 +20,15 @@ corrupting the file.
 
 | Tool | Purpose |
 |---|---|
-| `read` | Read a file as `ANCHOR→CONTENT` lines (supports `offset`/`limit`) |
-| `edit` | Apply `replace` / `insert_after` / `write` ops addressed by anchors; batches are validated against the pre-edit snapshot and applied atomically bottom-up |
-| `grep` | Regex content search with anchor-annotated match (`:`) and context (`-`) lines, respecting `.gitignore` |
+| `read` | Versioned page of `LINE@BYTE\|CONTENT` lines; `start_line` random access and cursor pagination |
+| `edit` | Atomic batch of byte-range `replace` operations validated against the named snapshot |
+| `write` | Exclusive create (`expect: "absent"`) or whole-file replace against an exact snapshot |
+| `grep` | Regex content search with position-annotated matches; `files_with_matches` / `count` discovery modes |
+| `glob` | Newest-first, gitignore-respecting file discovery with deterministic ordering |
 
-The edit tool returns fresh anchors around the edited region on success. On
-stale-anchor failures it returns the current content with fresh anchors and,
-when the line merely shifted, a ready-to-retry suggested anchor.
+The normative contract — grammar, error taxonomy, and executable compliance
+examples — lives in [docs/protocol.md](docs/protocol.md); every rule runs as
+a doctest via `cargo test --doc`.
 
 ## Install
 
@@ -37,14 +39,12 @@ cargo install --path .
 ## Usage
 
 ```console
-hashline-mcp [--root <DIR>] [--restrict] [--scheme chunk|content_only|checkpoint]
-             [--hash-len 1..4] [--chunk-size N] [--checkpoint-interval N]
+hashline-mcp [--root <DIR>] [--restrict]
 ```
 
-All flags are also available as environment variables (`HASHLINE_ROOT`,
-`HASHLINE_RESTRICT`, `HASHLINE_SCHEME`, `HASHLINE_HASH_LEN`,
-`HASHLINE_CHUNK_SIZE`, `HASHLINE_CHECKPOINT_INTERVAL`). The server speaks MCP
-over stdio; logs go to stderr (`RUST_LOG` controls verbosity).
+Both flags are also available as environment variables (`HASHLINE_ROOT`,
+`HASHLINE_RESTRICT`). The server speaks MCP over stdio; logs go to stderr
+(`RUST_LOG` controls verbosity).
 
 ### Workspace root resolution
 
@@ -59,8 +59,7 @@ Relative paths resolve against the workspace root, chosen as follows:
    logged when it looks wrong (`/` or `$HOME`).
 
 `--restrict` confines every tool path to the workspace root: absolute paths
-outside it, `..` components, and symlink escapes are rejected. It is off by
-default to match the reference implementation's behavior.
+outside it, `..` components, and symlink escapes are rejected.
 
 Register with Claude Code:
 
@@ -81,18 +80,14 @@ Or in `.mcp.json`:
 }
 ```
 
-## Anchor schemes
+### Replace Claude Code's built-in file tools
 
-- `chunk` (default) — local line hash plus a fingerprint of the fixed-size
-  chunk containing the line. Edits invalidate only anchors within the
-  affected chunk. Anchor format `LINE:HASH:HASH` (e.g. `22:abc:rst`).
-- `content_only` — local line hash only. Least anchor churn, weakest
-  freshness (edits above a line do not invalidate it). Format `LINE:HASH`.
-- `checkpoint` — local line hash plus a fingerprint chained from the nearest
-  preceding checkpoint. Strongest freshness detection, most churn.
-
-Line hashes are whitespace-normalized (trim + collapse internal runs), so
-formatter-only edits such as re-indentation do not invalidate anchors.
+[docs/claude-code.md](docs/claude-code.md) is a copy-paste recipe that
+removes the built-in `Read`/`Edit`/`Write`/`Grep`/`Glob` in favor of the
+hashline tools — including the binary-file carve-outs that keep images and
+PDFs readable, and the caveats (Bash escape hatch, MCP output token cap).
+The ready-made settings fragment and PreToolUse hook live in
+[examples/claude-code/](examples/claude-code/).
 
 ## Development
 
