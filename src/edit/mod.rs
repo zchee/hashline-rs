@@ -23,10 +23,10 @@ use std::{path::Path, sync::Arc};
 use crate::{
     cache, persist,
     protocol::{
-        EditRequest, EditSuccess, ErrorCode, ProtocolError, apply_versioned_reference_edits,
-        reference_context, reference_header,
+        EditRequest, EditSuccess, ErrorCode, ProtocolError, SnapshotId,
+        apply_versioned_reference_edits, reference_context, reference_header,
     },
-    snapshot::{Snapshot, SnapshotError},
+    snapshot::{FileStamp, Snapshot, SnapshotError},
     util::{
         ToolOutcome, Workspace, join_protocol_error, persist_protocol_error, protocol_outcome,
         resolve_workspace_path, snapshot_protocol_error, success_outcome,
@@ -51,66 +51,65 @@ pub async fn run(workspace: &Workspace, input: &EditRequest) -> Result<EditSucce
     input.validate().map_err(ProtocolError::from)?;
     let path = resolve_workspace_path(workspace, &input.file_path)?;
 
-    let load_path = path.clone();
-    let snapshot = match tokio::task::spawn_blocking(move || Snapshot::load(&load_path)).await {
-        Ok(Ok(snapshot)) => snapshot,
-        Ok(Err(SnapshotError::Io {
-            source,
-            path: _missing,
-            ..
-        })) if source.kind() == std::io::ErrorKind::NotFound => {
+    // One blocking hop for the whole load -> apply -> persist pipeline: the
+    // phases are strictly sequential filesystem/CPU work, so three separate
+    // spawn_blocking round-trips bought nothing but latency and copies.
+    let task_path = path.clone();
+    let request = input.clone();
+    match tokio::task::spawn_blocking(move || run_blocking(&task_path, &request)).await {
+        Ok(result) => result,
+        Err(join) => Err(join_protocol_error("edit", &path, join)),
+    }
+}
+
+/// The whole edit pipeline on one blocking thread.
+fn run_blocking(path: &Path, input: &EditRequest) -> Result<EditSuccess, ProtocolError> {
+    let snapshot = match Snapshot::load(path) {
+        Ok(snapshot) => snapshot,
+        Err(SnapshotError::Io { source, .. }) if source.kind() == std::io::ErrorKind::NotFound => {
             // New-file path: only a whole-file replace from 1@0..2@0 on empty is
             // modeled by applying against empty bytes when snapshot is the empty ID.
             // Require the request snapshot to match an empty snapshot identity.
-            return create_new_file(&path, input).await;
+            return create_new_file(path, input);
         }
-        Ok(Err(error)) => return Err(snapshot_protocol_error("edit", &path, error)),
-        Err(join) => return Err(join_protocol_error("edit", &path, join)),
+        Err(error) => return Err(snapshot_protocol_error("edit", path, error)),
     };
 
     let previous = snapshot.id();
     let stamp = snapshot.stamp();
-    let display = input.file_path.clone();
-    let request = input.clone();
-    let source = snapshot.bytes().to_vec();
+    let applied = apply_versioned_reference_edits(snapshot.bytes(), previous, input)?;
+    publish(path, input, previous, applied, stamp)
+}
 
-    let applied = match tokio::task::spawn_blocking(move || {
-        apply_versioned_reference_edits(&source, previous, &request)
-    })
-    .await
-    {
-        Ok(result) => result?,
-        Err(join) => return Err(join_protocol_error("edit", &path, join)),
-    };
-
-    let path_for_write = path.clone();
-    let bytes_for_write = applied.clone();
-    match tokio::task::spawn_blocking(move || {
-        persist::atomic_write(&path_for_write, &bytes_for_write, stamp)
-    })
-    .await
-    {
-        Ok(Ok(())) => {}
-        Ok(Err(error)) => return Err(persist_protocol_error(error)),
-        Err(join) => return Err(join_protocol_error("persist", &path, join)),
-    }
-
-    let new_snapshot = Snapshot::from_bytes(applied)
-        .map_err(|error| snapshot_protocol_error("edit", &path, error))?;
+/// Persist `applied` and publish the response snapshot without re-reading
+/// the destination or re-validating the buffer.
+fn publish(
+    path: &Path,
+    input: &EditRequest,
+    previous: SnapshotId,
+    applied: Vec<u8>,
+    expected: Option<FileStamp>,
+) -> Result<EditSuccess, ProtocolError> {
+    let stamp = persist::atomic_write(path, &applied, expected).map_err(persist_protocol_error)?;
+    // SAFETY: `applied` is the reference model's splice of R007-validated
+    // replacement content into R007-validated source text at validated
+    // line-start (char) boundaries, so it is exact UTF-8 and NUL-free by
+    // construction; the R010 size cap is re-checked inside
+    // `from_validated_bytes`. Debug builds re-verify both text properties.
+    let new_snapshot = unsafe { Snapshot::from_validated_bytes(applied) }
+        .map_err(|error| snapshot_protocol_error("edit", path, error))?
+        .with_stamp(stamp);
     let success = EditSuccess::new(
-        display,
+        input.file_path.clone(),
         previous,
         new_snapshot.id(),
         input.edits.len(),
         new_snapshot.byte_len(),
         new_snapshot.line_count(),
     );
-    // Prefer a stamped resident entry so subsequent reads hit on FileStamp.
-    if let Ok(stamped) = Snapshot::load(&path) {
-        cache::process_cache().insert(path.clone(), Arc::new(stamped));
-    } else {
-        cache::process_cache().insert(path.clone(), Arc::new(new_snapshot));
-    }
+    // The stamp describes exactly these persisted bytes, so the resident
+    // entry hits on FileStamp without a post-persist disk re-read.
+    cache::process_cache().insert(path.to_path_buf(), Arc::new(new_snapshot));
     Ok(success)
 }
 
@@ -122,7 +121,7 @@ pub async fn run_edit(workspace: &Workspace, input: &EditRequest) -> ToolOutcome
     }
 }
 
-async fn create_new_file(path: &Path, input: &EditRequest) -> Result<EditSuccess, ProtocolError> {
+fn create_new_file(path: &Path, input: &EditRequest) -> Result<EditSuccess, ProtocolError> {
     // Empty pre-image: compute empty snapshot id and require request match.
     let empty = Snapshot::from_bytes(Vec::new())
         .map_err(|error| snapshot_protocol_error("edit", path, error))?;
@@ -142,7 +141,7 @@ async fn create_new_file(path: &Path, input: &EditRequest) -> Result<EditSuccess
     let applied = apply_versioned_reference_edits(b"", empty.id(), input)?;
 
     if let Some(parent) = path.parent()
-        && let Err(e) = tokio::fs::create_dir_all(parent).await
+        && let Err(e) = std::fs::create_dir_all(parent)
     {
         return Err(ProtocolError::new(
             ErrorCode::Io,
@@ -153,34 +152,7 @@ async fn create_new_file(path: &Path, input: &EditRequest) -> Result<EditSuccess
         ));
     }
 
-    let path_for_write = path.to_path_buf();
-    let bytes_for_write = applied.clone();
-    match tokio::task::spawn_blocking(move || {
-        persist::atomic_write(&path_for_write, &bytes_for_write, None)
-    })
-    .await
-    {
-        Ok(Ok(())) => {}
-        Ok(Err(error)) => return Err(persist_protocol_error(error)),
-        Err(join) => return Err(join_protocol_error("persist", path, join)),
-    }
-
-    let new_snapshot = Snapshot::from_bytes(applied)
-        .map_err(|error| snapshot_protocol_error("edit", path, error))?;
-    let success = EditSuccess::new(
-        input.file_path.clone(),
-        empty.id(),
-        new_snapshot.id(),
-        input.edits.len(),
-        new_snapshot.byte_len(),
-        new_snapshot.line_count(),
-    );
-    if let Ok(stamped) = Snapshot::load(path) {
-        cache::process_cache().insert(path.to_path_buf(), Arc::new(stamped));
-    } else {
-        cache::process_cache().insert(path.to_path_buf(), Arc::new(new_snapshot));
-    }
-    Ok(success)
+    publish(path, input, empty.id(), applied, None)
 }
 
 #[cfg(test)]

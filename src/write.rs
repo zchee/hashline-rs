@@ -50,16 +50,23 @@ pub async fn run(
     input.validate().map_err(ProtocolError::from)?;
     let path = resolve_workspace_path(workspace, &input.file_path)?;
 
-    let load_path = path.clone();
-    let current = match tokio::task::spawn_blocking(move || Snapshot::load(&load_path)).await {
-        Ok(Ok(snapshot)) => Some(snapshot),
-        Ok(Err(SnapshotError::Io { source, .. }))
-            if source.kind() == std::io::ErrorKind::NotFound =>
-        {
+    // One blocking hop for the whole decide -> persist -> publish pipeline.
+    let task_path = path.clone();
+    let request = input.clone();
+    match tokio::task::spawn_blocking(move || run_blocking(&task_path, &request)).await {
+        Ok(result) => result,
+        Err(join) => Err(join_protocol_error("write", &path, join)),
+    }
+}
+
+/// The whole write pipeline on one blocking thread.
+fn run_blocking(path: &Path, input: &WriteRequest) -> Result<WriteSuccess, ProtocolError> {
+    let current = match Snapshot::load(path) {
+        Ok(snapshot) => Some(snapshot),
+        Err(SnapshotError::Io { source, .. }) if source.kind() == std::io::ErrorKind::NotFound => {
             None
         }
-        Ok(Err(error)) => return Err(snapshot_protocol_error("write", &path, error)),
-        Err(join) => return Err(join_protocol_error("write", &path, join)),
+        Err(error) => return Err(snapshot_protocol_error("write", path, error)),
     };
 
     let created = validate_reference_write(
@@ -70,25 +77,25 @@ pub async fn run(
     )?;
 
     let bytes = input.content.clone().into_bytes();
-    let path_for_write = path.clone();
     let persist_result = if created {
-        tokio::task::spawn_blocking(move || persist::atomic_create(&path_for_write, &bytes)).await
+        persist::atomic_create(path, &bytes)
     } else {
         let stamp = current.as_ref().and_then(|snapshot| snapshot.stamp());
-        tokio::task::spawn_blocking(move || persist::atomic_write(&path_for_write, &bytes, stamp))
-            .await
+        persist::atomic_write(path, &bytes, stamp)
     };
-    match persist_result {
-        Ok(Ok(())) => {}
-        Ok(Err(PersistError::DestinationExists { .. })) => {
-            return Err(lose_create_race(&path, input).await);
-        }
-        Ok(Err(error)) => return Err(persist_protocol_error(error)),
-        Err(join) => return Err(join_protocol_error("persist", &path, join)),
-    }
+    let stamp = match persist_result {
+        Ok(stamp) => stamp,
+        Err(PersistError::DestinationExists { .. }) => return Err(lose_create_race(path, input)),
+        Err(error) => return Err(persist_protocol_error(error)),
+    };
 
-    let persisted = Snapshot::from_bytes(input.content.clone().into_bytes())
-        .map_err(|error| snapshot_protocol_error("write", &path, error))?;
+    // SAFETY: `bytes` came from `input.content`, a `String` — valid UTF-8 by
+    // type — whose NUL-freedom and R010 size were checked by
+    // `input.validate()` at entry (and the cap is re-checked inside
+    // `from_validated_bytes`). Debug builds re-verify both text properties.
+    let persisted = unsafe { Snapshot::from_validated_bytes(bytes) }
+        .map_err(|error| snapshot_protocol_error("write", path, error))?
+        .with_stamp(stamp);
     let success = WriteSuccess::new(
         input.file_path.clone(),
         persisted.id(),
@@ -96,12 +103,9 @@ pub async fn run(
         persisted.line_count(),
         created,
     );
-    // Prefer a stamped resident entry so subsequent reads hit on FileStamp.
-    if let Ok(stamped) = Snapshot::load(&path) {
-        cache::process_cache().insert(path.clone(), Arc::new(stamped));
-    } else {
-        cache::process_cache().insert(path.clone(), Arc::new(persisted));
-    }
+    // The stamp describes exactly these persisted bytes, so the resident
+    // entry hits on FileStamp without a post-persist disk re-read.
+    cache::process_cache().insert(path.to_path_buf(), Arc::new(persisted));
     Ok(success)
 }
 
@@ -118,10 +122,9 @@ pub async fn run_write(workspace: &Workspace, input: &WriteRequest) -> ToolOutco
 /// The absent check passed but another writer created the destination before
 /// our hard link landed. Decide against the fresh state so the error carries
 /// a truthful current header, exactly as if the winner had been there first.
-async fn lose_create_race(path: &Path, input: &WriteRequest) -> ProtocolError {
-    let load_path = path.to_path_buf();
-    match tokio::task::spawn_blocking(move || Snapshot::load(&load_path)).await {
-        Ok(Ok(snapshot)) => {
+fn lose_create_race(path: &Path, input: &WriteRequest) -> ProtocolError {
+    match Snapshot::load(path) {
+        Ok(snapshot) => {
             match validate_reference_write(Some((snapshot.bytes(), snapshot.id())), input) {
                 Ok(_) => ProtocolError::new(
                     ErrorCode::Io,
@@ -134,9 +137,7 @@ async fn lose_create_race(path: &Path, input: &WriteRequest) -> ProtocolError {
                 Err(error) => error,
             }
         }
-        Ok(Err(SnapshotError::Io { source, .. }))
-            if source.kind() == std::io::ErrorKind::NotFound =>
-        {
+        Err(SnapshotError::Io { source, .. }) if source.kind() == std::io::ErrorKind::NotFound => {
             ProtocolError::new(
                 ErrorCode::Io,
                 format!(
@@ -146,8 +147,7 @@ async fn lose_create_race(path: &Path, input: &WriteRequest) -> ProtocolError {
                 ),
             )
         }
-        Ok(Err(error)) => snapshot_protocol_error("write", path, error),
-        Err(join) => join_protocol_error("write", path, join),
+        Err(error) => snapshot_protocol_error("write", path, error),
     }
 }
 

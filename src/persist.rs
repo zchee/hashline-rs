@@ -90,6 +90,10 @@ fn io_err(operation: &'static str, path: &Path, source: io::Error) -> PersistErr
 ///
 /// When `expected` is `Some`, the destination's current [`FileStamp`] must
 /// still match before rename; a mismatch leaves the destination untouched.
+/// On success returns the [`FileStamp`] the destination carries after the
+/// rename — captured from the temp file's descriptor before rename, under
+/// the path lock, so it describes exactly the persisted bytes (rename
+/// preserves inode, size, and mtime).
 ///
 /// # Errors
 ///
@@ -98,7 +102,7 @@ pub fn atomic_write(
     path: &Path,
     bytes: &[u8],
     expected: Option<FileStamp>,
-) -> Result<(), PersistError> {
+) -> Result<FileStamp, PersistError> {
     let _guard = path_lock(path);
 
     if let Some(parent) = path.parent() {
@@ -106,7 +110,7 @@ pub fn atomic_write(
     }
 
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let temp_path = write_unique_temp(parent, path, bytes)?;
+    let (temp_path, stamp) = write_unique_temp(parent, path, bytes)?;
 
     // Re-stat destination immediately before rename.
     if let Some(expected) = expected {
@@ -142,7 +146,7 @@ pub fn atomic_write(
     })?;
 
     fsync_parent(parent);
-    Ok(())
+    Ok(stamp)
 }
 
 /// Monotone per-process discriminator for temp-file names.
@@ -168,11 +172,18 @@ fn unique_temp_name() -> String {
 
 /// Write `bytes` to a unique temporary file beside the destination.
 ///
-/// Returns the temp path on success; the temp file is removed on failure.
-fn write_unique_temp(parent: &Path, path: &Path, bytes: &[u8]) -> Result<PathBuf, PersistError> {
+/// Returns the temp path and the temp file's post-sync [`FileStamp`] on
+/// success; the temp file is removed on failure. The stamp survives the
+/// caller's rename/link unchanged (both preserve inode, size, and mtime),
+/// so it is the destination's stamp once the entry lands.
+fn write_unique_temp(
+    parent: &Path,
+    path: &Path,
+    bytes: &[u8],
+) -> Result<(PathBuf, FileStamp), PersistError> {
     let temp_path = parent.join(unique_temp_name());
 
-    let write_temp = || -> Result<(), PersistError> {
+    let write_temp = || -> Result<FileStamp, PersistError> {
         let mut file = OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -182,14 +193,20 @@ fn write_unique_temp(parent: &Path, path: &Path, bytes: &[u8]) -> Result<PathBuf
             .map_err(|source| io_err("write temp for", path, source))?;
         file.sync_all()
             .map_err(|source| io_err("fsync temp for", path, source))?;
-        Ok(())
+        let metadata = file
+            .metadata()
+            .map_err(|source| io_err("stat temp for", path, source))?;
+        FileStamp::from_metadata_public(&metadata)
+            .map_err(|source| io_err("decode temp metadata for", path, source))
     };
 
-    if let Err(error) = write_temp() {
-        let _ = fs::remove_file(&temp_path);
-        return Err(error);
+    match write_temp() {
+        Ok(stamp) => Ok((temp_path, stamp)),
+        Err(error) => {
+            let _ = fs::remove_file(&temp_path);
+            Err(error)
+        }
     }
-    Ok(temp_path)
 }
 
 /// Best-effort parent-directory fsync for durability of the entry itself.
@@ -208,19 +225,21 @@ fn fsync_parent(_parent: &Path) {}
 ///
 /// The link into place fails when the destination already exists, so two
 /// concurrent creates of one path have exactly one winner even across
-/// processes. Missing parent directories are created first.
+/// processes. Missing parent directories are created first. On success
+/// returns the destination's [`FileStamp`] (captured from the temp
+/// descriptor; a hard link shares the inode, so it is exact).
 ///
 /// # Errors
 ///
 /// Returns DestinationExists when `path` already exists, or an I/O error.
-pub fn atomic_create(path: &Path, bytes: &[u8]) -> Result<(), PersistError> {
+pub fn atomic_create(path: &Path, bytes: &[u8]) -> Result<FileStamp, PersistError> {
     let _guard = path_lock(path);
 
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|source| io_err("create parent of", path, source))?;
     }
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let temp_path = write_unique_temp(parent, path, bytes)?;
+    let (temp_path, stamp) = write_unique_temp(parent, path, bytes)?;
 
     let linked = fs::hard_link(&temp_path, path);
     let _ = fs::remove_file(&temp_path);
@@ -235,7 +254,7 @@ pub fn atomic_create(path: &Path, bytes: &[u8]) -> Result<(), PersistError> {
     }
 
     fsync_parent(parent);
-    Ok(())
+    Ok(stamp)
 }
 
 #[cfg(test)]

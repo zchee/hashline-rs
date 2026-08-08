@@ -79,6 +79,29 @@ impl ValidatedText {
         Ok(Self(text))
     }
 
+    /// Take ownership of bytes the caller has already proven valid under the
+    /// R007 text policy, skipping revalidation.
+    ///
+    /// # Safety
+    ///
+    /// `bytes` must be exact valid UTF-8 containing no NUL byte — precisely
+    /// what [`Self::try_from_bytes`] checks. Callers derive this structurally
+    /// (a splice of validated replacement content into validated text at
+    /// char-boundary line starts); debug builds re-verify both properties.
+    pub(crate) unsafe fn from_bytes_unchecked(bytes: Vec<u8>) -> Self {
+        debug_assert!(
+            memchr(0, &bytes).is_none(),
+            "unchecked text must be NUL-free"
+        );
+        debug_assert!(
+            simdutf8::compat::from_utf8(&bytes).is_ok(),
+            "unchecked text must be valid UTF-8"
+        );
+        // SAFETY: caller contract — the bytes were validated (or derived from
+        // validated parts) before this call.
+        Self(unsafe { String::from_utf8_unchecked(bytes) })
+    }
+
     /// Borrow the validated text.
     #[must_use]
     pub fn as_str(&self) -> &str {
@@ -474,6 +497,46 @@ impl Snapshot {
     /// cannot be represented.
     pub fn from_validated(text: ValidatedText) -> Result<Self, SnapshotError> {
         Self::from_validated_with_stamp(text, None)
+    }
+
+    /// Construct a detached snapshot from bytes already proven valid under
+    /// the R007 text policy, skipping the UTF-8 and NUL passes.
+    ///
+    /// The R010 size cap is still checked here (it is a cheap length
+    /// comparison, not a pass), so an oversized buffer fails exactly as
+    /// [`Self::from_bytes`] would.
+    ///
+    /// # Safety
+    ///
+    /// Same contract as [`ValidatedText::from_bytes_unchecked`]: the bytes
+    /// must be exact valid UTF-8 with no NUL. The wired edit path upholds it
+    /// structurally — a splice of validated replacement content into
+    /// validated source text at validated line-start (char) boundaries is
+    /// valid UTF-8 and NUL-free by construction.
+    ///
+    /// # Errors
+    ///
+    /// Returns a size-cap, line-count, or address-size error exactly as
+    /// [`Self::from_bytes`] would.
+    pub unsafe fn from_validated_bytes(bytes: Vec<u8>) -> Result<Self, SnapshotError> {
+        let byte_len = u64::try_from(bytes.len())
+            .map_err(|_| SnapshotError::AddressSpace { bytes: u64::MAX })?;
+        validate_file_size(byte_len)?;
+        // SAFETY: forwarded caller contract (validated UTF-8, no NUL).
+        let text = unsafe { ValidatedText::from_bytes_unchecked(bytes) };
+        Self::from_validated(text)
+    }
+
+    /// Attach a filesystem stamp to a detached snapshot.
+    ///
+    /// Used by the wired mutation paths: the stamp captured from the persist
+    /// temp file (before rename, under the path lock) describes exactly the
+    /// bytes this snapshot holds, so the cache entry hits on [`FileStamp`]
+    /// without a post-persist disk re-read.
+    #[must_use]
+    pub fn with_stamp(mut self, stamp: FileStamp) -> Self {
+        self.stamp = Some(stamp);
+        self
     }
 
     /// Load one stable snapshot through one descriptor per attempt.
