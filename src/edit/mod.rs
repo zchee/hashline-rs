@@ -15,10 +15,15 @@
 //! `edit` — versioned byte-range file editing for the hashline protocol.
 //!
 //! Production path: [`run`] takes an [`EditRequest`], validates the named
-//! snapshot, applies half-open ranges against exact bytes, and persists
-//! atomically; [`run_edit`] renders the same result for MCP transport.
+//! snapshot, applies half-open ranges against exact bytes via the offsets
+//! engine ([`engine`]), and persists atomically; [`run_edit`] renders the
+//! same result for MCP transport.
+
+mod engine;
 
 use std::{path::Path, sync::Arc};
+
+pub use engine::apply_edits_fast;
 
 use crate::{
     cache, persist,
@@ -77,7 +82,7 @@ fn run_blocking(path: &Path, input: &EditRequest) -> Result<EditSuccess, Protoco
 
     let previous = snapshot.id();
     let stamp = snapshot.stamp();
-    let applied = apply_versioned_reference_edits(snapshot.bytes(), previous, input)?;
+    let applied = engine::apply_edits_fast(&snapshot, input)?;
     publish(path, input, previous, applied, stamp)
 }
 

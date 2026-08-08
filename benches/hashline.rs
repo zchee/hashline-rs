@@ -32,7 +32,7 @@ use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use hashline::{
     HashlineServer, cache,
     grep::run_grep,
-    protocol::{EditRequest, GrepOutputMode, GrepRequest, apply_versioned_reference_edits},
+    protocol::{EditRequest, GrepOutputMode, GrepRequest},
     snapshot::Snapshot,
     util::Workspace,
 };
@@ -855,12 +855,11 @@ fn bench_wired_read(c: &mut Criterion) {
     group.finish();
 }
 
-/// Wave 0 wired-path edit benches on a 50k-line file. CPU-apply variants call
-/// `apply_versioned_reference_edits` — the exact function `run_edit`
-/// dispatches to at HEAD — and the e2e variants dispatch real edits with a
-/// per-iteration file reset. The `_full` suffix records that HEAD always
-/// fsyncs temp file and parent directory (durability=full); Wave 2 adds the
-/// durability=rename variants beside them.
+/// Wired-path edit benches on a 50k-line file. CPU-apply variants call
+/// `edit::apply_edits_fast` over a per-iteration snapshot — the production
+/// engine `edit::run` dispatches to — and the e2e variants dispatch real
+/// edits with a per-iteration file reset. The `_full` suffix records that
+/// the default durability policy fsyncs temp file and parent directory.
 fn bench_wired_edit(c: &mut Criterion) {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime for wired edit bench");
 
@@ -879,36 +878,36 @@ fn bench_wired_edit(c: &mut Criterion) {
         serde_json::from_value(single_args.clone()).expect("single edit request deserializes");
     let batch_request: EditRequest =
         serde_json::from_value(batch_args.clone()).expect("batch edit request deserializes");
-    let current = Snapshot::from_bytes(content.as_bytes().to_vec())
-        .expect("editable snapshot")
-        .id();
 
     let mut group = c.benchmark_group("wired_edit");
     group.sample_size(20);
     group.measurement_time(Duration::from_secs(5));
 
+    // Production apply path (engine over snapshot offsets). A fresh Snapshot
+    // per iteration mirrors the wired shape: every edit call loads its own
+    // snapshot, so first-touch offset materialization is part of apply cost.
     group.bench_function("single_op_50k_apply", |b| {
-        b.iter(|| {
-            let applied = apply_versioned_reference_edits(
-                black_box(content.as_bytes()),
-                current,
-                &single_request,
-            )
-            .expect("wired single-op apply succeeds");
-            black_box(applied.len())
-        });
+        b.iter_batched(
+            || Snapshot::from_bytes(content.clone().into_bytes()).expect("apply fixture snapshot"),
+            |snapshot| {
+                let applied = hashline::edit::apply_edits_fast(&snapshot, &single_request)
+                    .expect("wired single-op apply succeeds");
+                black_box(applied.len())
+            },
+            BatchSize::PerIteration,
+        );
     });
 
     group.bench_function("batch_8ops_50k_apply", |b| {
-        b.iter(|| {
-            let applied = apply_versioned_reference_edits(
-                black_box(content.as_bytes()),
-                current,
-                &batch_request,
-            )
-            .expect("wired batch apply succeeds");
-            black_box(applied.len())
-        });
+        b.iter_batched(
+            || Snapshot::from_bytes(content.clone().into_bytes()).expect("apply fixture snapshot"),
+            |snapshot| {
+                let applied = hashline::edit::apply_edits_fast(&snapshot, &batch_request)
+                    .expect("wired batch apply succeeds");
+                black_box(applied.len())
+            },
+            BatchSize::PerIteration,
+        );
     });
 
     group.sample_size(10);

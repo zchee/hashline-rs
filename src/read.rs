@@ -58,8 +58,13 @@ fn validate_cursor_on_snapshot(
     path: &str,
     cursor: &PageCursor,
 ) -> Result<u64, ProtocolError> {
-    // Text identity already lives on the snapshot; re-check cursor via reference
-    // rules so stale cursors conflict before boundary resolution.
+    // Fast path: identity equality plus an O(log n) boundary check against
+    // the snapshot's materialized offsets. Any rejection falls back to the
+    // reference rules, which reproduce the exact structured error (stale
+    // cursors conflict before boundary resolution).
+    if cursor.snapshot == snapshot.id() && snapshot.validate_boundary(cursor.next).is_ok() {
+        return Ok(cursor.next.line());
+    }
     validate_reference_cursor(path, snapshot.bytes(), snapshot.id(), cursor)
         .map(|position| position.line())
 }
