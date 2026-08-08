@@ -21,7 +21,7 @@ Phases 0–2: immutable PASS (see `.omx/goals/performance/hashline-v2-phase*`).
 |---|---|
 | Phase 7 PGO / mmap / CPU-tier artifacts | Require dual-host capture harness; not run in this session |
 | Phase 7 allocator re-eval | Prior mimalloc reject stands; no new allocation pressure evidence |
-| Full Phase 8 deletion of `hash`/`scheme`/`index` | Still linked by archival benches (`format_hashline_content`, `apply_edits`) |
+| Full Phase 8 deletion of `hash`/`scheme`/`index` | Still linked by archival benches (`format_hashline_content`, `apply_edits`) — completed at 29ffc1e |
 | Dual-arch Criterion gates (AC2–AC12 µs numbers) | Need paired macOS/Linux capture like Phase 0/2; not re-run here |
 | Residual TOCTOU | Documented: noncooperating external writers can race final rename window after stamp re-check |
 

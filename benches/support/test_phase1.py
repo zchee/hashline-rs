@@ -1,3 +1,6 @@
+# Archival: companion to the retained baseline .md records. The bench targets
+# and symbols this script drives were deleted in Phase 8 (29ffc1e); kept for
+# provenance, it will not run against current HEAD.
 """Tests for the Phase 1 evaluator contract."""
 
 from __future__ import annotations
