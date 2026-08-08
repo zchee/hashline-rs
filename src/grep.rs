@@ -17,7 +17,7 @@
 //! The `ignore` crate walks the tree and ripgrep's engine searches each file as
 //! a single haystack. Matching files are converted into [`Snapshot`]s so each
 //! hit section carries a snapshot header and `LINE@BYTE` positions that edit
-//! can validate. No per-line content hashes or [`FileIndex`] are built.
+//! can validate. No per-line content hashes are built.
 
 use std::{
     io,
@@ -36,8 +36,6 @@ use ignore::{
     DirEntry, ParallelVisitor, ParallelVisitorBuilder, WalkBuilder, WalkState,
     overrides::OverrideBuilder,
 };
-use schemars::JsonSchema;
-use serde::Deserialize;
 
 use crate::{
     protocol::{
@@ -47,46 +45,6 @@ use crate::{
     snapshot::Snapshot,
     util::{ToolOutcome, Workspace, protocol_outcome, resolve_workspace_path},
 };
-
-/// Default cap on reported match lines.
-pub const DEFAULT_MAX_MATCHES: usize = 200;
-
-/// Input for the `grep` tool.
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
-pub struct HashlineGrepInput {
-    /// Regular expression to search for (e.g. `log.*Error`, `function\s+\w+`).
-    pub pattern: String,
-
-    /// File or directory to search in (relative to the workspace root or
-    /// absolute). Defaults to the workspace root.
-    #[serde(default)]
-    pub path: Option<String>,
-
-    /// Glob pattern to filter files (e.g. `*.rs`, `src/**/*.ts`).
-    #[serde(default)]
-    pub glob: Option<String>,
-
-    /// Case-insensitive search.
-    #[serde(default)]
-    pub ignore_case: Option<bool>,
-
-    /// Number of context lines to show after each match (like `grep -A`).
-    #[serde(default)]
-    pub after_context: Option<usize>,
-
-    /// Number of context lines to show before each match (like `grep -B`).
-    #[serde(default)]
-    pub before_context: Option<usize>,
-
-    /// Number of context lines to show around each match (like `grep -C`;
-    /// overrides `after_context`/`before_context`).
-    #[serde(default)]
-    pub context: Option<usize>,
-
-    /// Maximum number of match lines to report (default 200).
-    #[serde(default)]
-    pub max_matches: Option<usize>,
-}
 
 /// Per-file search result: the fully rendered hit section plus its match count.
 struct FileHit {

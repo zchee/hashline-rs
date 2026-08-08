@@ -53,8 +53,8 @@ const KEYWORDS: &[&str] = &["let", "fn", "if", "for", "return", "match"];
 
 /// Generate one deterministic line.
 ///
-/// The mix deliberately includes blank lines, a repeated line (so
-/// shifted-anchor ambiguity is reachable), a long line, and a `\r`-terminated
+/// The mix deliberately includes blank lines, a repeated line (so identical
+/// content at two positions is reachable), a long line, and a `\r`-terminated
 /// line (so joined corpora contain CRLF terminators).
 fn corpus_line(rng: &mut Xorshift32, line_no: usize) -> String {
     match rng.next_range(16) {
@@ -74,9 +74,9 @@ fn corpus_line(rng: &mut Xorshift32, line_no: usize) -> String {
 
 /// Generate a deterministic corpus of `num_lines` `\n`-joined lines.
 ///
-/// With `trailing_newline` the content ends in `\n`, which makes anchor line
-/// counts include the synthetic trailing empty line — the edge case windowed
-/// anchor generation must reproduce.
+/// With `trailing_newline` the content ends in `\n`, which makes logical line
+/// counts include the synthetic trailing empty line — the R009 edge case the
+/// reference model must reproduce.
 pub fn corpus(num_lines: usize, seed: u32, trailing_newline: bool) -> String {
     let mut rng = Xorshift32::new(seed);
     let mut out = String::with_capacity(num_lines * 24);

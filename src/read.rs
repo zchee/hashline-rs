@@ -18,20 +18,15 @@
 //! followed by `LINE@BYTE|CONTENT` lines. When more lines remain, a
 //! [`PageCursor`](crate::protocol::PageCursor) footer continues the same snapshot.
 
-use std::{ops::Range, sync::Arc};
-
-use schemars::JsonSchema;
-use serde::Deserialize;
+use std::sync::Arc;
 
 use crate::{
     cache,
-    index::FileIndex,
     protocol::{
         ContractError, PageCursor, ProtocolError, ReadRequest, SnapshotHeader,
         validate_reference_cursor,
     },
-    render::{render_range, render_snapshot_page},
-    scheme::Scheme,
+    render::render_snapshot_page,
     snapshot::{Snapshot, SnapshotError},
     util::{
         ToolOutcome, Workspace, join_protocol_error, protocol_outcome, resolve_workspace_path,
@@ -48,44 +43,6 @@ pub const MAX_LINES_READ: usize = crate::protocol::MAX_PAGE_LINES as usize;
 /// construction is panic-free (unlike the old partial FileIndex), so small
 /// files avoid the spawn_blocking hop.
 const BLOCKING_READ_BYTES: usize = 256 * 1024;
-
-/// Legacy anchor input retained for transitional tests and benches only.
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
-pub struct HashlineReadInput {
-    /// Path of the file to read (relative to the workspace root or absolute).
-    pub path: String,
-    /// 1-based line number to start reading from.
-    #[serde(default)]
-    pub offset: Option<usize>,
-    /// Maximum number of lines to read.
-    #[serde(default)]
-    pub limit: Option<usize>,
-}
-
-/// Format file content with legacy anchors (bench / transitional only).
-pub fn format_hashline_content(
-    file_content: &str,
-    offset: Option<usize>,
-    limit: Option<usize>,
-    scheme: Scheme,
-) -> String {
-    let window = line_window(offset, limit);
-    let index = windowed_index(file_content, window.clone(), scheme);
-    let mut out = String::new();
-    render_range(&index, scheme, window, &mut out);
-    out
-}
-
-fn line_window(offset: Option<usize>, limit: Option<usize>) -> Range<usize> {
-    let start = offset.unwrap_or(1).saturating_sub(1);
-    let end = start.saturating_add(limit.unwrap_or(usize::MAX));
-    start..end
-}
-
-fn windowed_index<'a>(content: &'a str, window: Range<usize>, scheme: Scheme) -> FileIndex<'a> {
-    let span = scheme.required_hash_span(window, usize::MAX);
-    FileIndex::new_partial(content, &[span])
-}
 
 fn render_loaded(
     snapshot: &Snapshot,
@@ -205,48 +162,6 @@ fn cursor_position_or_first(
     }
     crate::protocol::Position::new(start_line, 0)
         .unwrap_or_else(|_| crate::protocol::Position::new(1, 0).expect("1@0"))
-}
-
-/// Legacy v1 runner kept for transitional benches that still pass a Scheme.
-pub async fn run_read_v1(
-    workspace: &Workspace,
-    input: &HashlineReadInput,
-    scheme: Scheme,
-) -> ToolOutcome {
-    if input.offset == Some(0) {
-        return ToolOutcome::error(
-            "offset is 1-based; use offset=1 for the first line.".to_owned(),
-        );
-    }
-    if input.limit == Some(0) {
-        return ToolOutcome::error("limit must be greater than 0.".to_owned());
-    }
-
-    let path = match workspace.resolve(&input.path) {
-        Ok(path) => path,
-        Err(reason) => return ToolOutcome::error(reason),
-    };
-    let bytes = match tokio::fs::read(&path).await {
-        Ok(bytes) => bytes,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return ToolOutcome::error(format!("File not found: {}", path.display()));
-        }
-        Err(e) => {
-            return ToolOutcome::error(format!("Failed to read {}: {e}", path.display()));
-        }
-    };
-    if bytes.is_empty() {
-        return ToolOutcome::success(format!("The file {} exists but is empty.", path.display()));
-    }
-    let offset = input.offset.unwrap_or(1);
-    let effective_limit = input.limit.unwrap_or(usize::MAX).min(MAX_LINES_READ);
-    let text = format_hashline_content(
-        &String::from_utf8_lossy(&bytes),
-        Some(offset),
-        Some(effective_limit),
-        scheme,
-    );
-    ToolOutcome::success(text)
 }
 
 #[cfg(test)]

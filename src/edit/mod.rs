@@ -16,18 +16,9 @@
 //!
 //! Production path: [`run`] takes an [`EditRequest`], validates the named
 //! snapshot, applies half-open ranges against exact bytes, and persists
-//! atomically; [`run_edit`] renders the same result for MCP transport. The
-//! transitional legacy anchor engine remains in [`apply`] for benches until
-//! Phase 8 deletes it.
-
-pub mod apply;
-pub mod range_policy;
-pub mod types;
+//! atomically; [`run_edit`] renders the same result for MCP transport.
 
 use std::{path::Path, sync::Arc};
-
-use types::{HashlineEditError, HashlineEditErrorKind, HashlineEditsApplied};
-pub use types::{HashlineEditInput, HashlineEditOutput, HashlineOp};
 
 use crate::{
     cache, persist,
@@ -35,11 +26,10 @@ use crate::{
         EditRequest, EditSuccess, ErrorCode, ProtocolError, apply_versioned_reference_edits,
         reference_context, reference_header,
     },
-    scheme::Scheme,
     snapshot::{Snapshot, SnapshotError},
     util::{
-        ToolOutcome, Workspace, decode_utf8, join_protocol_error, persist_protocol_error,
-        protocol_outcome, resolve_workspace_path, snapshot_protocol_error, success_outcome,
+        ToolOutcome, Workspace, join_protocol_error, persist_protocol_error, protocol_outcome,
+        resolve_workspace_path, snapshot_protocol_error, success_outcome,
     },
 };
 
@@ -191,127 +181,6 @@ async fn create_new_file(path: &Path, input: &EditRequest) -> Result<EditSuccess
         cache::process_cache().insert(path.to_path_buf(), Arc::new(new_snapshot));
     }
     Ok(success)
-}
-
-/// Render a successful v1 edit application as model-facing text.
-fn render_applied(applied: &HashlineEditsApplied, path: &Path) -> String {
-    let mut text = format!(
-        "Applied {} edit(s) to {} (scheme {}).",
-        applied.applied,
-        path.display(),
-        applied.scheme
-    );
-    if !applied.warnings.is_empty() {
-        text.push_str("\n\n");
-        text.push_str(&applied.warnings.join("\n"));
-    }
-    text.push_str(&format!(
-        "\n\nSnippet with fresh anchors (starting at line {}):\n{}",
-        applied.snippet_start_line, applied.snippet
-    ));
-    text
-}
-
-/// Render a v1 edit failure as model-facing text.
-fn render_error(err: &HashlineEditError) -> String {
-    let mut msg = err.message.clone();
-    if let Some(ref ctx) = err.context {
-        let label = match err.context_start_line {
-            Some(start) => {
-                format!("Fresh anchors around line {start} — use these to retry your edit:")
-            }
-            None => "Fresh anchors — use these to retry your edit:".to_owned(),
-        };
-        msg.push_str("\n\n");
-        msg.push_str(&label);
-        msg.push('\n');
-        msg.push_str(ctx);
-    }
-    if let Some(ref anchor) = err.shifted_anchor {
-        msg.push_str(&format!("\n\nSuggested anchor: {anchor}"));
-    }
-    msg
-}
-
-/// Legacy v1 runner kept for transitional benches.
-pub async fn run_edit_v1(
-    workspace: &Workspace,
-    input: &HashlineEditInput,
-    scheme: Scheme,
-) -> ToolOutcome {
-    if input.edits.is_empty() {
-        return ToolOutcome::error("No edit operations provided.".to_owned());
-    }
-
-    let path = match workspace.resolve(&input.file_path) {
-        Ok(path) => path,
-        Err(reason) => return ToolOutcome::error(reason),
-    };
-
-    let old_bytes = match tokio::fs::read(&path).await {
-        Ok(bytes) => Some(bytes),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-        Err(e) => {
-            return ToolOutcome::error(format!("Failed to read {}: {e}", path.display()));
-        }
-    };
-
-    let Some(old_bytes) = old_bytes else {
-        if input.edits.len() == 1
-            && let HashlineOp::Write { .. } = input.edits[0]
-        {
-            if let Some(parent) = path.parent()
-                && let Err(e) = tokio::fs::create_dir_all(parent).await
-            {
-                return ToolOutcome::error(format!(
-                    "Failed to create parent directory for {}: {e}",
-                    path.display()
-                ));
-            }
-            return write_and_render_v1(Vec::new(), input, &path, scheme).await;
-        }
-        return ToolOutcome::error(format!(
-            "File not found: {}. Only a single \"write\" op can create a new file.",
-            path.display()
-        ));
-    };
-
-    write_and_render_v1(old_bytes, input, &path, scheme).await
-}
-
-async fn write_and_render_v1(
-    old_bytes: Vec<u8>,
-    input: &HashlineEditInput,
-    path: &Path,
-    scheme: Scheme,
-) -> ToolOutcome {
-    let edits = input.edits.clone();
-    let task = tokio::task::spawn_blocking(move || {
-        apply::apply_edits(&decode_utf8(&old_bytes), &edits, scheme)
-    });
-    let result = match task.await {
-        Ok(result) => result,
-        Err(e) => {
-            return ToolOutcome::error(format!("Failed to edit {}: {e}", path.display()));
-        }
-    };
-
-    if let Some(ref new_content) = result.new_content
-        && let Err(e) = tokio::fs::write(path, new_content.as_bytes()).await
-    {
-        let err = HashlineEditError::new(
-            HashlineEditErrorKind::IoError,
-            format!("Edits validated but failed to write file: {e}."),
-        );
-        return ToolOutcome::error(render_error(&err));
-    }
-
-    match result.output {
-        HashlineEditOutput::EditsApplied(applied) => {
-            ToolOutcome::success(render_applied(&applied, path))
-        }
-        HashlineEditOutput::Error(err) => ToolOutcome::error(render_error(&err)),
-    }
 }
 
 #[cfg(test)]

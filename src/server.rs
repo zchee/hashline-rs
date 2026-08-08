@@ -15,8 +15,8 @@
 //! MCP server wiring for the hashline tools.
 //!
 //! Implements [`rmcp::ServerHandler`] manually (instead of via the tool
-//! macros) so tool descriptions can embed scheme-accurate example anchors —
-//! the anchor format shown to the model depends on the configured scheme.
+//! macros) so the tool listing can be rendered once and annotated with
+//! behavior hints.
 //!
 //! ## Workspace root resolution
 //!
@@ -46,13 +46,11 @@ use rmcp::{
 use serde_json::Value;
 
 use crate::{
-    config::{ConfigError, SchemeConfig},
     edit::run_edit,
     glob::run_glob,
     grep::run_grep,
     protocol::{EditRequest, GlobRequest, GrepRequest, ReadRequest, WriteRequest},
     read::{MAX_LINES_READ, run_read},
-    scheme::Scheme,
     util::{ToolOutcome, Workspace},
     write::run_write,
 };
@@ -101,16 +99,17 @@ snapshot fails closed with snapshot_conflict. Success returns the new
 snapshot for immediate use with edit. Parent directories are created.
 "#;
 
-const GREP_TEMPLATE: &str = r#"Search file contents with anchor-annotated results for use with edit.
+const GREP_TEMPLATE: &str = r#"Search file contents with position-annotated results for use with edit.
 
-Match lines include anchors you can pass directly to edit without
-needing to read the file first. This grep format keeps grep-style
-separators after the anchor: `:` for match lines and `-` for context lines.
+Each matching file section starts with its snapshot header; match lines carry
+LINE@BYTE positions you can pass directly to edit without reading the file
+first. Grep-style separators follow the position: `:` for match lines and
+`-` for context lines.
 
 Content output format:
 
-  {grep_match}    ← match (:)
-  {grep_context}    ← context (-)
+  12@345:matched line content    ← match (:)
+  11@331-context line content    ← context (-)
 
 Usage:
 - pattern is a regex: `log.*Error`, `function\s+\w+`, `TODO`
@@ -159,7 +158,7 @@ fn file_uri_to_path(uri: &str) -> Option<PathBuf> {
     Some(PathBuf::from(decoded.into_owned()))
 }
 
-/// The hashline MCP server: three tools sharing one anchor scheme.
+/// The hashline MCP server: five tools sharing one snapshot protocol.
 #[derive(Debug, Clone)]
 pub struct HashlineServer {
     /// Current workspace root. Shared across clones so adoption from client
@@ -170,9 +169,6 @@ pub struct HashlineServer {
     root_pinned: bool,
     /// When `true`, tool paths are confined to the workspace root.
     restrict: bool,
-    /// Retained until Phase 8 removes scheme CLI; tools no longer consume it.
-    #[allow(dead_code)]
-    scheme: Scheme,
     read_description: Arc<str>,
     edit_description: Arc<str>,
     write_description: Arc<str>,
@@ -185,29 +181,27 @@ pub struct HashlineServer {
 }
 
 impl HashlineServer {
-    /// Create a server rooted at `root` using `config` for all three tools.
+    /// Create a server rooted at `root`.
     ///
     /// The root is canonicalized when possible. By default it is adoptable —
     /// a client advertising the MCP `roots` capability replaces it after
     /// initialization; use [`Self::with_root_pinned`] for explicit roots.
-    pub fn new(root: PathBuf, config: SchemeConfig) -> Result<Self, ConfigError> {
-        let scheme = config.build_scheme()?;
+    #[must_use]
+    pub fn new(root: PathBuf) -> Self {
         let root = root.canonicalize().unwrap_or(root);
-        let read_description = config
-            .render_description(READ_TEMPLATE)
-            .replace("{max_lines_read}", &MAX_LINES_READ.to_string());
-        Ok(Self {
+        let read_description =
+            READ_TEMPLATE.replace("{max_lines_read}", &MAX_LINES_READ.to_string());
+        Self {
             root: Arc::new(RwLock::new(root)),
             root_pinned: false,
             restrict: false,
-            scheme,
             read_description: read_description.into(),
-            edit_description: config.render_description(EDIT_TEMPLATE).into(),
-            write_description: config.render_description(WRITE_TEMPLATE).into(),
-            grep_description: config.render_description(GREP_TEMPLATE).into(),
-            glob_description: config.render_description(GLOB_TEMPLATE).into(),
+            edit_description: EDIT_TEMPLATE.into(),
+            write_description: WRITE_TEMPLATE.into(),
+            grep_description: GREP_TEMPLATE.into(),
+            glob_description: GLOB_TEMPLATE.into(),
             tools: Arc::new(OnceLock::new()),
-        })
+        }
     }
 
     /// Pin the root so client-advertised roots never replace it.
@@ -339,7 +333,7 @@ impl HashlineServer {
             .open_world(false)
     }
 
-    /// The tool listing, with scheme-aware descriptions.
+    /// The tool listing.
     ///
     /// Rendered once per server and cached: the input schemas are static, so
     /// repeated `tools/list` requests reuse the same listing.
@@ -375,7 +369,7 @@ impl HashlineServer {
         })
     }
 
-    /// Dispatch one tool call. Tool-level failures (bad anchors, missing
+    /// Dispatch one tool call. Tool-level failures (stale snapshots, missing
     /// files, malformed arguments, confinement violations) come back as
     /// `is_error` results so the calling model can correct itself; only
     /// infrastructure failures become protocol errors.
@@ -483,10 +477,9 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::config::SchemeKind;
 
     fn server(root: &std::path::Path) -> HashlineServer {
-        HashlineServer::new(root.to_path_buf(), SchemeConfig::default()).unwrap()
+        HashlineServer::new(root.to_path_buf())
     }
 
     #[test]
@@ -499,7 +492,6 @@ mod tests {
 
         for tool in tools {
             let desc = tool.description.as_deref().unwrap();
-            assert!(!desc.contains("{example_anchor}"), "unrendered: {desc}");
             assert!(!desc.contains("{max_lines_read}"), "unrendered: {desc}");
         }
         let edit_desc = tools[1].description.as_deref().unwrap();
@@ -529,19 +521,6 @@ mod tests {
                 other => panic!("unexpected tool {other}"),
             }
         }
-    }
-
-    #[test]
-    fn content_only_descriptions_keep_snapshot_wording() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let config = SchemeConfig {
-            kind: SchemeKind::ContentOnly,
-            hash_len: 2,
-            ..Default::default()
-        };
-        let server = HashlineServer::new(tmp.path().to_path_buf(), config).unwrap();
-        let edit_desc = server.tools()[1].description.as_deref().unwrap();
-        assert!(edit_desc.contains("snapshot"), "{edit_desc}");
     }
 
     #[test]

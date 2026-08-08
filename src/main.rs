@@ -18,7 +18,7 @@ use std::path::PathBuf;
 
 use anyhow::Context as _;
 use clap::Parser;
-use hashline::{config::SchemeConfig, server::HashlineServer};
+use hashline::server::HashlineServer;
 use rmcp::ServiceExt as _;
 
 /// Standalone MCP server providing hashline file reading, editing, and
@@ -40,55 +40,8 @@ struct Cli {
     restrict: bool,
 }
 
-/// Fail fast if this CPU lacks the AES extension the line hash was built for.
-///
-/// `.cargo/config.toml` compiles `+aes` into the x86_64 and aarch64 targets
-/// that do not have it by default, which makes a `gxhash` line hash use AES
-/// instructions unconditionally. On a CPU without them — pre-2010 x86_64
-/// without AES-NI, or an aarch64 part lacking the optional crypto extension —
-/// that faults with SIGILL somewhere inside the first request. Checking once at
-/// startup turns an unexplained mid-session crash into a message that says what
-/// to do about it.
-///
-/// Compiled out entirely on any build that does not hash with `gxhash` —
-/// `--no-default-features`, or a target without `+aes`. Those use the portable
-/// FNV-1a line hash and run anywhere.
-fn check_cpu_features() -> anyhow::Result<()> {
-    #[cfg(all(feature = "gxhash", target_arch = "x86_64", target_feature = "aes"))]
-    anyhow::ensure!(
-        std::arch::is_x86_feature_detected!("aes"),
-        "this hashline-mcp binary was built with AES-NI (-C target-feature=+aes) \
-         but this CPU does not have it. Rebuild with --no-default-features to \
-         get the portable line hash."
-    );
-
-    // Feature detection needs OS support; these are the aarch64 targets whose
-    // `.cargo/config.toml` entries enable `+aes` and where `std` can check.
-    #[cfg(all(
-        feature = "gxhash",
-        target_arch = "aarch64",
-        target_feature = "aes",
-        any(
-            target_os = "linux",
-            target_os = "android",
-            target_os = "macos",
-            target_os = "windows"
-        )
-    ))]
-    anyhow::ensure!(
-        std::arch::is_aarch64_feature_detected!("aes"),
-        "this hashline-mcp binary was built with the AES extension \
-         (-C target-feature=+aes) but this CPU does not have it. Rebuild with \
-         --no-default-features to get the portable line hash."
-    );
-
-    Ok(())
-}
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    check_cpu_features()?;
-
     // stdout carries the MCP transport — logs must go to stderr.
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -124,8 +77,7 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    let server = HashlineServer::new(root.clone(), SchemeConfig::default())
-        .context("invalid internal scheme configuration")?
+    let server = HashlineServer::new(root.clone())
         .with_root_pinned(explicit_root)
         .with_restrict(cli.restrict);
     tracing::info!(

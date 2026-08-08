@@ -26,21 +26,20 @@
 //! every failure drawn from the stable R017 taxonomy. The `run_*` variants
 //! render the same results as MCP text for [`server::HashlineServer`].
 //!
-//! The other modules retain the measured anchor engine used as the Phase 0
-//! baseline until its scheduled deletion.
+//! The supported consumer surface is exactly: [`protocol`], the five tool
+//! modules, [`util::Workspace`] / [`util::ToolOutcome`], and
+//! [`server::HashlineServer`]. The remaining modules ([`cache`],
+//! [`persist`], [`snapshot`]) are engine internals, public for the crate's
+//! benches; their shapes may change without notice.
 
 pub mod cache;
-pub mod config;
 pub mod edit;
 pub mod glob;
 pub mod grep;
-pub mod hash;
-pub mod index;
 pub mod persist;
 pub mod protocol;
 pub mod read;
 mod render;
-pub mod scheme;
 pub mod server;
 pub mod snapshot;
 pub mod util;
@@ -49,7 +48,4 @@ pub mod write;
 #[cfg(test)]
 mod testutil;
 
-pub use config::{SchemeConfig, SchemeKind};
-pub use index::FileIndex;
-pub use scheme::Scheme;
 pub use server::HashlineServer;

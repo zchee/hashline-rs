@@ -12,71 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-//! Wire rendering for positional lines and the transitional legacy anchor format.
+//! Wire rendering for positional read pages.
 //!
-//! Phase 3 production reads use [`render_snapshot_page`]. The legacy
-//! [`render_range`] path remains only for edit/grep until those tools migrate.
+//! Production reads render through [`render_snapshot_page`]: one R002 header,
+//! `LINE@BYTE|CONTENT` lines, and an optional R013 cursor footer.
 
-use std::{fmt::Write as _, ops::Range};
+use std::fmt::Write as _;
 
 use crate::{
-    index::FileIndex,
     protocol::{PageCursor, Position, SnapshotHeader, render_read_line},
-    scheme::Scheme,
     snapshot::{Snapshot, SnapshotError},
 };
-
-/// Separator between a legacy line's anchor and its content.
-pub(crate) const CONTENT_SEPARATOR: char = '\u{2192}';
-
-/// Number of decimal digits needed for `value`, at least 1.
-fn decimal_digits(value: usize) -> usize {
-    value.checked_ilog10().unwrap_or(0) as usize + 1
-}
-
-/// Bytes of anchor and separator overhead to reserve per rendered legacy line.
-pub(crate) fn per_line_overhead(scheme: Scheme, last_line: usize) -> usize {
-    let hash_len = scheme.hash_len();
-    let context = if scheme.has_context() {
-        1 + hash_len
-    } else {
-        0
-    };
-    // "LINE" ':' LOCAL [':' CONTEXT] CONTENT_SEPARATOR '\n'
-    decimal_digits(last_line) + 1 + hash_len + context + CONTENT_SEPARATOR.len_utf8() + 1
-}
-
-/// Render the 0-based half-open line range `range` of `index` as
-/// newline-separated legacy `ANCHOR→CONTENT` lines, appending to `out`.
-///
-/// Kept for edit/grep until Phase 4/5 migrate them off [`FileIndex`].
-pub(crate) fn render_range(
-    index: &FileIndex<'_>,
-    scheme: Scheme,
-    range: Range<usize>,
-    out: &mut String,
-) {
-    let end = range.end.min(index.len());
-    let start = range.start.min(end);
-
-    let content_bytes: usize = (start..end)
-        .filter_map(|idx| index.line(idx))
-        .map(str::len)
-        .sum();
-    out.reserve(content_bytes + (end - start) * per_line_overhead(scheme, end));
-
-    let mut first = true;
-    for (offset, anchor) in scheme.anchors_for_range(index, start..end).enumerate() {
-        if first {
-            first = false;
-        } else {
-            out.push('\n');
-        }
-        anchor.render_into(out);
-        out.push(CONTENT_SEPARATOR);
-        out.push_str(index.line(start + offset).unwrap_or_default());
-    }
-}
 
 /// Display content of one logical line: strip a trailing LF and one preceding CR.
 fn display_line_content(text: &str, start: usize, end: usize) -> &str {
@@ -236,14 +182,6 @@ pub(crate) fn render_snapshot_page(
 mod tests {
     use super::*;
     use crate::protocol::SnapshotId;
-
-    #[test]
-    fn decimal_digits_counts_digits() {
-        assert_eq!(decimal_digits(0), 1);
-        assert_eq!(decimal_digits(9), 1);
-        assert_eq!(decimal_digits(10), 2);
-        assert_eq!(decimal_digits(120), 3);
-    }
 
     #[test]
     fn display_line_content_strips_crlf() {

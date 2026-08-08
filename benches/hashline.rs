@@ -31,205 +31,18 @@ use std::{
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use hashline::{
     HashlineServer, cache,
-    config::{SchemeConfig, SchemeKind},
-    edit::{HashlineOp, apply::apply_edits},
     grep::run_grep,
-    hash::{encode_hash, fnv1a_32, line_hash},
-    index::{FileIndex, split_lines},
     protocol::{EditRequest, GrepOutputMode, GrepRequest, apply_versioned_reference_edits},
-    read::format_hashline_content,
-    scheme::{Anchor, Scheme},
     snapshot::Snapshot,
     util::Workspace,
 };
-use memchr::{memchr_iter, memchr3_iter};
+use memchr::memchr_iter;
 use rmcp::model::{CallToolResult, ContentBlock};
 
 #[path = "support/phase0_workloads.rs"]
 mod phase0_workloads;
 
-use phase0_workloads::{generate_corpus, generate_long_line_corpus};
-
-/// Render the anchor string for a specific 1-based line under `scheme`.
-fn anchor_at(index: &FileIndex<'_>, scheme: Scheme, line_1based: usize) -> String {
-    scheme
-        .anchor_at(index, line_1based - 1)
-        .expect("line within file")
-        .render()
-}
-
-/// Nearest non-blank 1-based line index to `target`, scanning outward.
-///
-/// The synthetic corpus occasionally emits blank lines; anchor and edit
-/// benchmarks need a stable, content-bearing target line.
-fn nearest_nonblank(lines: &[&str], target: usize) -> usize {
-    let target = target.clamp(1, lines.len());
-    if !lines[target - 1].is_empty() {
-        return target;
-    }
-    for offset in 1..lines.len() {
-        if let Some(idx) = target.checked_sub(offset)
-            && idx >= 1
-            && !lines[idx - 1].is_empty()
-        {
-            return idx;
-        }
-        let idx = target + offset;
-        if idx <= lines.len() && !lines[idx - 1].is_empty() {
-            return idx;
-        }
-    }
-    target
-}
-
-/// `line_hash` / `encode_hash` microbenches on a short (~40 B) and a long
-/// (~2 KiB) line.
-fn bench_line_hash(c: &mut Criterion) {
-    let short_line = "    let value_42 = compute(123, next_state);";
-    let long_line: String = format!("// {}", "x".repeat(2_000));
-
-    let mut group = c.benchmark_group("line_hash");
-    group.bench_function("short_line_40b", |b| {
-        b.iter(|| black_box(line_hash(black_box(short_line))));
-    });
-    group.bench_function("long_line_2kb", |b| {
-        b.iter(|| black_box(line_hash(black_box(&long_line))));
-    });
-    group.bench_function("encode_hash", |b| {
-        let h = fnv1a_32(b"sample content for the encode_hash benchmark");
-        b.iter(|| black_box(encode_hash(black_box(h), 3)));
-    });
-    group.finish();
-}
-
-/// Anchor generation over 1k / 10k / 100k-line synthetic files, for each of the
-/// three anchor schemes.
-///
-/// Measures the same logical operation as the Phase 0 baseline: build the
-/// per-request line/hash index and render every line's anchor. The index build
-/// (line splitting plus line hashing) is inside the timed region — the Phase 0
-/// `generate_anchors` baseline hashed every line too, so the comparison stays
-/// apples-to-apples (this version additionally pays for the line splitting).
-fn bench_generate_anchors(c: &mut Criterion) {
-    let mut group = c.benchmark_group("generate_anchors");
-    group.sample_size(30);
-
-    for &size in &[1_000usize, 10_000, 100_000] {
-        let content = generate_corpus(size, 0x5EED_0000_u32.wrapping_add(size as u32));
-
-        for kind in [
-            SchemeKind::ContentOnly,
-            SchemeKind::Chunk,
-            SchemeKind::Checkpoint,
-        ] {
-            let scheme = SchemeConfig {
-                kind,
-                ..Default::default()
-            }
-            .build_scheme()
-            .expect("build scheme");
-            let label = format!("{kind:?}/{size}_lines");
-            group.bench_function(label, |b| {
-                b.iter(|| {
-                    let index = FileIndex::new(black_box(&content));
-                    let anchors: Vec<Anchor> =
-                        scheme.anchors_for_range(&index, 0..index.len()).collect();
-                    black_box(anchors)
-                });
-            });
-        }
-    }
-    group.finish();
-}
-
-/// `format_hashline_content`: a full 10k-line read, and a 2,000-line window
-/// of a 100k-line file.
-fn bench_format_hashline_content(c: &mut Criterion) {
-    let scheme = SchemeConfig::default()
-        .build_scheme()
-        .expect("build scheme");
-    let content_10k = generate_corpus(10_000, 0xA11C_E000);
-    let content_100k = generate_corpus(100_000, 0xB0B0_B0B0);
-
-    let mut group = c.benchmark_group("format_hashline_content");
-    group.sample_size(30);
-
-    group.bench_function("full_read_10k_lines", |b| {
-        b.iter(|| black_box(format_hashline_content(&content_10k, None, None, scheme)));
-    });
-
-    group.bench_function("window_2k_of_100k_lines", |b| {
-        b.iter(|| {
-            black_box(format_hashline_content(
-                &content_100k,
-                Some(50_000),
-                Some(2_000),
-                scheme,
-            ))
-        });
-    });
-
-    group.finish();
-}
-
-/// `apply_edits`: a single-op edit and an 8-op batch on a 50k-line file, plus
-/// the stale-anchor error path (an anchor whose target shifted by one line,
-/// exercising `find_shifted` and full-file error-context rendering).
-fn bench_apply_edits(c: &mut Criterion) {
-    let scheme = SchemeConfig::default()
-        .build_scheme()
-        .expect("build scheme");
-    let content = generate_corpus(50_000, 0xED17_0001);
-    let index = FileIndex::new(&content);
-    let lines = index.lines();
-
-    let single_target = nearest_nonblank(lines, 25_000);
-    let single_ops = vec![HashlineOp::Replace {
-        anchor: anchor_at(&index, scheme, single_target),
-        end_anchor: None,
-        content: "REPLACED SINGLE LINE".to_owned(),
-    }];
-
-    let batch_ops: Vec<HashlineOp> = (1..=8u32)
-        .map(|i| {
-            let target = nearest_nonblank(lines, i as usize * 6_000);
-            HashlineOp::Replace {
-                anchor: anchor_at(&index, scheme, target),
-                end_anchor: None,
-                content: format!("REPLACED BATCH LINE {i}"),
-            }
-        })
-        .collect();
-
-    let stale_target = nearest_nonblank(lines, 25_000);
-    let stale_anchor = anchor_at(&index, scheme, stale_target);
-    // Prepend one line so the anchor's target content shifts down by exactly
-    // one line — validate_anchor sees Stale, then find_shifted + full-file
-    // context rendering run (F3's repeated-pass path).
-    let shifted_content = format!("// shift marker\n{content}");
-    let stale_ops = vec![HashlineOp::Replace {
-        anchor: stale_anchor,
-        end_anchor: None,
-        content: "should not apply".to_owned(),
-    }];
-
-    let mut group = c.benchmark_group("apply_edits");
-    group.sample_size(30);
-
-    group.bench_function("single_op_50k_lines", |b| {
-        b.iter(|| black_box(apply_edits(black_box(&content), &single_ops, scheme)));
-    });
-
-    group.bench_function("batch_8ops_50k_lines", |b| {
-        b.iter(|| black_box(apply_edits(black_box(&content), &batch_ops, scheme)));
-    });
-
-    group.bench_function("stale_anchor_error_path_50k_lines", |b| {
-        b.iter(|| black_box(apply_edits(black_box(&shifted_content), &stale_ops, scheme)));
-    });
-
-    group.finish();
-}
+use phase0_workloads::generate_corpus;
 
 /// Number of files in the synthetic grep fixture tree.
 const GREP_FILE_COUNT: usize = 2_000;
@@ -392,548 +205,6 @@ fn bench_grep_large_file(c: &mut Criterion) {
     group.finish();
 }
 
-/// Line-splitting cost of a partial index, against the floor a pure
-/// newline-count scan sets.
-///
-/// A partial index only needs *hashes* for the spans its caller declared, but
-/// it still has to know the file's line count. `count_lines_only` is the
-/// irreducible part of that; the gap between it and `new_partial_one_span` is
-/// what materializing the untouched lines costs.
-fn bench_index_partial(c: &mut Criterion) {
-    let content = generate_corpus(50_000, 0x1DEC_0000);
-    let span = 24_000..24_064;
-
-    let mut group = c.benchmark_group("index");
-    group.sample_size(50);
-
-    group.bench_function("new_partial_one_span_50k", |b| {
-        b.iter(|| {
-            let index = FileIndex::new_partial(black_box(&content), std::slice::from_ref(&span));
-            black_box(index.len())
-        });
-    });
-
-    group.bench_function("count_lines_only_50k", |b| {
-        b.iter(|| black_box(memchr_iter(b'\n', black_box(content.as_bytes())).count()));
-    });
-
-    // `Iterator::count` on `memchr_iter` is a specialized popcount loop that
-    // never materializes a position. Visiting each newline position is a
-    // different — and much more expensive — operation, and it is the one a
-    // line index actually needs.
-    group.bench_function("visit_newlines_50k", |b| {
-        b.iter(|| {
-            let mut last = 0usize;
-            for pos in memchr_iter(b'\n', black_box(content.as_bytes())) {
-                last = pos;
-            }
-            black_box(last)
-        });
-    });
-
-    group.bench_function("full_new_50k", |b| {
-        b.iter(|| {
-            let index = FileIndex::new(black_box(&content));
-            black_box(index.len())
-        });
-    });
-
-    group.finish();
-}
-
-/// Reimplementation of the production fused normalize+FNV loop
-/// (`hashline::hash::line_hash`), kept here as the bench-off's variant (a)
-/// reference so the baseline cell measures the same code shape the crate ships
-/// rather than a cross-crate call.
-fn fused_fnv(line: &str) -> u32 {
-    const FNV_OFFSET: u32 = 2_166_136_261;
-    const FNV_PRIME: u32 = 16_777_619;
-
-    let mut h: u32 = FNV_OFFSET;
-    let mut prev_ws = false;
-    for byte in line.trim().bytes() {
-        if byte.is_ascii_whitespace() {
-            if !prev_ws {
-                h ^= u32::from(b' ');
-                h = h.wrapping_mul(FNV_PRIME);
-                prev_ws = true;
-            }
-        } else {
-            h ^= u32::from(byte);
-            h = h.wrapping_mul(FNV_PRIME);
-            prev_ws = false;
-        }
-    }
-    h
-}
-
-/// Variant (b): branchy normalization into a reusable scratch buffer.
-///
-/// Byte-for-byte the same output as the fused loop's hash input: trim, then
-/// collapse every run of ASCII whitespace to one space.
-fn normalize_branchy(line: &str, scratch: &mut Vec<u8>) {
-    scratch.clear();
-    let mut prev_ws = false;
-    for byte in line.trim().bytes() {
-        if byte.is_ascii_whitespace() {
-            if !prev_ws {
-                scratch.push(b' ');
-                prev_ws = true;
-            }
-        } else {
-            scratch.push(byte);
-            prev_ws = false;
-        }
-    }
-}
-
-/// Variant (c): segment-scan normalization driven by `memchr3`.
-///
-/// Copies whole non-whitespace segments and writes one space between them,
-/// so the per-byte branch of variant (b) is replaced by a SIMD search plus a
-/// `memcpy` per segment.
-///
-/// The scan looks for space, tab, and CR — the ASCII whitespace bytes that
-/// occur inside real source lines. `str::trim` has already removed any leading
-/// or trailing whitespace (including form feed), so the only input on which
-/// this would diverge from variants (a)/(b) is a line with an *interior* form
-/// feed. `assert_normalization_agrees` proves the corpora contain none; a
-/// production adoption of this variant would need to handle that byte too.
-fn normalize_segments(line: &str, scratch: &mut Vec<u8>) {
-    scratch.clear();
-    let trimmed = line.trim().as_bytes();
-    let mut start = 0usize;
-    let mut wrote = false;
-    for pos in memchr3_iter(b' ', b'\t', b'\r', trimmed) {
-        if pos > start {
-            if wrote {
-                scratch.push(b' ');
-            }
-            scratch.extend_from_slice(&trimmed[start..pos]);
-            wrote = true;
-        }
-        start = pos + 1;
-    }
-    if start < trimmed.len() {
-        if wrote {
-            scratch.push(b' ');
-        }
-        scratch.extend_from_slice(&trimmed[start..]);
-    }
-}
-
-/// Variant (c) made exact for every possible input.
-///
-/// `u8::is_ascii_whitespace` matches five bytes; `memchr3` searches three. This
-/// adds the missing two (`\n`, form feed) as a cheap up-front rejection: if
-/// either occurs, the branchy path — which is exact by construction — takes
-/// over. Real source lines contain neither, so the guard's whole cost is one
-/// extra `memchr2` pass over the line, which is precisely what this cell
-/// measures against the unguarded `c_segments` cells.
-fn normalize_segments_guarded(line: &str, scratch: &mut Vec<u8>) {
-    if memchr::memchr2(b'\n', 0x0C, line.trim().as_bytes()).is_some() {
-        normalize_branchy(line, scratch);
-        return;
-    }
-    normalize_segments(line, scratch);
-}
-
-/// Variant (c) guarded against form feed only.
-///
-/// Lines produced by `split_lines` cannot contain `\n`, so a `FileIndex` only
-/// has to rule out form feed. Measures whether halving the guard's byte
-/// alphabet buys anything over [`normalize_segments_guarded`].
-fn normalize_segments_ff_guarded(line: &str, scratch: &mut Vec<u8>) {
-    if memchr::memchr(0x0C, line.trim().as_bytes()).is_some() {
-        normalize_branchy(line, scratch);
-        return;
-    }
-    normalize_segments(line, scratch);
-}
-
-/// Prove every normalization variant feeds the hash the same bytes.
-///
-/// Run once per corpus (not per iteration): variants (b) and (c) must produce
-/// identical buffers, and FNV over that buffer must equal the fused loop's
-/// result — which is what makes the matrix cells comparable at all.
-fn assert_normalization_agrees(lines: &[&str], label: &str) {
-    let mut branchy = Vec::with_capacity(4_096);
-    let mut segments = Vec::with_capacity(4_096);
-    for (idx, line) in lines.iter().enumerate() {
-        normalize_branchy(line, &mut branchy);
-        normalize_segments(line, &mut segments);
-        assert_eq!(branchy, segments, "{label} line {idx}: variants (b) vs (c)");
-        assert_eq!(
-            fnv1a_32(&branchy),
-            fused_fnv(line),
-            "{label} line {idx}: normalized bytes vs fused loop"
-        );
-    }
-    // The crate's own `line_hash` is no longer FNV on AES-enabled targets, so
-    // it is not comparable cell-for-cell here; `src/hash.rs` owns the tests
-    // proving the shipped hasher consumes exactly these normalized bytes.
-}
-
-/// Phase 6 hash bench-off: normalization strategy × hash function.
-///
-/// Measurement only — nothing here is wired into the crate. Each cell hashes
-/// every line of a 10,000-line corpus, so a cell's median divided by 10,000 is
-/// its ns/line.
-///
-/// Variant (a) (fused normalize+hash in one pass) exists only for a streaming
-/// byte-at-a-time hash, so it pairs with FNV alone; `gxhash32` and
-/// `rapidhash` are block hashes and structurally require the two-pass
-/// normalize-then-hash shape of variants (b) and (c). The (b)/(c) + FNV cells
-/// are the controls that separate the two-pass penalty from the hash's own
-/// speed.
-fn bench_hash_matrix(c: &mut Criterion) {
-    let realistic = generate_corpus(10_000, 0x4A54_0001);
-    let long_line = generate_long_line_corpus(10_000, 0x4A54_0002);
-
-    for (corpus_label, content) in [("realistic", &realistic), ("long_line", &long_line)] {
-        let lines = split_lines(content);
-        assert_normalization_agrees(&lines, corpus_label);
-
-        let mut group = c.benchmark_group(format!("hash_matrix/{corpus_label}"));
-        group.sample_size(20);
-        group.measurement_time(Duration::from_secs(6));
-
-        group.bench_function("a_fused+fnv", |b| {
-            b.iter(|| {
-                let mut acc = 0u32;
-                for line in &lines {
-                    acc ^= fused_fnv(black_box(line));
-                }
-                black_box(acc)
-            });
-        });
-
-        for (norm_label, normalize) in [
-            ("b_branchy", normalize_branchy as fn(&str, &mut Vec<u8>)),
-            ("c_segments", normalize_segments),
-            ("c_guarded", normalize_segments_guarded),
-            ("c_ff_guarded", normalize_segments_ff_guarded),
-        ] {
-            group.bench_function(format!("{norm_label}+fnv"), |b| {
-                let mut scratch = Vec::with_capacity(8_192);
-                b.iter(|| {
-                    let mut acc = 0u32;
-                    for line in &lines {
-                        normalize(black_box(line), &mut scratch);
-                        acc ^= fnv1a_32(&scratch);
-                    }
-                    black_box(acc)
-                });
-            });
-
-            // Absent on a `--no-default-features` build: `gxhash` is not
-            // linked there, which is the whole point of the feature.
-            #[cfg(feature = "gxhash")]
-            group.bench_function(format!("{norm_label}+gxhash32"), |b| {
-                let mut scratch = Vec::with_capacity(8_192);
-                b.iter(|| {
-                    let mut acc = 0u32;
-                    for line in &lines {
-                        normalize(black_box(line), &mut scratch);
-                        acc ^= gxhash::gxhash32(&scratch, 0);
-                    }
-                    black_box(acc)
-                });
-            });
-
-            group.bench_function(format!("{norm_label}+rapidhash"), |b| {
-                let mut scratch = Vec::with_capacity(8_192);
-                b.iter(|| {
-                    let mut acc = 0u32;
-                    for line in &lines {
-                        normalize(black_box(line), &mut scratch);
-                        acc ^= rapidhash::v3::rapidhash_v3(&scratch) as u32;
-                    }
-                    black_box(acc)
-                });
-            });
-        }
-
-        group.finish();
-    }
-}
-
-/// Paired wired-protocol lower-bound benches on byte-identical corpora.
-///
-/// Every group has a current implementation and one prototype candidate. The
-/// Phase 0 capture harness invokes those functions in an interleaved order and
-/// preserves each Criterion estimate separately.
-fn bench_phase0_pairs(c: &mut Criterion) {
-    let content_10k = generate_corpus(10_000, 0xB200_0010);
-    let content_50k = generate_corpus(50_000, 0xB200_0050);
-    let content_100k = generate_corpus(100_000, 0xB200_0100);
-
-    #[cfg(feature = "gxhash")]
-    for (size, content) in [(10_000usize, &content_10k), (50_000, &content_50k)] {
-        let mut group = c.benchmark_group(format!("phase0_snapshot_raw/{size}"));
-        group.sample_size(30);
-        group.measurement_time(Duration::from_secs(3));
-        group.bench_function("base_current_index", |b| {
-            b.iter(|| {
-                let index = FileIndex::new(black_box(content));
-                black_box(index.len())
-            });
-        });
-        group.bench_function("candidate_raw_line_hashes", |b| {
-            b.iter(|| black_box(phase0_workloads::raw_line_hashes(black_box(content))));
-        });
-        group.finish();
-    }
-
-    for (algorithm, candidate) in [
-        (
-            "xxh3",
-            phase0_workloads::xxh3_128_and_line_count as fn(&str) -> (u128, usize),
-        ),
-        ("blake3", phase0_workloads::blake3_128_and_line_count),
-    ] {
-        for (size, content) in [(10_000usize, &content_10k), (50_000, &content_50k)] {
-            let mut group = c.benchmark_group(format!("phase0_snapshot_{algorithm}/{size}"));
-            group.sample_size(30);
-            group.measurement_time(Duration::from_secs(3));
-            group.bench_function("base_current_index", |b| {
-                b.iter(|| {
-                    let index = FileIndex::new(black_box(content));
-                    black_box(index.len())
-                });
-            });
-            group.bench_function("candidate_version_and_count", |b| {
-                b.iter(|| black_box(candidate(black_box(content))));
-            });
-            group.finish();
-        }
-    }
-
-    #[cfg(feature = "gxhash")]
-    for (size, content) in [(10_000usize, &content_10k), (50_000, &content_50k)] {
-        let mut group = c.benchmark_group(format!("phase0_snapshot_gxhash/{size}"));
-        group.sample_size(30);
-        group.measurement_time(Duration::from_secs(3));
-        group.bench_function("base_current_index", |b| {
-            b.iter(|| {
-                let index = FileIndex::new(black_box(content));
-                black_box(index.len())
-            });
-        });
-        group.bench_function("candidate_version_and_count", |b| {
-            b.iter(|| {
-                black_box(phase0_workloads::gxhash128_and_line_count(black_box(
-                    content,
-                )))
-            });
-        });
-        group.finish();
-    }
-
-    let sparse_span = 50_000..52_000;
-    let mut sparse = c.benchmark_group("phase0_sparse_select/window_2k_of_100k");
-    sparse.sample_size(30);
-    sparse.measurement_time(Duration::from_secs(3));
-    sparse.bench_function("base_current_partial_index", |b| {
-        b.iter(|| {
-            let index = FileIndex::new_partial(
-                black_box(&content_100k),
-                std::slice::from_ref(&sparse_span),
-            );
-            black_box(index.len())
-        });
-    });
-    sparse.bench_function("candidate_sparse_positions", |b| {
-        b.iter(|| {
-            black_box(phase0_workloads::sparse_select(
-                black_box(&content_100k),
-                50_000,
-                2_000,
-            ))
-        });
-    });
-    sparse.finish();
-
-    let mut offsets_u32 = c.benchmark_group("phase0_offsets/u32_50k");
-    offsets_u32.sample_size(30);
-    offsets_u32.measurement_time(Duration::from_secs(3));
-    offsets_u32.bench_function("base_current_index", |b| {
-        b.iter(|| black_box(FileIndex::new(black_box(&content_50k))));
-    });
-    offsets_u32.bench_function("candidate_offsets", |b| {
-        b.iter(|| black_box(phase0_workloads::offsets_u32(black_box(&content_50k))));
-    });
-    offsets_u32.finish();
-
-    let mut offsets_u64 = c.benchmark_group("phase0_offsets/u64_50k");
-    offsets_u64.sample_size(30);
-    offsets_u64.measurement_time(Duration::from_secs(3));
-    offsets_u64.bench_function("base_current_index", |b| {
-        b.iter(|| black_box(FileIndex::new(black_box(&content_50k))));
-    });
-    offsets_u64.bench_function("candidate_offsets", |b| {
-        b.iter(|| black_box(phase0_workloads::offsets_u64(black_box(&content_50k))));
-    });
-    offsets_u64.finish();
-
-    let scheme = SchemeConfig::default()
-        .build_scheme()
-        .expect("build scheme");
-    let (version_10k, _) = phase0_workloads::xxh3_128_and_line_count(&content_10k);
-    let (version_100k, _) = phase0_workloads::xxh3_128_and_line_count(&content_100k);
-
-    let mut render_full = c.benchmark_group("phase0_position_render/full_10k");
-    render_full.sample_size(30);
-    render_full.measurement_time(Duration::from_secs(3));
-    render_full.bench_function("base_current_render", |b| {
-        b.iter(|| {
-            black_box(format_hashline_content(
-                black_box(&content_10k),
-                None,
-                None,
-                scheme,
-            ))
-        });
-    });
-    render_full.bench_function("candidate_position_render", |b| {
-        b.iter(|| {
-            black_box(phase0_workloads::render_all_positions(
-                black_box(&content_10k),
-                version_10k,
-            ))
-        });
-    });
-    render_full.finish();
-
-    let mut render_window = c.benchmark_group("phase0_position_render/window_2k_of_100k");
-    render_window.sample_size(30);
-    render_window.measurement_time(Duration::from_secs(3));
-    render_window.bench_function("base_current_render", |b| {
-        b.iter(|| {
-            black_box(format_hashline_content(
-                black_box(&content_100k),
-                Some(50_000),
-                Some(2_000),
-                scheme,
-            ))
-        });
-    });
-    render_window.bench_function("candidate_position_render", |b| {
-        b.iter(|| {
-            black_box(phase0_workloads::render_positions(
-                black_box(&content_100k),
-                version_100k,
-                50_000,
-                2_000,
-            ))
-        });
-    });
-    render_window.finish();
-
-    let mut full_read = c.benchmark_group("phase0_full_read/full_10k");
-    full_read.sample_size(30);
-    full_read.measurement_time(Duration::from_secs(3));
-    full_read.bench_function("base_current_read", |b| {
-        b.iter(|| {
-            black_box(format_hashline_content(
-                black_box(&content_10k),
-                None,
-                None,
-                scheme,
-            ))
-        });
-    });
-    full_read.bench_function("candidate_versioned_read", |b| {
-        b.iter(|| {
-            black_box(phase0_workloads::versioned_render_all(black_box(
-                &content_10k,
-            )))
-        });
-    });
-    full_read.finish();
-
-    let current_index = FileIndex::new(&content_50k);
-    let current_lines = current_index.lines();
-    let one_line = nearest_nonblank(current_lines, 25_000);
-    let one_current = vec![HashlineOp::Replace {
-        anchor: anchor_at(&current_index, scheme, one_line),
-        end_anchor: None,
-        content: "REPLACED SINGLE LINE".to_owned(),
-    }];
-    let eight_lines = (1..=8usize)
-        .map(|index| nearest_nonblank(current_lines, index * 6_000))
-        .collect::<Vec<_>>();
-    let eight_current = eight_lines
-        .iter()
-        .enumerate()
-        .map(|(index, &line)| HashlineOp::Replace {
-            anchor: anchor_at(&current_index, scheme, line),
-            end_anchor: None,
-            content: format!("REPLACED BATCH LINE {index}"),
-        })
-        .collect::<Vec<_>>();
-    let one_candidate = phase0_workloads::replacement_edits(&content_50k, &[one_line]);
-    let eight_candidate = phase0_workloads::replacement_edits(&content_50k, &eight_lines);
-
-    let mut splice_one = c.benchmark_group("phase0_splice/one_edit_50k");
-    splice_one.sample_size(30);
-    splice_one.measurement_time(Duration::from_secs(3));
-    splice_one.bench_function("base_current_apply", |b| {
-        b.iter(|| black_box(apply_edits(black_box(&content_50k), &one_current, scheme)));
-    });
-    splice_one.bench_function("candidate_byte_splice", |b| {
-        b.iter(|| {
-            black_box(phase0_workloads::apply_byte_edits(
-                black_box(&content_50k),
-                &one_candidate,
-            ))
-        });
-    });
-    splice_one.finish();
-
-    let mut splice_eight = c.benchmark_group("phase0_splice/eight_edits_50k");
-    splice_eight.sample_size(30);
-    splice_eight.measurement_time(Duration::from_secs(3));
-    splice_eight.bench_function("base_current_apply", |b| {
-        b.iter(|| black_box(apply_edits(black_box(&content_50k), &eight_current, scheme)));
-    });
-    splice_eight.bench_function("candidate_byte_splice", |b| {
-        b.iter(|| {
-            black_box(phase0_workloads::apply_byte_edits(
-                black_box(&content_50k),
-                &eight_candidate,
-            ))
-        });
-    });
-    splice_eight.finish();
-
-    let persist_dir = tempfile::TempDir::new().expect("tempdir for persistence bench");
-    let persist_path = persist_dir.path().join("destination.rs");
-    std::fs::write(&persist_path, &content_50k).expect("initialize persistence fixture");
-    let mut persist_nonce = 0u64;
-    let mut persist = c.benchmark_group("phase0_persist/atomic_50k");
-    persist.sample_size(20);
-    persist.measurement_time(Duration::from_secs(4));
-    persist.bench_function("base_direct_write", |b| {
-        b.iter(|| {
-            phase0_workloads::direct_write(&persist_path, content_50k.as_bytes())
-                .expect("direct persistence benchmark");
-        });
-    });
-    persist.bench_function("candidate_temp_rename", |b| {
-        b.iter(|| {
-            persist_nonce = persist_nonce.wrapping_add(1);
-            phase0_workloads::atomic_temp_write(
-                &persist_path,
-                content_50k.as_bytes(),
-                persist_nonce,
-            )
-            .expect("atomic persistence benchmark");
-        });
-    });
-    persist.finish();
-}
-
 /// Byte offset of the 1-based logical `line` start within `content`.
 fn line_start_offset(content: &str, line: u64) -> u64 {
     if line == 1 {
@@ -1050,8 +321,7 @@ fn bench_dispatch(c: &mut Criterion) {
         .canonicalize()
         .expect("canonicalize dispatch fixture");
 
-    let server = HashlineServer::new(tmp.path().to_path_buf(), SchemeConfig::default())
-        .expect("server construction");
+    let server = HashlineServer::new(tmp.path().to_path_buf());
 
     let mut group = c.benchmark_group("dispatch");
     group.sample_size(30);
@@ -1307,12 +577,6 @@ fn bench_phase2_snapshot(c: &mut Criterion) {
         let mut group = c.benchmark_group(format!("phase2_snapshot/{size}"));
         group.sample_size(30);
         group.measurement_time(Duration::from_secs(3));
-        group.bench_function("base_current_index", |b| {
-            b.iter(|| {
-                let index = FileIndex::new(black_box(content));
-                black_box(index.len())
-            });
-        });
         group.bench_function("candidate_snapshot", |b| {
             b.iter_batched(
                 || content.as_bytes().to_vec(),
@@ -1362,15 +626,6 @@ fn bench_phase2_version_matrix(c: &mut Criterion) {
         group.sample_size(30);
         group.measurement_time(Duration::from_secs(3));
 
-        #[cfg(feature = "gxhash")]
-        group.bench_function("gxhash128", |b| {
-            b.iter(|| {
-                black_box(gxhash::gxhash128(
-                    black_box(content.as_bytes()),
-                    i64::from_ne_bytes(PHASE2_VERSION_BENCH_SEED.to_ne_bytes()),
-                ))
-            });
-        });
         group.bench_function("xxh3_128_with_seed", |b| {
             b.iter(|| {
                 black_box(xxhash_rust::xxh3::xxh3_128_with_seed(
@@ -1471,8 +726,7 @@ fn bench_wired_read(c: &mut Criterion) {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime for wired read bench");
 
     let tmp = tempfile::TempDir::new().expect("tempdir for wired read bench");
-    let server = HashlineServer::new(tmp.path().to_path_buf(), SchemeConfig::default())
-        .expect("server construction");
+    let server = HashlineServer::new(tmp.path().to_path_buf());
 
     let content_10k = generate_corpus(10_000, 0x0A11_C0DE);
     std::fs::write(tmp.path().join("ten_k.rs"), &content_10k).expect("write 10k fixture");
@@ -1611,8 +865,7 @@ fn bench_wired_edit(c: &mut Criterion) {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime for wired edit bench");
 
     let tmp = tempfile::TempDir::new().expect("tempdir for wired edit bench");
-    let server = HashlineServer::new(tmp.path().to_path_buf(), SchemeConfig::default())
-        .expect("server construction");
+    let server = HashlineServer::new(tmp.path().to_path_buf());
 
     let content = generate_corpus(50_000, 0xED17_0002);
     let file_path = tmp.path().join("editable.rs");
@@ -1730,8 +983,7 @@ fn bench_wired_grep(c: &mut Criterion) {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime for wired grep bench");
 
     let tmp = tempfile::TempDir::new().expect("tempdir for wired grep bench");
-    let server = HashlineServer::new(tmp.path().to_path_buf(), SchemeConfig::default())
-        .expect("server construction");
+    let server = HashlineServer::new(tmp.path().to_path_buf());
 
     let dense: String = (0..10_000)
         .map(|line| format!("let needle_hit_{line} = {line};\n"))
@@ -1788,8 +1040,7 @@ fn bench_wired_write(c: &mut Criterion) {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime for wired write bench");
 
     let tmp = tempfile::TempDir::new().expect("tempdir for wired write bench");
-    let server = HashlineServer::new(tmp.path().to_path_buf(), SchemeConfig::default())
-        .expect("server construction");
+    let server = HashlineServer::new(tmp.path().to_path_buf());
 
     let content = generate_corpus(10_000, 0x0B1E_55ED);
     let create_path = tmp.path().join("created.rs");
@@ -1923,8 +1174,7 @@ fn bench_wired_glob(c: &mut Criterion) {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime for wired glob bench");
 
     let root = grep_fixture_root();
-    let server = HashlineServer::new(root.to_path_buf(), SchemeConfig::default())
-        .expect("server construction");
+    let server = HashlineServer::new(root.to_path_buf());
 
     let args = serde_json::json!({"pattern": "**/*.rs", "max_results": 1000});
     let expected_summary = rt.block_on(async {
@@ -1964,15 +1214,8 @@ fn bench_wired_glob(c: &mut Criterion) {
 
 criterion_group!(
     benches,
-    bench_line_hash,
-    bench_generate_anchors,
-    bench_format_hashline_content,
-    bench_apply_edits,
     bench_grep,
     bench_grep_large_file,
-    bench_index_partial,
-    bench_hash_matrix,
-    bench_phase0_pairs,
     bench_phase2_snapshot,
     bench_phase2_version_matrix,
     bench_phase2_offsets,

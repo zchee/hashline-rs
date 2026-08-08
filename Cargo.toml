@@ -17,14 +17,6 @@ path = "src/main.rs"
 name = "hashline"
 path = "src/lib.rs"
 
-[features]
-default = ["gxhash"]
-# Link `gxhash` and use it for the line hash wherever the target actually has
-# AES intrinsics. Optional because `gxhash` itself refuses to compile without
-# them: a consumer whose build does not enable `+aes` (see .cargo/config.toml
-# and src/hash.rs) turns this off and gets the portable FNV-1a line hash.
-gxhash = ["dep:gxhash"]
-
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive", "env"] }
@@ -34,11 +26,6 @@ grep-searcher = "0.1"
 # Direct use for the glob tool's path matching; already transitive via ignore,
 # so this pins no new code into the build.
 globset = "0.4"
-# Line hash on targets with AES intrinsics; see src/hash.rs and
-# .cargo/config.toml. Gated behind the `gxhash` feature (on by default) because
-# the crate emits a `compile_error!` on any build without `+aes`, so a build
-# that cannot supply the flag must be able to drop the dependency outright.
-gxhash = { version = "3.5.0", optional = true }
 ignore = "0.4"
 itoa = "1"
 memchr = "2"
@@ -59,9 +46,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 criterion = { version = "0.8.2", features = ["async_tokio", "html_reports"] }
 blake3 = "1"
 libc = "0.2"
-# Runner-up of the Phase 6 bench-off, kept so the `hash_matrix` group can keep
-# measuring the shipped choice against it. Not used by the crate itself.
-rapidhash = "4.5.1"
 # Independent engine for the grep differential test's per-line reference
 # implementation; the production path matches via grep-regex/grep-searcher.
 regex = "1"
@@ -72,11 +56,6 @@ tokio = { version = "1", features = ["io-util", "process", "time"] }
 
 [[bench]]
 name = "hashline"
-harness = false
-
-[[bench]]
-name = "phase0-resources"
-path = "benches/support/phase0_resources.rs"
 harness = false
 
 [profile.release]
