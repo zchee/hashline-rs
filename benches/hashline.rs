@@ -345,6 +345,8 @@ fn bench_dispatch(c: &mut Criterion) {
         .expect("canonicalize dispatch fixture");
 
     let server = HashlineServer::new(tmp.path().to_path_buf());
+    let barrier_server = HashlineServer::new(tmp.path().to_path_buf())
+        .with_durability(hashline::persist::Durability::Barrier);
 
     let mut group = c.benchmark_group("dispatch");
     group.sample_size(30);
@@ -384,6 +386,23 @@ fn bench_dispatch(c: &mut Criterion) {
             |()| {
                 let args = edit_args.clone();
                 let server = &server;
+                async move {
+                    let result = server.dispatch("edit", args).await.expect("edit dispatch");
+                    black_box(assert_dispatch_success(&result).len())
+                }
+            },
+            BatchSize::PerIteration,
+        );
+    });
+
+    // Same edit under the barrier durability policy (R019 table): identical
+    // ordering guarantees, no full fsync of temp file and parent directory.
+    group.bench_function("edit_single_op_300_lines_barrier", |b| {
+        b.to_async(&rt).iter_batched(
+            || std::fs::write(&file_path, &content).expect("reset dispatch fixture"),
+            |()| {
+                let args = edit_args.clone();
+                let server = &barrier_server;
                 async move {
                     let result = server.dispatch("edit", args).await.expect("edit dispatch");
                     black_box(assert_dispatch_success(&result).len())

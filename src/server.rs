@@ -49,6 +49,7 @@ use crate::{
     edit::run_edit,
     glob::run_glob,
     grep::run_grep,
+    persist::Durability,
     protocol::{EditRequest, GlobRequest, GrepRequest, ReadRequest, WriteRequest},
     read::{MAX_LINES_READ, run_read},
     util::{ToolOutcome, Workspace},
@@ -169,6 +170,8 @@ pub struct HashlineServer {
     root_pinned: bool,
     /// When `true`, tool paths are confined to the workspace root.
     restrict: bool,
+    /// Persistence durability policy for the mutation tools.
+    durability: Durability,
     read_description: Arc<str>,
     edit_description: Arc<str>,
     write_description: Arc<str>,
@@ -195,6 +198,7 @@ impl HashlineServer {
             root: Arc::new(RwLock::new(root)),
             root_pinned: false,
             restrict: false,
+            durability: Durability::default(),
             read_description: read_description.into(),
             edit_description: EDIT_TEMPLATE.into(),
             write_description: WRITE_TEMPLATE.into(),
@@ -216,14 +220,21 @@ impl HashlineServer {
         self
     }
 
+    /// Replace the persistence durability policy (default [`Durability::Full`]).
+    #[must_use]
+    pub fn with_durability(mut self, durability: Durability) -> Self {
+        self.durability = durability;
+        self
+    }
+
     /// Snapshot of the current workspace root.
     pub fn current_root(&self) -> PathBuf {
         self.root.read().expect("root lock poisoned").clone()
     }
 
-    /// Path-resolution context for one tool call.
+    /// Tool-execution context for one tool call.
     fn workspace(&self) -> Workspace {
-        Workspace::new(self.current_root(), self.restrict)
+        Workspace::new(self.current_root(), self.restrict).with_durability(self.durability)
     }
 
     /// Replace the workspace root unless it is pinned. Returns whether the

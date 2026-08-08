@@ -33,6 +33,39 @@ use std::{
 
 use crate::snapshot::FileStamp;
 
+/// How hard a successful persist promises the bytes are on disk (R019).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Durability {
+    /// fsync the temp file and its parent directory: power-loss durable.
+    #[default]
+    Full,
+    /// Write-ordering barrier only (`F_BARRIERFSYNC` on macOS, `sync_data`
+    /// elsewhere): crash-ordered and much cheaper on macOS, but not
+    /// power-loss durable there.
+    Barrier,
+    /// No explicit sync: atomic-rename ordering only. Fastest; a crash may
+    /// lose the write entirely (never a torn destination).
+    None,
+}
+
+/// Issue the barrier-mode flush for one temp file.
+#[cfg(target_os = "macos")]
+fn barrier_sync(file: &File) -> io::Result<()> {
+    use std::os::fd::AsRawFd as _;
+    // SAFETY: fcntl(F_BARRIERFSYNC) on an open owned descriptor takes no
+    // pointer arguments; the descriptor outlives the call.
+    if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_BARRIERFSYNC) } == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// Non-macOS barrier mode: data-only flush.
+#[cfg(not(target_os = "macos"))]
+fn barrier_sync(file: &File) -> io::Result<()> {
+    file.sync_data()
+}
+
 /// Serialize same-path writes inside one process.
 fn path_lock(path: &Path) -> std::sync::MutexGuard<'static, ()> {
     static LOCKS: OnceLock<Mutex<std::collections::HashMap<PathBuf, &'static Mutex<()>>>> =
@@ -102,6 +135,7 @@ pub fn atomic_write(
     path: &Path,
     bytes: &[u8],
     expected: Option<FileStamp>,
+    durability: Durability,
 ) -> Result<FileStamp, PersistError> {
     let _guard = path_lock(path);
 
@@ -110,7 +144,7 @@ pub fn atomic_write(
     }
 
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let (temp_path, stamp) = write_unique_temp(parent, path, bytes)?;
+    let (temp_path, stamp) = write_unique_temp(parent, path, bytes, durability)?;
 
     // Re-stat destination immediately before rename.
     if let Some(expected) = expected {
@@ -145,7 +179,9 @@ pub fn atomic_write(
         io_err("rename into", path, source)
     })?;
 
-    fsync_parent(parent);
+    if durability == Durability::Full {
+        fsync_parent(parent);
+    }
     Ok(stamp)
 }
 
@@ -180,6 +216,7 @@ fn write_unique_temp(
     parent: &Path,
     path: &Path,
     bytes: &[u8],
+    durability: Durability,
 ) -> Result<(PathBuf, FileStamp), PersistError> {
     let temp_path = parent.join(unique_temp_name());
 
@@ -191,8 +228,14 @@ fn write_unique_temp(
             .map_err(|source| io_err("create temp for", path, source))?;
         file.write_all(bytes)
             .map_err(|source| io_err("write temp for", path, source))?;
-        file.sync_all()
-            .map_err(|source| io_err("fsync temp for", path, source))?;
+        match durability {
+            Durability::Full => file
+                .sync_all()
+                .map_err(|source| io_err("fsync temp for", path, source))?,
+            Durability::Barrier => barrier_sync(&file)
+                .map_err(|source| io_err("barrier-sync temp for", path, source))?,
+            Durability::None => {}
+        }
         let metadata = file
             .metadata()
             .map_err(|source| io_err("stat temp for", path, source))?;
@@ -232,14 +275,18 @@ fn fsync_parent(_parent: &Path) {}
 /// # Errors
 ///
 /// Returns DestinationExists when `path` already exists, or an I/O error.
-pub fn atomic_create(path: &Path, bytes: &[u8]) -> Result<FileStamp, PersistError> {
+pub fn atomic_create(
+    path: &Path,
+    bytes: &[u8],
+    durability: Durability,
+) -> Result<FileStamp, PersistError> {
     let _guard = path_lock(path);
 
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|source| io_err("create parent of", path, source))?;
     }
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let (temp_path, stamp) = write_unique_temp(parent, path, bytes)?;
+    let (temp_path, stamp) = write_unique_temp(parent, path, bytes, durability)?;
 
     let linked = fs::hard_link(&temp_path, path);
     let _ = fs::remove_file(&temp_path);
@@ -253,7 +300,9 @@ pub fn atomic_create(path: &Path, bytes: &[u8]) -> Result<FileStamp, PersistErro
         Err(source) => return Err(io_err("link into", path, source)),
     }
 
-    fsync_parent(parent);
+    if durability == Durability::Full {
+        fsync_parent(parent);
+    }
     Ok(stamp)
 }
 
@@ -266,11 +315,31 @@ mod tests {
     fn atomic_write_creates_and_replaces() {
         let tmp = tempfile::TempDir::new().unwrap();
         let path = tmp.path().join("f.txt");
-        atomic_write(&path, b"hello\n", None).unwrap();
+        atomic_write(&path, b"hello\n", None, Durability::Full).unwrap();
         assert_eq!(fs::read(&path).unwrap(), b"hello\n");
         let snap = Snapshot::load(&path).unwrap();
-        atomic_write(&path, b"world\n", snap.stamp()).unwrap();
+        atomic_write(&path, b"world\n", snap.stamp(), Durability::Full).unwrap();
         assert_eq!(fs::read(&path).unwrap(), b"world\n");
+    }
+
+    #[test]
+    fn every_durability_mode_persists_bytes_and_returns_a_stamp() {
+        for durability in [Durability::Full, Durability::Barrier, Durability::None] {
+            let tmp = tempfile::TempDir::new().unwrap();
+            let path = tmp.path().join("mode.txt");
+            let stamp = atomic_create(&path, b"created\n", durability).unwrap();
+            assert_eq!(fs::read(&path).unwrap(), b"created\n");
+
+            let replaced = atomic_write(&path, b"replaced\n", None, durability).unwrap();
+            assert_eq!(fs::read(&path).unwrap(), b"replaced\n");
+            assert_ne!(stamp, replaced, "{durability:?}");
+
+            let err = atomic_create(&path, b"loser\n", durability).unwrap_err();
+            assert!(
+                matches!(err, PersistError::DestinationExists { .. }),
+                "{durability:?}"
+            );
+        }
     }
 
     #[test]
@@ -291,10 +360,10 @@ mod tests {
     fn atomic_create_is_exclusive_and_creates_parents() {
         let tmp = tempfile::TempDir::new().unwrap();
         let path = tmp.path().join("nested").join("fresh.txt");
-        atomic_create(&path, b"first\n").unwrap();
+        atomic_create(&path, b"first\n", Durability::Full).unwrap();
         assert_eq!(fs::read(&path).unwrap(), b"first\n");
 
-        let err = atomic_create(&path, b"second\n").unwrap_err();
+        let err = atomic_create(&path, b"second\n", Durability::Full).unwrap_err();
         assert!(matches!(err, PersistError::DestinationExists { .. }));
         assert_eq!(fs::read(&path).unwrap(), b"first\n");
 
@@ -318,7 +387,7 @@ mod tests {
         let snap = Snapshot::load(&path).unwrap();
         // External mutation.
         fs::write(&path, b"b\n").unwrap();
-        let err = atomic_write(&path, b"c\n", snap.stamp()).unwrap_err();
+        let err = atomic_write(&path, b"c\n", snap.stamp(), Durability::Full).unwrap_err();
         assert!(matches!(err, PersistError::DestinationChanged { .. }));
         assert_eq!(fs::read(&path).unwrap(), b"b\n");
     }

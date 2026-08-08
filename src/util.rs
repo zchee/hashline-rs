@@ -23,7 +23,7 @@ use std::{
 };
 
 use crate::{
-    persist::PersistError,
+    persist::{Durability, PersistError},
     protocol::{ErrorCode, ErrorResponse, ProtocolError},
     snapshot::SnapshotError,
 };
@@ -195,20 +195,33 @@ pub(crate) fn join_protocol_error(
     )
 }
 
-/// Path-resolution context shared by all tools: the workspace root plus the
-/// optional confinement policy.
+/// Tool-execution context shared by all tools: the workspace root, the
+/// optional confinement policy, and the persistence durability policy.
 #[derive(Debug, Clone)]
 pub struct Workspace {
     /// Canonicalized workspace root that relative paths resolve against.
     pub root: PathBuf,
     /// When `true`, resolved paths must stay within `root`.
     pub restrict: bool,
+    /// Durability policy applied by the mutation tools (default Full).
+    pub durability: Durability,
 }
 
 impl Workspace {
     /// Create a workspace. `root` should already be canonicalized.
     pub fn new(root: PathBuf, restrict: bool) -> Self {
-        Self { root, restrict }
+        Self {
+            root,
+            restrict,
+            durability: Durability::default(),
+        }
+    }
+
+    /// Replace the persistence durability policy.
+    #[must_use]
+    pub fn with_durability(mut self, durability: Durability) -> Self {
+        self.durability = durability;
+        self
     }
 
     /// Resolve a model-supplied path against the workspace root, enforcing

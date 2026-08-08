@@ -18,7 +18,7 @@ use std::path::PathBuf;
 
 use anyhow::Context as _;
 use clap::Parser;
-use hashline::server::HashlineServer;
+use hashline::{persist::Durability, server::HashlineServer};
 use rmcp::ServiceExt as _;
 
 /// Standalone MCP server providing hashline file reading, editing, and
@@ -38,6 +38,32 @@ struct Cli {
     /// and symlinks escaping it).
     #[arg(long, env = "HASHLINE_RESTRICT")]
     restrict: bool,
+
+    /// Persistence durability policy: full fsync (default), a write-ordering
+    /// barrier, or rename ordering only. See R019 in docs/protocol.md.
+    #[arg(long, env = "HASHLINE_DURABILITY", value_enum, default_value_t = DurabilityArg::Full)]
+    durability: DurabilityArg,
+}
+
+/// CLI surface for [`Durability`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum DurabilityArg {
+    /// fsync temp file and parent directory (power-loss durable).
+    Full,
+    /// Write-ordering barrier (F_BARRIERFSYNC on macOS, fdatasync elsewhere).
+    Barrier,
+    /// No explicit sync; atomic-rename ordering only.
+    None,
+}
+
+impl From<DurabilityArg> for Durability {
+    fn from(arg: DurabilityArg) -> Self {
+        match arg {
+            DurabilityArg::Full => Self::Full,
+            DurabilityArg::Barrier => Self::Barrier,
+            DurabilityArg::None => Self::None,
+        }
+    }
 }
 
 #[tokio::main]
@@ -79,7 +105,8 @@ async fn main() -> anyhow::Result<()> {
 
     let server = HashlineServer::new(root.clone())
         .with_root_pinned(explicit_root)
-        .with_restrict(cli.restrict);
+        .with_restrict(cli.restrict)
+        .with_durability(cli.durability.into());
     tracing::info!(
         root = %root.display(),
         root_pinned = explicit_root,

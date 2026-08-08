@@ -27,7 +27,7 @@ use std::{path::Path, sync::Arc};
 
 use crate::{
     cache,
-    persist::{self, PersistError},
+    persist::{self, Durability, PersistError},
     protocol::{ErrorCode, ProtocolError, WriteRequest, WriteSuccess, validate_reference_write},
     snapshot::{Snapshot, SnapshotError},
     util::{
@@ -53,14 +53,20 @@ pub async fn run(
     // One blocking hop for the whole decide -> persist -> publish pipeline.
     let task_path = path.clone();
     let request = input.clone();
-    match tokio::task::spawn_blocking(move || run_blocking(&task_path, &request)).await {
+    let durability = workspace.durability;
+    match tokio::task::spawn_blocking(move || run_blocking(&task_path, &request, durability)).await
+    {
         Ok(result) => result,
         Err(join) => Err(join_protocol_error("write", &path, join)),
     }
 }
 
 /// The whole write pipeline on one blocking thread.
-fn run_blocking(path: &Path, input: &WriteRequest) -> Result<WriteSuccess, ProtocolError> {
+fn run_blocking(
+    path: &Path,
+    input: &WriteRequest,
+    durability: Durability,
+) -> Result<WriteSuccess, ProtocolError> {
     let current = match Snapshot::load(path) {
         Ok(snapshot) => Some(snapshot),
         Err(SnapshotError::Io { source, .. }) if source.kind() == std::io::ErrorKind::NotFound => {
@@ -78,10 +84,10 @@ fn run_blocking(path: &Path, input: &WriteRequest) -> Result<WriteSuccess, Proto
 
     let bytes = input.content.clone().into_bytes();
     let persist_result = if created {
-        persist::atomic_create(path, &bytes)
+        persist::atomic_create(path, &bytes, durability)
     } else {
         let stamp = current.as_ref().and_then(|snapshot| snapshot.stamp());
-        persist::atomic_write(path, &bytes, stamp)
+        persist::atomic_write(path, &bytes, stamp, durability)
     };
     let stamp = match persist_result {
         Ok(stamp) => stamp,

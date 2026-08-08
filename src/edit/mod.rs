@@ -26,7 +26,8 @@ use std::{path::Path, sync::Arc};
 pub use engine::apply_edits_fast;
 
 use crate::{
-    cache, persist,
+    cache,
+    persist::{self, Durability},
     protocol::{
         EditRequest, EditSuccess, ErrorCode, ProtocolError, SnapshotId,
         apply_versioned_reference_edits, reference_context, reference_header,
@@ -61,21 +62,27 @@ pub async fn run(workspace: &Workspace, input: &EditRequest) -> Result<EditSucce
     // spawn_blocking round-trips bought nothing but latency and copies.
     let task_path = path.clone();
     let request = input.clone();
-    match tokio::task::spawn_blocking(move || run_blocking(&task_path, &request)).await {
+    let durability = workspace.durability;
+    match tokio::task::spawn_blocking(move || run_blocking(&task_path, &request, durability)).await
+    {
         Ok(result) => result,
         Err(join) => Err(join_protocol_error("edit", &path, join)),
     }
 }
 
 /// The whole edit pipeline on one blocking thread.
-fn run_blocking(path: &Path, input: &EditRequest) -> Result<EditSuccess, ProtocolError> {
+fn run_blocking(
+    path: &Path,
+    input: &EditRequest,
+    durability: Durability,
+) -> Result<EditSuccess, ProtocolError> {
     let snapshot = match Snapshot::load(path) {
         Ok(snapshot) => snapshot,
         Err(SnapshotError::Io { source, .. }) if source.kind() == std::io::ErrorKind::NotFound => {
             // New-file path: only a whole-file replace from 1@0..2@0 on empty is
             // modeled by applying against empty bytes when snapshot is the empty ID.
             // Require the request snapshot to match an empty snapshot identity.
-            return create_new_file(path, input);
+            return create_new_file(path, input, durability);
         }
         Err(error) => return Err(snapshot_protocol_error("edit", path, error)),
     };
@@ -83,7 +90,7 @@ fn run_blocking(path: &Path, input: &EditRequest) -> Result<EditSuccess, Protoco
     let previous = snapshot.id();
     let stamp = snapshot.stamp();
     let applied = engine::apply_edits_fast(&snapshot, input)?;
-    publish(path, input, previous, applied, stamp)
+    publish(path, input, previous, applied, stamp, durability)
 }
 
 /// Persist `applied` and publish the response snapshot without re-reading
@@ -94,8 +101,10 @@ fn publish(
     previous: SnapshotId,
     applied: Vec<u8>,
     expected: Option<FileStamp>,
+    durability: Durability,
 ) -> Result<EditSuccess, ProtocolError> {
-    let stamp = persist::atomic_write(path, &applied, expected).map_err(persist_protocol_error)?;
+    let stamp = persist::atomic_write(path, &applied, expected, durability)
+        .map_err(persist_protocol_error)?;
     // SAFETY: `applied` is the reference model's splice of R007-validated
     // replacement content into R007-validated source text at validated
     // line-start (char) boundaries, so it is exact UTF-8 and NUL-free by
@@ -126,7 +135,11 @@ pub async fn run_edit(workspace: &Workspace, input: &EditRequest) -> ToolOutcome
     }
 }
 
-fn create_new_file(path: &Path, input: &EditRequest) -> Result<EditSuccess, ProtocolError> {
+fn create_new_file(
+    path: &Path,
+    input: &EditRequest,
+    durability: Durability,
+) -> Result<EditSuccess, ProtocolError> {
     // Empty pre-image: compute empty snapshot id and require request match.
     let empty = Snapshot::from_bytes(Vec::new())
         .map_err(|error| snapshot_protocol_error("edit", path, error))?;
@@ -157,7 +170,7 @@ fn create_new_file(path: &Path, input: &EditRequest) -> Result<EditSuccess, Prot
         ));
     }
 
-    publish(path, input, empty.id(), applied, None)
+    publish(path, input, empty.id(), applied, None, durability)
 }
 
 #[cfg(test)]

@@ -416,6 +416,20 @@ transaction. Same-server writes to one canonical path are serialized.
 The plan's residual final TOCTOU window with a noncooperating external writer
 is documented rather than hidden.
 
+Persistence durability is a configurable policy (`--durability` /
+`HASHLINE_DURABILITY`; embedders use `Workspace::with_durability`).
+Ordering and atomicity are identical in every mode — the modes change only
+what a success promises about power loss:
+
+| Mode | Temp-file flush | Parent-dir flush | Survives process crash | Survives power loss |
+|---|---|---|---|---|
+| `full` (default) | fsync | fsync | yes | yes |
+| `barrier` | ordering barrier (`F_BARRIERFSYNC` on macOS; data flush elsewhere) | none | yes | ordered, not guaranteed |
+| `none` | none | none | yes (rename ordering) | the write may be lost whole |
+
+No mode can tear the destination: rename/link atomicity is unconditional,
+and a write lost under `barrier`/`none` is lost whole, never half-applied.
+
 ### R020: Cross-tool invariant
 
 A position emitted by read or grep names one exact snapshot. Edit either
@@ -932,6 +946,9 @@ let response = EditSuccess::new(
 let value = serde_json::to_value(response)?;
 assert_eq!(value["snapshot"], persisted.to_string());
 assert_eq!(value["protocol"], "hashline");
+
+use hashline::persist::Durability;
+assert_eq!(Durability::default(), Durability::Full);
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
