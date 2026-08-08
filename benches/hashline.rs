@@ -1781,6 +1781,187 @@ fn bench_wired_grep(c: &mut Criterion) {
     group.finish();
 }
 
+/// Wired-path write benches: exclusive create with a per-iteration unlink,
+/// versioned replace with a per-iteration reset, and the already_exists
+/// fail-closed path, which needs no reset because the loser never mutates.
+fn bench_wired_write(c: &mut Criterion) {
+    let rt = tokio::runtime::Runtime::new().expect("tokio runtime for wired write bench");
+
+    let tmp = tempfile::TempDir::new().expect("tempdir for wired write bench");
+    let server = HashlineServer::new(tmp.path().to_path_buf(), SchemeConfig::default())
+        .expect("server construction");
+
+    let content = generate_corpus(10_000, 0x0B1E_55ED);
+    let create_path = tmp.path().join("created.rs");
+    let create_args = serde_json::json!({
+        "file_path": "created.rs",
+        "content": content,
+        "expect": "absent",
+    });
+
+    // Fail-closed contract once in setup: the create succeeds, a repeat
+    // reports already_exists, and the destination keeps the winner's bytes.
+    rt.block_on(async {
+        let result = server
+            .dispatch("write", create_args.clone())
+            .await
+            .expect("write dispatch");
+        let text = assert_dispatch_success(&result);
+        assert!(text.contains("\"created\": true"), "{text}");
+        let repeat = server
+            .dispatch("write", create_args.clone())
+            .await
+            .expect("write dispatch");
+        assert_eq!(
+            repeat.is_error,
+            Some(true),
+            "repeat create must fail closed"
+        );
+        let repeat_text = tool_text(&repeat);
+        assert!(
+            repeat_text.contains("already_exists"),
+            "structured already_exists expected: {repeat_text}"
+        );
+    });
+
+    let mut group = c.benchmark_group("wired_write");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(6));
+
+    group.bench_function("create_10k_e2e_full", |b| {
+        b.to_async(&rt).iter_batched(
+            || {
+                std::fs::remove_file(&create_path).expect("unlink created fixture");
+                cache::process_cache().invalidate(&create_path);
+            },
+            |()| {
+                let args = create_args.clone();
+                let server = &server;
+                async move {
+                    let result = server
+                        .dispatch("write", args)
+                        .await
+                        .expect("write dispatch");
+                    black_box(assert_dispatch_success(&result).len())
+                }
+            },
+            BatchSize::PerIteration,
+        );
+    });
+
+    let replace_path = tmp.path().join("replaced.rs");
+    std::fs::write(&replace_path, &content).expect("write replace fixture");
+    let fixture_id = Snapshot::from_bytes(content.as_bytes().to_vec())
+        .expect("replace fixture snapshot")
+        .id();
+    let mut replaced_content = content.clone();
+    replaced_content.push_str("replaced tail\n");
+    let replace_args = serde_json::json!({
+        "file_path": "replaced.rs",
+        "content": replaced_content,
+        "expect": fixture_id.to_string(),
+    });
+
+    group.bench_function("replace_10k_e2e_full", |b| {
+        b.to_async(&rt).iter_batched(
+            || std::fs::write(&replace_path, &content).expect("reset replace fixture"),
+            |()| {
+                let args = replace_args.clone();
+                let server = &server;
+                async move {
+                    let result = server
+                        .dispatch("write", args)
+                        .await
+                        .expect("write dispatch");
+                    black_box(assert_dispatch_success(&result).len())
+                }
+            },
+            BatchSize::PerIteration,
+        );
+    });
+
+    group.sample_size(20);
+    group.warm_up_time(Duration::from_secs(2));
+    group.measurement_time(Duration::from_secs(5));
+
+    // Exclusive-create conflict path: the destination exists, so every
+    // iteration fails closed without touching it — no reset required.
+    std::fs::write(&create_path, "occupant\n").expect("reset conflict fixture");
+    group.bench_function("create_conflict", |b| {
+        b.to_async(&rt).iter(|| {
+            let args = create_args.clone();
+            let server = &server;
+            async move {
+                let result = server
+                    .dispatch("write", args)
+                    .await
+                    .expect("write dispatch");
+                assert_eq!(
+                    result.is_error,
+                    Some(true),
+                    "existing file must fail closed"
+                );
+                let text = tool_text(&result);
+                assert!(
+                    text.contains("already_exists"),
+                    "structured already_exists expected: {text}"
+                );
+                black_box(text.len())
+            }
+        });
+    });
+
+    group.finish();
+}
+
+/// Wired-path glob bench over the shared ~2,000-file grep fixture tree:
+/// recursive discovery with deterministic newest-first ordering. Setup pins
+/// the summary once and every timed iteration re-asserts it so silent
+/// truncation or ordering drift fails closed.
+fn bench_wired_glob(c: &mut Criterion) {
+    let rt = tokio::runtime::Runtime::new().expect("tokio runtime for wired glob bench");
+
+    let root = grep_fixture_root();
+    let server = HashlineServer::new(root.to_path_buf(), SchemeConfig::default())
+        .expect("server construction");
+
+    let args = serde_json::json!({"pattern": "**/*.rs", "max_results": 1000});
+    let expected_summary = rt.block_on(async {
+        let result = server
+            .dispatch("glob", args.clone())
+            .await
+            .expect("glob dispatch");
+        let text = assert_dispatch_success(&result);
+        let summary = &text[text.rfind('\n').map_or(0, |index| index + 1)..];
+        assert!(
+            summary.starts_with("[hashline files="),
+            "glob summary expected: {summary}"
+        );
+        summary.to_owned()
+    });
+
+    let mut group = c.benchmark_group("wired_glob");
+    group.sample_size(20);
+    group.measurement_time(Duration::from_secs(5));
+
+    group.bench_function("tree_recursive_rs", |b| {
+        b.to_async(&rt).iter(|| {
+            let args = args.clone();
+            let server = &server;
+            let expected = &expected_summary;
+            async move {
+                let result = server.dispatch("glob", args).await.expect("glob dispatch");
+                let text = assert_dispatch_success(&result);
+                assert!(text.ends_with(expected.as_str()), "summary mismatch");
+                black_box(text.len())
+            }
+        });
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_line_hash,
@@ -1799,5 +1980,7 @@ criterion_group!(
     bench_wired_read,
     bench_wired_edit,
     bench_wired_grep,
+    bench_wired_write,
+    bench_wired_glob,
 );
 criterion_main!(benches);

@@ -66,6 +66,9 @@ rapidhash = "4.5.1"
 # implementation; the production path matches via grep-regex/grep-searcher.
 regex = "1"
 tempfile = "3"
+# The stdio E2E test (tests/e2e_stdio.rs) drives the real binary as a child
+# process; these features are additive on top of the runtime features above.
+tokio = { version = "1", features = ["io-util", "process", "time"] }
 
 [[bench]]
 name = "hashline"
