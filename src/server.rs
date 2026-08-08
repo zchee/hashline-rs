@@ -39,6 +39,7 @@ use rmcp::{
     model::{
         CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Implementation,
         ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerInfo, Tool,
+        ToolAnnotations,
     },
     service::{NotificationContext, Peer, RequestContext, RoleServer},
 };
@@ -309,13 +310,33 @@ impl HashlineServer {
         }
     }
 
-    fn tool<T: schemars::JsonSchema>(name: &'static str, description: &Arc<str>) -> Tool {
+    fn tool<T: schemars::JsonSchema>(
+        name: &'static str,
+        description: &Arc<str>,
+        annotations: ToolAnnotations,
+    ) -> Tool {
         let schema = schemars::schema_for!(T);
         let value = serde_json::to_value(schema).expect("tool input schema serializes to JSON");
         let Value::Object(map) = value else {
             unreachable!("schemars root schema is always a JSON object");
         };
-        Tool::new(name, description.to_string(), Arc::new(map))
+        Tool::new(name, description.to_string(), Arc::new(map)).annotate(annotations)
+    }
+
+    /// Annotations for tools that never modify the workspace.
+    fn read_only_annotations(title: &str) -> ToolAnnotations {
+        ToolAnnotations::with_title(title)
+            .read_only(true)
+            .idempotent(true)
+            .open_world(false)
+    }
+
+    /// Annotations for tools that replace destination bytes.
+    fn mutating_annotations(title: &str) -> ToolAnnotations {
+        ToolAnnotations::with_title(title)
+            .read_only(false)
+            .destructive(true)
+            .open_world(false)
     }
 
     /// The tool listing, with scheme-aware descriptions.
@@ -325,11 +346,31 @@ impl HashlineServer {
     pub fn tools(&self) -> &[Tool] {
         self.tools.get_or_init(|| {
             vec![
-                Self::tool::<ReadRequest>("read", &self.read_description),
-                Self::tool::<EditRequest>("edit", &self.edit_description),
-                Self::tool::<WriteRequest>("write", &self.write_description),
-                Self::tool::<GrepRequest>("grep", &self.grep_description),
-                Self::tool::<GlobRequest>("glob", &self.glob_description),
+                Self::tool::<ReadRequest>(
+                    "read",
+                    &self.read_description,
+                    Self::read_only_annotations("Versioned file read"),
+                ),
+                Self::tool::<EditRequest>(
+                    "edit",
+                    &self.edit_description,
+                    Self::mutating_annotations("Versioned byte-range edit"),
+                ),
+                Self::tool::<WriteRequest>(
+                    "write",
+                    &self.write_description,
+                    Self::mutating_annotations("Versioned file create or replace"),
+                ),
+                Self::tool::<GrepRequest>(
+                    "grep",
+                    &self.grep_description,
+                    Self::read_only_annotations("Versioned content search"),
+                ),
+                Self::tool::<GlobRequest>(
+                    "glob",
+                    &self.glob_description,
+                    Self::read_only_annotations("Deterministic file discovery"),
+                ),
             ]
         })
     }
@@ -463,6 +504,31 @@ mod tests {
         }
         let edit_desc = tools[1].description.as_deref().unwrap();
         assert!(edit_desc.contains("snapshot"), "{edit_desc}");
+    }
+
+    #[test]
+    fn tools_carry_behavior_annotations() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let server = server(tmp.path());
+        for tool in server.tools() {
+            let annotations = tool
+                .annotations
+                .as_ref()
+                .unwrap_or_else(|| panic!("{} has no annotations", tool.name));
+            assert_eq!(annotations.open_world_hint, Some(false), "{}", tool.name);
+            assert!(annotations.title.is_some(), "{}", tool.name);
+            match tool.name.as_ref() {
+                "read" | "grep" | "glob" => {
+                    assert_eq!(annotations.read_only_hint, Some(true), "{}", tool.name);
+                    assert_eq!(annotations.idempotent_hint, Some(true), "{}", tool.name);
+                }
+                "edit" | "write" => {
+                    assert_eq!(annotations.read_only_hint, Some(false), "{}", tool.name);
+                    assert_eq!(annotations.destructive_hint, Some(true), "{}", tool.name);
+                }
+                other => panic!("unexpected tool {other}"),
+            }
+        }
     }
 
     #[test]
