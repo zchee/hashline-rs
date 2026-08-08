@@ -130,6 +130,16 @@ fn bench_grep(c: &mut Criterion) {
                 black_box(outcome.text.len())
             });
         });
+
+        let mut files_input = grep_input(pattern);
+        files_input.output_mode = GrepOutputMode::FilesWithMatches;
+        group.bench_function(format!("{label}_files"), |b| {
+            b.iter(|| {
+                let outcome = run_grep(&ws, &files_input);
+                assert!(!outcome.is_error, "wired tree files-mode grep must succeed");
+                black_box(outcome.text.len())
+            });
+        });
     }
     group.finish();
 }
@@ -198,6 +208,19 @@ fn bench_grep_large_file(c: &mut Criterion) {
             b.iter(|| {
                 let outcome = run_grep(&ws, &input);
                 assert!(!outcome.is_error, "wired large-file grep must succeed");
+                black_box(outcome.text.len())
+            });
+        });
+
+        let mut files_input = input.clone();
+        files_input.output_mode = GrepOutputMode::FilesWithMatches;
+        group.bench_function(format!("{label}_files"), |b| {
+            b.iter(|| {
+                let outcome = run_grep(&ws, &files_input);
+                assert!(
+                    !outcome.is_error,
+                    "wired large-file files-mode grep must succeed"
+                );
                 black_box(outcome.text.len())
             });
         });

@@ -168,6 +168,10 @@ fn included_spans(match_lines: &[usize], before: usize, after: usize) -> Vec<Ran
 }
 
 /// Search a single file, returning a positional hit section (if any match).
+///
+/// Only `content` mode builds a snapshot (identity hash), offsets, and a
+/// rendered body; the discovery modes report the path and match count alone,
+/// so matching files cost one read and one search pass.
 #[allow(clippy::too_many_arguments)]
 fn search_file(
     path: &Path,
@@ -177,36 +181,53 @@ fn search_file(
     before: usize,
     after: usize,
     target: GrepTarget,
+    mode: GrepOutputMode,
     skipped_binary: &AtomicUsize,
     skipped_utf8: &AtomicUsize,
 ) -> Option<FileHit> {
     let bytes = std::fs::read(path).ok()?;
-    let text = match classify_grep_text(&bytes, target) {
-        Ok(GrepText::Search(text)) => text.to_owned(),
-        Ok(GrepText::SkipBinary) => {
-            skipped_binary.fetch_add(1, Ordering::Relaxed);
-            return None;
-        }
-        Ok(GrepText::SkipInvalidUtf8) => {
-            skipped_utf8.fetch_add(1, Ordering::Relaxed);
-            return None;
-        }
-        Err(_) => {
-            return None;
-        }
+    let matched = {
+        let text = match classify_grep_text(&bytes, target) {
+            Ok(GrepText::Search(text)) => text,
+            Ok(GrepText::SkipBinary) => {
+                skipped_binary.fetch_add(1, Ordering::Relaxed);
+                return None;
+            }
+            Ok(GrepText::SkipInvalidUtf8) => {
+                skipped_utf8.fetch_add(1, Ordering::Relaxed);
+                return None;
+            }
+            Err(_) => {
+                return None;
+            }
+        };
+        match_lines(matcher, searcher, text)?
     };
-
-    let matched = match_lines(matcher, searcher, &text)?;
     if matched.is_empty() {
         return None;
     }
 
-    let snapshot = Snapshot::from_bytes(bytes).ok()?;
+    if mode != GrepOutputMode::Content {
+        // Discovery modes still need the exact match count (the global
+        // budget and `truncated` must agree with content mode), but no
+        // header, hash, offsets, or body.
+        return Some(FileHit {
+            rel,
+            header: String::new(),
+            body: String::new(),
+            matches: matched.len(),
+        });
+    }
+
+    // SAFETY: `classify_grep_text` validated exactly these bytes as NUL-free
+    // UTF-8 above (the R016 text policy); the R010 size cap is re-checked
+    // inside `from_validated_bytes`. Debug builds re-verify both properties.
+    let snapshot = unsafe { Snapshot::from_validated_bytes(bytes) }.ok()?;
     let _ = snapshot.materialize_offsets().ok()?;
     let line_count = snapshot.line_count();
     // Grep match line numbers follow str::lines()-style counts used by the
     // searcher (no synthetic trailing empty line for trailing LF).
-    let searchable = if text.is_empty() || text.ends_with('\n') {
+    let searchable = if snapshot.text().is_empty() || snapshot.text().ends_with('\n') {
         line_count.saturating_sub(1)
     } else {
         line_count
@@ -294,6 +315,8 @@ struct SearchContext<'a> {
     total: AtomicUsize,
     /// The walk stops once `total` exceeds this.
     quit_threshold: usize,
+    /// Requested response shape; discovery modes skip snapshot and render.
+    mode: GrepOutputMode,
     /// Tree entries skipped as binary (NUL).
     skipped_binary: AtomicUsize,
     /// Tree entries skipped as invalid UTF-8.
@@ -330,6 +353,7 @@ impl ParallelVisitor for GrepVisitor<'_> {
             self.ctx.before,
             self.ctx.after,
             GrepTarget::TreeEntry,
+            self.ctx.mode,
             &self.ctx.skipped_binary,
             &self.ctx.skipped_invalid_utf8,
         ) {
@@ -485,6 +509,7 @@ pub fn run(workspace: &Workspace, input: &GrepRequest) -> Result<String, Protoco
             before,
             after,
             GrepTarget::ExplicitFile,
+            input.output_mode,
             &skipped_binary,
             &skipped_utf8,
         )
@@ -539,6 +564,7 @@ pub fn run(workspace: &Workspace, input: &GrepRequest) -> Result<String, Protoco
         // Bound over-collection roughly to O(workers * max_matches); 8 is a
         // typical ignore parallel fan-out upper bound on developer machines.
         quit_threshold: max_matches.saturating_mul(8),
+        mode: input.output_mode,
         skipped_binary: AtomicUsize::new(0),
         skipped_invalid_utf8: AtomicUsize::new(0),
     };
