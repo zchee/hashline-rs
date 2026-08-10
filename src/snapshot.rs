@@ -46,6 +46,18 @@ pub(crate) fn content_id(bytes: &[u8]) -> SnapshotId {
     SnapshotId::from_u128(xxh3_128_with_seed(bytes, process_random_seed()))
 }
 
+/// Emit the racy-stamp verification event shared by the read, persist, and
+/// cache sites.
+pub(crate) fn trace_racy_verification(path: &Path, site: &'static str, confirmed: bool) {
+    tracing::debug!(
+        target: "hashline::stamp",
+        path = %path.display(),
+        site,
+        outcome = if confirmed { "confirmed" } else { "mismatch" },
+        "racy stamp content verification"
+    );
+}
+
 /// Owned text that has passed the complete protocol file policy.
 ///
 /// Construction rejects oversized input, NUL bytes, and invalid UTF-8 before
@@ -757,24 +769,12 @@ impl Snapshot {
             // Equal-but-racy stamps cannot rule out a same-length rewrite
             // inside one timestamp tick; prove the bytes by re-reading.
             match std::fs::read(path) {
-                Ok(reread) if reread == bytes => {
-                    tracing::debug!(
-                        target: "hashline::stamp",
-                        path = %path.display(),
-                        site = "read",
-                        outcome = "confirmed",
-                        "racy stamp content verification"
-                    );
-                }
-                Ok(_) => {
-                    tracing::debug!(
-                        target: "hashline::stamp",
-                        path = %path.display(),
-                        site = "read",
-                        outcome = "mismatch",
-                        "racy stamp content verification"
-                    );
-                    return Ok(None);
+                Ok(reread) => {
+                    let confirmed = reread == bytes;
+                    trace_racy_verification(path, "read", confirmed);
+                    if !confirmed {
+                        return Ok(None);
+                    }
                 }
                 Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(None),
                 Err(source) => {

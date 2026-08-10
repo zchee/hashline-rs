@@ -346,9 +346,14 @@ the actual remaining global capacity.
 
 An explicitly requested file containing NUL returns `binary_file`; invalid
 UTF-8 returns `invalid_utf8`. A tree search skips such files, increments the
-corresponding final-summary counter, and continues. Grep never emits lossy or
-escaped substitute text because either would break position-to-byte identity.
-I/O, permission, and pattern failures are not classified as invalid text.
+corresponding final-summary counter, and continues. An oversized file is
+`file_too_large` for either target — never a skip — so a tree walk that
+encounters one fails rather than silently under-reporting matches. Grep
+never emits lossy or escaped substitute text because either would break
+position-to-byte identity. I/O, permission, and pattern failures are not
+classified as invalid text; for an explicitly requested file they surface as
+their own taxonomy errors, while unreadable tree entries are skipped so one
+transient file cannot abort a walk.
 
 ### R017: Structured tool-error taxonomy
 

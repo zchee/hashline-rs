@@ -146,13 +146,7 @@ impl SnapshotCache {
             .ok()?;
         let after = FileStamp::from_metadata_public(&file.metadata().ok()?).ok()?;
         let confirmed = after == entry_stamp && bytes == snapshot.bytes();
-        tracing::debug!(
-            target: "hashline::stamp",
-            path = %path.display(),
-            site = "cache",
-            outcome = if confirmed { "confirmed" } else { "mismatch" },
-            "racy stamp content verification"
-        );
+        crate::snapshot::trace_racy_verification(path, "cache", confirmed);
         if !confirmed {
             return None;
         }

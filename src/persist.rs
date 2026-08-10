@@ -22,7 +22,7 @@
 
 use std::{
     fs::{self, File, OpenOptions},
-    io::{self, Write},
+    io::{self, Read as _, Write},
     path::{Path, PathBuf},
     sync::{
         Mutex, OnceLock,
@@ -182,24 +182,31 @@ pub fn atomic_write(
                 }
                 if expected.stamp.is_racy() {
                     // Stamp equality cannot rule out a same-tick same-length
-                    // rewrite; the base content identity is the tiebreak.
-                    let unchanged = match fs::read(path) {
-                        Ok(destination) => {
-                            snapshot::content_id(&destination) == expected.content_id
+                    // rewrite; the base content identity is the tiebreak. The
+                    // read is bounded by the expected length: a grown file
+                    // hashes differently at len+1 bytes already, so the full
+                    // tail never needs to be materialized.
+                    let unchanged = match File::open(path) {
+                        Ok(file) => {
+                            let mut destination = Vec::new();
+                            match file
+                                .take(expected.stamp.len().saturating_add(1))
+                                .read_to_end(&mut destination)
+                            {
+                                Ok(_) => snapshot::content_id(&destination) == expected.content_id,
+                                Err(source) => {
+                                    let _ = fs::remove_file(&temp_path);
+                                    return Err(io_err("read destination for", path, source));
+                                }
+                            }
                         }
                         Err(source) if source.kind() == io::ErrorKind::NotFound => false,
                         Err(source) => {
                             let _ = fs::remove_file(&temp_path);
-                            return Err(io_err("read destination for", path, source));
+                            return Err(io_err("open destination for", path, source));
                         }
                     };
-                    tracing::debug!(
-                        target: "hashline::stamp",
-                        path = %path.display(),
-                        site = "persist",
-                        outcome = if unchanged { "confirmed" } else { "mismatch" },
-                        "racy stamp content verification"
-                    );
+                    snapshot::trace_racy_verification(path, "persist", unchanged);
                     if !unchanged {
                         let _ = fs::remove_file(&temp_path);
                         return Err(PersistError::DestinationChanged {
