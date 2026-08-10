@@ -167,11 +167,35 @@ fn included_spans(match_lines: &[usize], before: usize, after: usize) -> Vec<Ran
     spans
 }
 
+/// Map an explicit-file read failure onto the stable error taxonomy.
+fn explicit_read_error(path: &Path, source: &io::Error) -> ProtocolError {
+    use crate::protocol::ErrorCode;
+
+    match source.kind() {
+        io::ErrorKind::NotFound => ProtocolError::new(
+            ErrorCode::NotFound,
+            format!("File not found: {}", path.display()),
+        ),
+        io::ErrorKind::PermissionDenied => ProtocolError::new(
+            ErrorCode::PermissionDenied,
+            format!("Permission denied reading {}: {source}", path.display()),
+        ),
+        _ => ProtocolError::new(
+            ErrorCode::Io,
+            format!("Failed to read {}: {source}", path.display()),
+        ),
+    }
+}
+
 /// Search a single file, returning a positional hit section (if any match).
 ///
-/// Only `content` mode builds a snapshot (identity hash), offsets, and a
-/// rendered body; the discovery modes report the path and match count alone,
-/// so matching files cost one read and one search pass.
+/// # Errors
+///
+/// Invalid text propagates per R016: `classify_grep_text` failures
+/// (binary_file/invalid_utf8 for an explicit file, file_too_large for either
+/// target — never a skip) become taxonomy errors. An unreadable explicit
+/// file is its io taxonomy error; an unreadable tree entry stays a silent
+/// skip so one transient file cannot abort the walk.
 #[allow(clippy::too_many_arguments)]
 fn search_file(
     path: &Path,
@@ -184,29 +208,54 @@ fn search_file(
     mode: GrepOutputMode,
     skipped_binary: &AtomicUsize,
     skipped_utf8: &AtomicUsize,
-) -> Option<FileHit> {
-    let bytes = std::fs::read(path).ok()?;
+) -> Result<Option<FileHit>, ProtocolError> {
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(source) => {
+            return match target {
+                GrepTarget::ExplicitFile => Err(explicit_read_error(path, &source)),
+                GrepTarget::TreeEntry => Ok(None),
+            };
+        }
+    };
     let matched = {
         let text = match classify_grep_text(&bytes, target) {
             Ok(GrepText::Search(text)) => text,
             Ok(GrepText::SkipBinary) => {
                 skipped_binary.fetch_add(1, Ordering::Relaxed);
-                return None;
+                return Ok(None);
             }
             Ok(GrepText::SkipInvalidUtf8) => {
                 skipped_utf8.fetch_add(1, Ordering::Relaxed);
-                return None;
+                return Ok(None);
             }
-            Err(_) => {
-                return None;
-            }
+            Err(error) => return Err(ProtocolError::from(error)),
         };
-        match_lines(matcher, searcher, text)?
+        match match_lines(matcher, searcher, text) {
+            Some(lines) => lines,
+            None => return Ok(None),
+        }
     };
     if matched.is_empty() {
-        return None;
+        return Ok(None);
     }
+    Ok(render_hit(bytes, rel, &matched, before, after, mode))
+}
 
+/// Render the section for a file whose match lines are already known.
+///
+/// Only `content` mode builds a snapshot (identity hash), offsets, and a
+/// rendered body; the discovery modes report the path and match count alone,
+/// so matching files cost one read and one search pass. `None` is a
+/// render-path failure and the file is simply not reported.
+fn render_hit(
+    bytes: Vec<u8>,
+    rel: PathBuf,
+    matched: &[usize],
+    before: usize,
+    after: usize,
+    mode: GrepOutputMode,
+) -> Option<FileHit> {
     if mode != GrepOutputMode::Content {
         // Discovery modes still need the exact match count (the global
         // budget and `truncated` must agree with content mode), but no
@@ -234,7 +283,7 @@ fn search_file(
     };
     let searchable = usize::try_from(searchable).unwrap_or(usize::MAX);
 
-    let mut spans = included_spans(&matched, before, after);
+    let mut spans = included_spans(matched, before, after);
     for span in &mut spans {
         span.end = span.end.min(searchable);
     }
@@ -321,6 +370,9 @@ struct SearchContext<'a> {
     skipped_binary: AtomicUsize,
     /// Tree entries skipped as invalid UTF-8.
     skipped_invalid_utf8: AtomicUsize,
+    /// First taxonomy error captured by any worker; ends the walk. Only
+    /// file_too_large can arise for tree entries — it is never a skip.
+    error: Mutex<Option<ProtocolError>>,
 }
 
 /// Per-worker visitor: accumulates hits thread-locally and hands the whole
@@ -345,7 +397,7 @@ impl ParallelVisitor for GrepVisitor<'_> {
             .strip_prefix(self.ctx.root)
             .unwrap_or(entry.path())
             .to_path_buf();
-        if let Some(hit) = search_file(
+        match search_file(
             entry.path(),
             rel,
             self.ctx.matcher,
@@ -357,9 +409,19 @@ impl ParallelVisitor for GrepVisitor<'_> {
             &self.ctx.skipped_binary,
             &self.ctx.skipped_invalid_utf8,
         ) {
-            let found = self.ctx.total.fetch_add(hit.matches, Ordering::Relaxed) + hit.matches;
-            self.hits.push(hit);
-            if found > self.ctx.quit_threshold {
+            Ok(Some(hit)) => {
+                let found = self.ctx.total.fetch_add(hit.matches, Ordering::Relaxed) + hit.matches;
+                self.hits.push(hit);
+                if found > self.ctx.quit_threshold {
+                    return WalkState::Quit;
+                }
+            }
+            Ok(None) => {}
+            Err(error) => {
+                let mut slot = self.ctx.error.lock().expect("grep error slot poisoned");
+                if slot.is_none() {
+                    *slot = Some(error);
+                }
                 return WalkState::Quit;
             }
         }
@@ -512,7 +574,7 @@ pub fn run(workspace: &Workspace, input: &GrepRequest) -> Result<String, Protoco
             input.output_mode,
             &skipped_binary,
             &skipped_utf8,
-        )
+        )?
         .into_iter()
         .collect();
         if hits.is_empty() {
@@ -567,6 +629,7 @@ pub fn run(workspace: &Workspace, input: &GrepRequest) -> Result<String, Protoco
         mode: input.output_mode,
         skipped_binary: AtomicUsize::new(0),
         skipped_invalid_utf8: AtomicUsize::new(0),
+        error: Mutex::new(None),
     };
     let collected: Mutex<Vec<Vec<FileHit>>> = Mutex::new(Vec::new());
 
@@ -574,6 +637,10 @@ pub fn run(workspace: &Workspace, input: &GrepRequest) -> Result<String, Protoco
         ctx: &ctx,
         collected: &collected,
     });
+
+    if let Some(error) = ctx.error.into_inner().expect("grep error slot poisoned") {
+        return Err(error);
+    }
 
     let batches = collected
         .into_inner()
@@ -713,6 +780,60 @@ mod tests {
         let error = run(&workspace, &req("(unclosed")).expect_err("bad regex fails typed");
         assert_eq!(error.code, crate::protocol::ErrorCode::InvalidPattern);
         assert!(!error.retryable);
+    }
+
+    #[test]
+    fn explicit_binary_file_is_a_binary_file_error() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("bin.dat"), b"nee\0dle\n").unwrap();
+        let mut request = req("needle");
+        request.path = Some("bin.dat".into());
+        let error = run(&ws(tmp.path()), &request).expect_err("NUL explicit file must error");
+        assert_eq!(error.code, crate::protocol::ErrorCode::BinaryFile);
+    }
+
+    #[test]
+    fn explicit_invalid_utf8_file_is_an_invalid_utf8_error() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("latin1.txt"), b"caf\xe9\n").unwrap();
+        let mut request = req("caf");
+        request.path = Some("latin1.txt".into());
+        let error =
+            run(&ws(tmp.path()), &request).expect_err("invalid UTF-8 explicit file must error");
+        assert_eq!(error.code, crate::protocol::ErrorCode::InvalidUtf8);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn explicit_unreadable_file_is_a_permission_denied_error() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        // chmod 000 does not stop root (e.g. containerized CI); skip there.
+        // SAFETY: geteuid takes no arguments and only reads process state.
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("locked.txt");
+        std::fs::write(&path, b"needle\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let mut request = req("needle");
+        request.path = Some("locked.txt".into());
+        let error =
+            run(&ws(tmp.path()), &request).expect_err("unreadable explicit file must error");
+        assert_eq!(error.code, crate::protocol::ErrorCode::PermissionDenied);
+    }
+
+    #[test]
+    fn tree_walk_still_skips_and_counts_invalid_text() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("ok.txt"), b"needle\n").unwrap();
+        std::fs::write(tmp.path().join("bin.dat"), b"nee\0dle\n").unwrap();
+        std::fs::write(tmp.path().join("latin1.txt"), b"n\xe9edle\n").unwrap();
+        let text = run(&ws(tmp.path()), &req("needle")).expect("tree walk succeeds");
+        assert!(text.contains("matches=1"), "{text}");
+        assert!(text.contains("skipped_binary=1"), "{text}");
+        assert!(text.contains("skipped_invalid_utf8=1"), "{text}");
     }
 
     #[test]
