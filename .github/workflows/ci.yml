@@ -27,13 +27,8 @@ jobs:
         run: cargo bench --no-run
 
   gates-linux:
-    name: Gates (Linux, advisory)
+    name: Gates (Linux)
     runs-on: ubuntu-latest
-    # Advisory only: the FileStamp-granularity tests are flaky on Linux
-    # filesystems (a same-length rewrite inside one timestamp tick evades the
-    # stamp check) — a pre-existing issue that predates this workflow and is
-    # tracked separately. Everything else must stay green here too.
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - name: Install the pinned toolchain
