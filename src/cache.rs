@@ -21,7 +21,9 @@
 
 use std::{
     collections::HashMap,
+    fs::File,
     hash::{Hash, Hasher},
+    io::Read as _,
     path::{Path, PathBuf},
     sync::{Arc, Mutex, OnceLock},
 };
@@ -37,6 +39,10 @@ const SHARD_COUNT: usize = 8;
 struct Entry {
     snapshot: Arc<Snapshot>,
     bytes: u64,
+    /// Validation stamp: starts as the snapshot's own stamp and is refreshed
+    /// by verified serves so the entry can leave the racy window without
+    /// replacing the resident snapshot.
+    stamp: Option<FileStamp>,
 }
 
 #[derive(Debug, Default)]
@@ -93,15 +99,72 @@ impl SnapshotCache {
     }
 
     /// Return a cached snapshot when the path and optional stamp still match.
+    ///
+    /// A matching but racy entry stamp is a miss: proving the bytes would
+    /// need I/O, which never happens under the shard lock. [`Self::get_or_load`]
+    /// performs that verification and refreshes the entry stamp instead.
     pub fn get(&self, path: &Path, stamp: Option<FileStamp>) -> Option<Arc<Snapshot>> {
         let guard = self.shard(path).lock().expect("cache shard poisoned");
         let entry = guard.map.get(path)?;
-        if let Some(expected) = stamp
-            && entry.snapshot.stamp() != Some(expected)
-        {
-            return None;
+        if let Some(expected) = stamp {
+            if entry.stamp != Some(expected) {
+                return None;
+            }
+            if entry.stamp.is_some_and(FileStamp::is_racy) {
+                return None;
+            }
         }
         Some(Arc::clone(&entry.snapshot))
+    }
+
+    /// Serve a racy resident entry only after proving its bytes still match
+    /// the file, then refresh the entry stamp so it can leave the racy
+    /// window. `None` means there is nothing to verify or the proof failed;
+    /// the caller falls through to a reload.
+    fn verify_racy_resident(&self, path: &Path) -> Option<Arc<Snapshot>> {
+        let (snapshot, entry_stamp) = {
+            let guard = self.shard(path).lock().expect("cache shard poisoned");
+            let entry = guard.map.get(path)?;
+            let stamp = entry.stamp?;
+            if !stamp.is_racy() {
+                return None;
+            }
+            (Arc::clone(&entry.snapshot), stamp)
+        };
+
+        // Stable verified read outside the lock: descriptor metadata must
+        // match the entry stamp before and after the byte comparison.
+        let mut file = File::open(path).ok()?;
+        let before = FileStamp::from_metadata_public(&file.metadata().ok()?).ok()?;
+        if before != entry_stamp {
+            return None;
+        }
+        let mut bytes = Vec::new();
+        (&mut file)
+            .take(entry_stamp.len().saturating_add(1))
+            .read_to_end(&mut bytes)
+            .ok()?;
+        let after = FileStamp::from_metadata_public(&file.metadata().ok()?).ok()?;
+        let confirmed = after == entry_stamp && bytes == snapshot.bytes();
+        tracing::debug!(
+            target: "hashline::stamp",
+            path = %path.display(),
+            site = "cache",
+            outcome = if confirmed { "confirmed" } else { "mismatch" },
+            "racy stamp content verification"
+        );
+        if !confirmed {
+            return None;
+        }
+
+        let mut guard = self.shard(path).lock().expect("cache shard poisoned");
+        if let Some(entry) = guard.map.get_mut(path)
+            && entry.stamp == Some(entry_stamp)
+        {
+            // Same metadata, newer capture: the entry ages out of the window.
+            entry.stamp = Some(after);
+        }
+        Some(snapshot)
     }
 
     /// Insert or replace a snapshot. Oversize entries (`byte_len > capacity`)
@@ -126,7 +189,15 @@ impl SnapshotCache {
             }
         }
         guard.used = guard.used.saturating_add(bytes);
-        guard.map.insert(path, Entry { snapshot, bytes });
+        let stamp = snapshot.stamp();
+        guard.map.insert(
+            path,
+            Entry {
+                snapshot,
+                bytes,
+                stamp,
+            },
+        );
     }
 
     /// Load via `loader` on miss; cache the result. Concurrent callers for the
@@ -142,6 +213,12 @@ impl SnapshotCache {
             return Ok(hit);
         }
 
+        // A racy resident entry misses above by design; verify its bytes
+        // once and serve it without a reload when they still match.
+        if let Some(hit) = self.verify_racy_resident(path) {
+            return Ok(hit);
+        }
+
         // Single-flight: claim or join. If we already know the current stamp
         // and the resident entry disagrees, treat it as a miss and reload.
         let current_stamp = std::fs::metadata(path)
@@ -152,10 +229,12 @@ impl SnapshotCache {
             let mut guard = self.shard(path).lock().expect("cache shard poisoned");
             if let Some(entry) = guard.map.get(path) {
                 let stamp_ok = match current_stamp {
-                    Some(stamp) => entry.snapshot.stamp() == Some(stamp),
+                    Some(stamp) => {
+                        entry.stamp == Some(stamp) && !entry.stamp.is_some_and(FileStamp::is_racy)
+                    }
                     // No metadata: accept unstamped or any resident entry only
                     // when the snapshot itself carries no stamp (detached).
-                    None => entry.snapshot.stamp().is_none(),
+                    None => entry.stamp.is_none(),
                 };
                 if stamp_ok {
                     return Ok(Arc::clone(&entry.snapshot));
@@ -269,31 +348,57 @@ mod tests {
         let cache = SnapshotCache::with_capacity(1024);
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join("stamp.txt");
-        std::fs::write(
-            &path, b"a
-",
-        )
-        .unwrap();
+        std::fs::write(&path, b"a\n").unwrap();
         let snap = Arc::new(Snapshot::load(&path).unwrap());
         cache.insert(path.clone(), Arc::clone(&snap));
-        assert!(cache.get(&path, snap.stamp()).is_some());
+        // Freshly stamped entries are racy: the lock-only lookup misses, and
+        // the loading lookup serves them only after verifying the bytes.
+        assert!(cache.get(&path, snap.stamp()).is_none());
+        let served = cache
+            .get_or_load(&path, || panic!("verified serve must not reload"))
+            .expect("verified serve");
+        assert!(Arc::ptr_eq(&served, &snap));
 
         // External mutation changes stamp; get_or_load must reload, not serve stale.
         std::thread::sleep(std::time::Duration::from_millis(20));
-        std::fs::write(
-            &path, b"b
-",
-        )
-        .unwrap();
+        std::fs::write(&path, b"b\n").unwrap();
         let reloaded = cache
             .get_or_load(&path, || Snapshot::load(&path))
             .expect("reload");
         assert_ne!(reloaded.id(), snap.id());
-        assert_eq!(
-            reloaded.bytes(),
-            b"b
-"
-        );
+        assert_eq!(reloaded.bytes(), b"b\n");
+    }
+
+    #[test]
+    fn racy_same_length_rewrite_is_never_served_stale() {
+        let cache = SnapshotCache::with_capacity(1 << 20);
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("racy.txt");
+        std::fs::write(&path, b"a\n").unwrap();
+        let first = cache.get_or_load(&path, || Snapshot::load(&path)).unwrap();
+        assert_eq!(first.bytes(), b"a\n");
+
+        // Same length, immediately afterwards: on coarse-timestamp kernels
+        // this lands inside the same tick as the original write, leaving the
+        // metadata stamp bit-identical.
+        std::fs::write(&path, b"b\n").unwrap();
+        let second = cache.get_or_load(&path, || Snapshot::load(&path)).unwrap();
+        assert_eq!(second.bytes(), b"b\n");
+    }
+
+    #[test]
+    fn verified_serve_returns_resident_entry_without_reload() {
+        let cache = SnapshotCache::with_capacity(1 << 20);
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("serve.txt");
+        std::fs::write(&path, b"stable\n").unwrap();
+        let first = cache.get_or_load(&path, || Snapshot::load(&path)).unwrap();
+        assert!(first.stamp().is_some_and(FileStamp::is_racy));
+
+        let second = cache
+            .get_or_load(&path, || panic!("verified serve must not reload"))
+            .unwrap();
+        assert!(Arc::ptr_eq(&first, &second));
     }
 
     #[test]

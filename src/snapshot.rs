@@ -24,6 +24,7 @@ use std::{
     mem,
     path::{Path, PathBuf},
     sync::OnceLock,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use memchr::{memchr, memchr_iter};
@@ -37,6 +38,13 @@ use crate::{
 
 const READ_BUFFER_BYTES: usize = 64 * 1024;
 const MAX_READ_ATTEMPTS: u8 = 2;
+
+/// Process-scoped identity of exact bytes — the same derivation as
+/// [`Snapshot::id`], so on-disk bytes can be compared against a snapshot
+/// without constructing one.
+pub(crate) fn content_id(bytes: &[u8]) -> SnapshotId {
+    SnapshotId::from_u128(xxh3_128_with_seed(bytes, process_random_seed()))
+}
 
 /// Owned text that has passed the complete protocol file policy.
 ///
@@ -174,17 +182,67 @@ struct FileTime(u64);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct FileTime(std::time::SystemTime);
 
+/// A stamp captured within this window of its own newest timestamp cannot
+/// rule out a later same-length rewrite reusing that timestamp: coarse-clock
+/// kernels tick at 1/CONFIG_HZ (up to 10ms) and filesystems round to 1s
+/// (ext3, HFS+) or 2s (FAT). Outside the window any later write necessarily
+/// lands on a strictly newer timestamp, so metadata equality alone is proof.
+const RACY_WINDOW: Duration = Duration::from_secs(2);
+
+/// Whether `timestamp` is close enough to `captured_at` that a later write
+/// could reuse it. Unknown or future timestamps are racy (fail closed).
+fn within_racy_window(captured_at: SystemTime, timestamp: Option<SystemTime>) -> bool {
+    let Some(timestamp) = timestamp else {
+        return true;
+    };
+    match captured_at.duration_since(timestamp) {
+        Ok(age) => age <= RACY_WINDOW,
+        Err(_) => true,
+    }
+}
+
+#[cfg(unix)]
+impl FileTime {
+    /// Map to wall-clock time for raciness classification. Pre-epoch
+    /// timestamps saturate to the epoch: ancient, so never racy.
+    fn to_system_time(self) -> Option<SystemTime> {
+        if self.seconds < 0 {
+            return Some(UNIX_EPOCH);
+        }
+        let seconds = u64::try_from(self.seconds).ok()?;
+        let nanoseconds = u32::try_from(self.nanoseconds).ok()?;
+        UNIX_EPOCH.checked_add(Duration::new(seconds, nanoseconds.min(999_999_999)))
+    }
+}
+
 /// Metadata captured from the same open file descriptor as snapshot bytes.
 ///
 /// Identity, size, modification time, and (where exposed by the platform)
-/// change time are compared before and after each read attempt.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// change time are compared before and after each read attempt. Equality is
+/// exactly those fields. `racy` records whether the newest timestamp fell
+/// within [`RACY_WINDOW`] of capture — in that case a later same-length
+/// rewrite can leave every compared field bit-identical, so equality alone
+/// is not proof of an unchanged file and callers must confirm content (see
+/// [`FileStamp::is_racy`]).
+#[derive(Debug, Clone, Copy)]
 pub struct FileStamp {
     identity: FileIdentity,
     len: u64,
     modified: FileTime,
     changed: Option<FileTime>,
+    racy: bool,
 }
+
+impl PartialEq for FileStamp {
+    fn eq(&self, other: &Self) -> bool {
+        self.identity == other.identity
+            && self.len == other.len
+            && self.modified == other.modified
+            && self.changed == other.changed
+    }
+}
+
+impl Eq for FileStamp {}
 
 impl FileStamp {
     /// Return the descriptor-reported byte length.
@@ -197,6 +255,17 @@ impl FileStamp {
     #[must_use]
     pub const fn is_empty(self) -> bool {
         self.len == 0
+    }
+
+    /// Whether a later write could have reused every compared field.
+    ///
+    /// A racy stamp was captured within [`RACY_WINDOW`] of its own newest
+    /// timestamp, so a same-length rewrite inside the same timestamp tick
+    /// compares equal; callers must confirm content before trusting
+    /// equality. A non-racy stamp needs no tiebreak: any later write lands
+    /// on a strictly newer timestamp and equality already refutes it.
+    pub(crate) const fn is_racy(self) -> bool {
+        self.racy
     }
 
     /// Capture a stamp from filesystem metadata (used by atomic persist).
@@ -224,20 +293,25 @@ impl FileStamp {
     fn from_metadata(metadata: &Metadata) -> io::Result<Self> {
         use std::os::unix::fs::MetadataExt as _;
 
+        let modified = FileTime {
+            seconds: metadata.mtime(),
+            nanoseconds: metadata.mtime_nsec(),
+        };
+        let changed = FileTime {
+            seconds: metadata.ctime(),
+            nanoseconds: metadata.ctime_nsec(),
+        };
+        let captured_at = SystemTime::now();
         Ok(Self {
             identity: FileIdentity {
                 device: metadata.dev(),
                 inode: metadata.ino(),
             },
             len: metadata.len(),
-            modified: FileTime {
-                seconds: metadata.mtime(),
-                nanoseconds: metadata.mtime_nsec(),
-            },
-            changed: Some(FileTime {
-                seconds: metadata.ctime(),
-                nanoseconds: metadata.ctime_nsec(),
-            }),
+            modified,
+            changed: Some(changed),
+            racy: within_racy_window(captured_at, modified.to_system_time())
+                || within_racy_window(captured_at, changed.to_system_time()),
         })
     }
 
@@ -253,16 +327,19 @@ impl FileStamp {
             len: metadata.len(),
             modified: FileTime(metadata.last_write_time()),
             changed: None,
+            racy: within_racy_window(SystemTime::now(), metadata.modified().ok()),
         })
     }
 
     #[cfg(not(any(unix, windows)))]
     fn from_metadata(metadata: &Metadata) -> io::Result<Self> {
+        let modified = metadata.modified()?;
         Ok(Self {
             identity: FileIdentity,
             len: metadata.len(),
-            modified: FileTime(metadata.modified()?),
+            modified: FileTime(modified),
             changed: None,
+            racy: within_racy_window(SystemTime::now(), Some(modified)),
         })
     }
 }
@@ -583,7 +660,7 @@ impl Snapshot {
             .ok_or(SnapshotError::LineCountOverflow)?;
         let line_count =
             u64::try_from(line_count_usize).map_err(|_| SnapshotError::LineCountOverflow)?;
-        let id = SnapshotId::from_u128(xxh3_128_with_seed(text.as_bytes(), process_random_seed()));
+        let id = content_id(text.as_bytes());
         Ok(Self {
             text,
             id,
@@ -675,6 +752,35 @@ impl Snapshot {
             .map_err(|_| SnapshotError::AddressSpace { bytes: u64::MAX })?;
         if before != after || path_stamp != Some(after) || actual_len != after.len() {
             return Ok(None);
+        }
+        if after.is_racy() {
+            // Equal-but-racy stamps cannot rule out a same-length rewrite
+            // inside one timestamp tick; prove the bytes by re-reading.
+            match std::fs::read(path) {
+                Ok(reread) if reread == bytes => {
+                    tracing::debug!(
+                        target: "hashline::stamp",
+                        path = %path.display(),
+                        site = "read",
+                        outcome = "confirmed",
+                        "racy stamp content verification"
+                    );
+                }
+                Ok(_) => {
+                    tracing::debug!(
+                        target: "hashline::stamp",
+                        path = %path.display(),
+                        site = "read",
+                        outcome = "mismatch",
+                        "racy stamp content verification"
+                    );
+                    return Ok(None);
+                }
+                Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(None),
+                Err(source) => {
+                    return Err(Self::io_error(path, "verify racy read of", source));
+                }
+            }
         }
 
         let text = ValidatedText::try_from_bytes(bytes)?;
@@ -894,6 +1000,100 @@ mod tests {
         assert_eq!(
             first.id().as_u128(),
             xxh3_128_with_seed(bytes, process_random_seed())
+        );
+    }
+
+    #[test]
+    fn stamp_racy_window_boundaries() {
+        let now = SystemTime::now();
+        assert!(within_racy_window(now, Some(now)));
+        assert!(within_racy_window(
+            now,
+            Some(now - Duration::from_millis(1))
+        ));
+        assert!(within_racy_window(now, Some(now + Duration::from_secs(1))));
+        assert!(within_racy_window(now, None));
+        assert!(!within_racy_window(now, Some(now - Duration::from_secs(3))));
+        assert!(!within_racy_window(now, Some(UNIX_EPOCH)));
+    }
+
+    #[test]
+    fn fresh_load_stamp_is_racy_and_equality_ignores_raciness() {
+        let directory = tempfile::TempDir::new().expect("temporary directory");
+        let path = directory.path().join("fresh.txt");
+        fs::write(&path, b"fresh\n").expect("write file");
+        let snapshot = Snapshot::load(&path).expect("load");
+        let stamp = snapshot.stamp().expect("stamp");
+        assert!(stamp.is_racy());
+
+        let mut aged = stamp;
+        aged.racy = false;
+        assert_eq!(stamp, aged);
+    }
+
+    #[test]
+    fn racy_read_verification_emits_stamp_event() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        use tracing::{
+            Event, Metadata,
+            span::{Attributes, Id, Record},
+            subscriber::Subscriber,
+        };
+
+        /// Counts events on the stamp target; `enabled` is unconditionally
+        /// true so callsite interest caching cannot filter the event away.
+        struct Counting(Arc<AtomicUsize>);
+
+        impl Subscriber for Counting {
+            fn enabled(&self, _metadata: &Metadata<'_>) -> bool {
+                true
+            }
+
+            fn new_span(&self, _attributes: &Attributes<'_>) -> Id {
+                Id::from_u64(1)
+            }
+
+            fn record(&self, _id: &Id, _record: &Record<'_>) {}
+
+            fn record_follows_from(&self, _id: &Id, _follows: &Id) {}
+
+            fn event(&self, event: &Event<'_>) {
+                if event.metadata().target() == "hashline::stamp" {
+                    self.0.fetch_add(1, Ordering::SeqCst);
+                }
+            }
+
+            fn enter(&self, _id: &Id) {}
+
+            fn exit(&self, _id: &Id) {}
+        }
+
+        let seen = Arc::new(AtomicUsize::new(0));
+        let _guard = tracing::subscriber::set_default(Counting(Arc::clone(&seen)));
+
+        let directory = tempfile::TempDir::new().expect("temporary directory");
+        let path = directory.path().join("racy-event.txt");
+        fs::write(&path, b"observed\n").expect("write file");
+
+        // With at most one registered dispatcher, tracing-core computes a
+        // callsite's cached interest on whichever thread registers it first
+        // (`Rebuilder::JustOne` consults that thread's default dispatcher),
+        // so a parallel test thread with no subscriber can cache the
+        // production callsite as `never`. Force the callsite to exist, then
+        // re-evaluate interest on this thread — where our subscriber is the
+        // default — and assert only on the load after that.
+        let _ = Snapshot::load(&path).expect("registering load");
+        tracing::callsite::rebuild_interest_cache();
+        let before = seen.load(Ordering::SeqCst);
+        let _ = Snapshot::load(&path).expect("verified load");
+
+        assert!(
+            seen.load(Ordering::SeqCst) > before,
+            "racy read verification emitted no hashline::stamp event"
         );
     }
 

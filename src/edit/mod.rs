@@ -103,6 +103,10 @@ fn publish(
     expected: Option<FileStamp>,
     durability: Durability,
 ) -> Result<EditSuccess, ProtocolError> {
+    let expected = expected.map(|stamp| persist::ExpectedDestination {
+        stamp,
+        content_id: previous,
+    });
     let stamp = persist::atomic_write(path, &applied, expected, durability)
         .map_err(persist_protocol_error)?;
     // SAFETY: `applied` is the reference model's splice of R007-validated
@@ -121,9 +125,10 @@ fn publish(
         new_snapshot.line_count(),
     );
     // The confirmed post-rename stamp describes exactly these persisted
-    // bytes, so the resident entry hits on FileStamp without a content
-    // re-read; with no confirmed stamp (raced rename) there is nothing a
-    // future stat could match, so the insert is skipped.
+    // bytes, so the resident entry hits on FileStamp — inside the racy
+    // window after one byte verification, on metadata alone afterwards.
+    // With no confirmed stamp (raced rename) there is nothing a future stat
+    // could match, so the insert is skipped.
     if let Some(stamp) = stamp {
         cache::process_cache().insert(path.to_path_buf(), Arc::new(new_snapshot.with_stamp(stamp)));
     }
@@ -240,8 +245,9 @@ mod tests {
         .await
         .expect("edit succeeds");
 
-        // The canonical read-after-edit flow must be served by the confirmed
-        // post-rename stamp without re-reading or re-hashing the file.
+        // The canonical read-after-edit flow must be served from the resident
+        // entry stamped by the confirmed post-rename stat: inside the racy
+        // window that costs one byte verification, never a reload.
         let resolved = workspace.resolve("cached.txt").expect("resolve");
         let resident = cache::process_cache()
             .get_or_load(&resolved, || {

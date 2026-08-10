@@ -31,7 +31,10 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use crate::snapshot::FileStamp;
+use crate::{
+    protocol::SnapshotId,
+    snapshot::{self, FileStamp},
+};
 
 /// How hard a successful persist promises the bytes are on disk (R019).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -119,10 +122,27 @@ fn io_err(operation: &'static str, path: &Path, source: io::Error) -> PersistErr
     }
 }
 
+/// Base state a guarded [`atomic_write`] must still observe at the
+/// destination before renaming over it.
+#[derive(Debug, Clone, Copy)]
+pub struct ExpectedDestination {
+    /// Stamp captured when the base snapshot was read.
+    pub stamp: FileStamp,
+    /// Process-scoped identity of the base snapshot's exact bytes — the
+    /// content tiebreak when `stamp` is racy and equality alone cannot rule
+    /// out a same-tick rewrite (see [`FileStamp`]).
+    pub content_id: SnapshotId,
+}
+
 /// Write `bytes` to `path` via temp file + atomic rename.
 ///
 /// When `expected` is `Some`, the destination's current [`FileStamp`] must
-/// still match before rename; a mismatch leaves the destination untouched.
+/// still match the expected stamp before rename; a racy expected stamp
+/// (captured within the timestamp granularity window of the base read) is
+/// additionally confirmed by hashing the destination bytes against
+/// `expected.content_id`, because a same-length rewrite inside one
+/// timestamp tick leaves the stamp bit-identical. A mismatch on either
+/// check leaves the destination untouched.
 /// On success returns the destination's confirmed post-rename [`FileStamp`]
 /// — one stat under the path lock, adopted only when its rename-invariant
 /// fields (identity, length, mtime) match the temp descriptor's stamp;
@@ -136,7 +156,7 @@ fn io_err(operation: &'static str, path: &Path, source: io::Error) -> PersistErr
 pub fn atomic_write(
     path: &Path,
     bytes: &[u8],
-    expected: Option<FileStamp>,
+    expected: Option<ExpectedDestination>,
     durability: Durability,
 ) -> Result<Option<FileStamp>, PersistError> {
     let _guard = path_lock(path);
@@ -154,11 +174,38 @@ pub fn atomic_write(
             Ok(metadata) => {
                 let current = FileStamp::from_metadata_public(&metadata)
                     .map_err(|source| io_err("stat destination", path, source))?;
-                if current != expected {
+                if current != expected.stamp {
                     let _ = fs::remove_file(&temp_path);
                     return Err(PersistError::DestinationChanged {
                         path: path.to_path_buf(),
                     });
+                }
+                if expected.stamp.is_racy() {
+                    // Stamp equality cannot rule out a same-tick same-length
+                    // rewrite; the base content identity is the tiebreak.
+                    let unchanged = match fs::read(path) {
+                        Ok(destination) => {
+                            snapshot::content_id(&destination) == expected.content_id
+                        }
+                        Err(source) if source.kind() == io::ErrorKind::NotFound => false,
+                        Err(source) => {
+                            let _ = fs::remove_file(&temp_path);
+                            return Err(io_err("read destination for", path, source));
+                        }
+                    };
+                    tracing::debug!(
+                        target: "hashline::stamp",
+                        path = %path.display(),
+                        site = "persist",
+                        outcome = if unchanged { "confirmed" } else { "mismatch" },
+                        "racy stamp content verification"
+                    );
+                    if !unchanged {
+                        let _ = fs::remove_file(&temp_path);
+                        return Err(PersistError::DestinationChanged {
+                            path: path.to_path_buf(),
+                        });
+                    }
                 }
             }
             Err(source) if source.kind() == io::ErrorKind::NotFound => {
@@ -322,6 +369,13 @@ mod tests {
     use super::*;
     use crate::snapshot::Snapshot;
 
+    fn expected(snapshot: &Snapshot) -> Option<ExpectedDestination> {
+        snapshot.stamp().map(|stamp| ExpectedDestination {
+            stamp,
+            content_id: snapshot.id(),
+        })
+    }
+
     #[test]
     fn atomic_write_creates_and_replaces() {
         let tmp = tempfile::TempDir::new().unwrap();
@@ -329,8 +383,23 @@ mod tests {
         atomic_write(&path, b"hello\n", None, Durability::Full).unwrap();
         assert_eq!(fs::read(&path).unwrap(), b"hello\n");
         let snap = Snapshot::load(&path).unwrap();
-        atomic_write(&path, b"world\n", snap.stamp(), Durability::Full).unwrap();
+        atomic_write(&path, b"world\n", expected(&snap), Durability::Full).unwrap();
         assert_eq!(fs::read(&path).unwrap(), b"world\n");
+    }
+
+    #[test]
+    fn atomic_write_succeeds_when_racy_destination_is_unchanged() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("racy.txt");
+        fs::write(&path, b"a\n").unwrap();
+        let snap = Snapshot::load(&path).unwrap();
+        // A snapshot loaded right after the write is always inside the racy
+        // window, so this guarded overwrite exercises the content tiebreak.
+        assert!(snap.stamp().unwrap().is_racy());
+
+        let stamp = atomic_write(&path, b"c\n", expected(&snap), Durability::Full).unwrap();
+        assert!(stamp.is_some());
+        assert_eq!(fs::read(&path).unwrap(), b"c\n");
     }
 
     #[test]
@@ -353,7 +422,12 @@ mod tests {
 
             // Fail-closed stamp recheck is mode-independent: the pre-replace
             // stamp is stale now, so a guarded overwrite must refuse.
-            let stale = stamp.expect("create stamp confirmed");
+            let stale = ExpectedDestination {
+                stamp: stamp.expect("create stamp confirmed"),
+                content_id: Snapshot::from_bytes(b"created\n".to_vec())
+                    .expect("created snapshot")
+                    .id(),
+            };
             let err = atomic_write(&path, b"third\n", Some(stale), durability).unwrap_err();
             assert!(
                 matches!(err, PersistError::DestinationChanged { .. }),
@@ -408,7 +482,7 @@ mod tests {
         let snap = Snapshot::load(&path).unwrap();
         // External mutation.
         fs::write(&path, b"b\n").unwrap();
-        let err = atomic_write(&path, b"c\n", snap.stamp(), Durability::Full).unwrap_err();
+        let err = atomic_write(&path, b"c\n", expected(&snap), Durability::Full).unwrap_err();
         assert!(matches!(err, PersistError::DestinationChanged { .. }));
         assert_eq!(fs::read(&path).unwrap(), b"b\n");
     }

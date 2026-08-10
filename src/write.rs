@@ -86,8 +86,13 @@ fn run_blocking(
     let persist_result = if created {
         persist::atomic_create(path, &bytes, durability)
     } else {
-        let stamp = current.as_ref().and_then(|snapshot| snapshot.stamp());
-        persist::atomic_write(path, &bytes, stamp, durability)
+        let expected = current.as_ref().and_then(|snapshot| {
+            snapshot.stamp().map(|stamp| persist::ExpectedDestination {
+                stamp,
+                content_id: snapshot.id(),
+            })
+        });
+        persist::atomic_write(path, &bytes, expected, durability)
     };
     let stamp = match persist_result {
         Ok(stamp) => stamp,
