@@ -114,6 +114,12 @@ AC thresholds is claimed as passing at HEAD except warm AC12 on macOS.
    macOS passes the same tests. This is a real platform sensitivity of the
    stamp mechanism that Waves 1–2 (cursor/stamp/persist work) must address
    or explicitly scope; it is recorded here, not silently waived.
+   **Resolved** (2026-08-10, commit `b081bcc`): stamp equality is now
+   racy-window-aware — a stamp captured within 2 s of its own newest
+   timestamp no longer revalidates by metadata alone (stable reads re-read,
+   guarded persists compare the destination's content identity, cache
+   entries byte-verify once), so the same-tick rewrites these tests
+   construct are refused deterministically on both hosts.
 3. `dispatch/edit_single_op_300_lines` keeps its historical ID but now
    measures a valid v2 edit (the old payload was rejected by
    `EditRequest` deserialization, so pre-Wave-0 numbers under this ID

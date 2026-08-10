@@ -241,6 +241,14 @@ forces a fresh read and identity computation. If the recomputed identity
 equals the request, the request remains valid; eviction alone cannot change
 semantics. If it differs, rule R011 applies.
 
+A stamp match alone revalidates a cached snapshot only outside the racy
+window: a stamp captured within the filesystem timestamp granularity bound
+(2 s) of the file's own newest timestamp could be reproduced by a
+same-length rewrite inside one timestamp tick, so a racy stamp match must
+additionally verify the resident bytes against the file before the entry is
+served. That verification refreshes the entry's stamp, so an unchanged file
+returns to metadata-only revalidation once the window has passed.
+
 A restart creates a new seed. A pre-restart snapshot or pagination cursor is
 therefore outside its identity scope and conflicts with a fresh header. There
 is no persisted snapshot registry and no compatibility lookup.
@@ -413,8 +421,12 @@ The response's new snapshot describes the persisted bytes, not merely an
 in-memory candidate. The server MUST NOT return success or publish the new
 snapshot before persistence succeeds. The complete batch is one logical
 transaction. Same-server writes to one canonical path are serialized.
-The plan's residual final TOCTOU window with a noncooperating external writer
-is documented rather than hidden.
+The pre-rename destination check re-verifies the base stamp and, inside the
+racy timestamp window, the destination's content identity, so a same-length
+external rewrite within one timestamp tick is refused rather than
+overwritten. The residual TOCTOU window with a noncooperating external
+writer is the gap between that verification and `rename(2)` itself; it is
+documented rather than hidden.
 
 Persistence durability is a configurable policy (`--durability` /
 `HASHLINE_DURABILITY`; embedders use `Workspace::with_durability`).

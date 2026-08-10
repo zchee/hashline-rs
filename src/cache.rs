@@ -201,7 +201,10 @@ impl SnapshotCache {
     }
 
     /// Load via `loader` on miss; cache the result. Concurrent callers for the
-    /// same path join a single in-flight load.
+    /// same path join a single in-flight load. A racy resident entry (see
+    /// [`FileStamp`]) is served only after one byte verification against the
+    /// file, which also refreshes the entry stamp so it can leave the racy
+    /// window; a failed verification reloads.
     pub fn get_or_load<F>(&self, path: &Path, loader: F) -> Result<Arc<Snapshot>, SnapshotError>
     where
         F: FnOnce() -> Result<Snapshot, SnapshotError>,
