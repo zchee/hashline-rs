@@ -30,7 +30,7 @@ ignore = "0.4"
 itoa = "1"
 memchr = "2"
 percent-encoding = "2"
-rmcp = { version = "3.0.1", features = ["server", "macros", "transport-io"] }
+rmcp = { version = "3", features = ["server", "macros", "transport-io"] }
 schemars = "1.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
