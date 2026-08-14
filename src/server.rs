@@ -37,9 +37,9 @@ use std::{
 use rmcp::{
     ErrorData as McpError, ServerHandler,
     model::{
-        CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Implementation,
-        ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerInfo, Tool,
-        ToolAnnotations,
+        CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock,
+        Implementation, ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerInfo,
+        Tool, ToolAnnotations,
     },
     service::{NotificationContext, Peer, RequestContext, RoleServer},
 };
@@ -134,6 +134,16 @@ const GLOB_TEMPLATE: &str = r#"Find files by glob pattern, newest first, for use
 to read, edit, and write, sorted by modification time (newest first), and
 end with: [hashline files=<N> truncated=<true|false>]
 "#;
+
+/// How long a client may treat a `tools/list` result as fresh, in
+/// milliseconds (SEP-2549).
+///
+/// The listing is a pure function of this binary — descriptions, annotations,
+/// and input schemas are all fixed at compile time — so the only event that
+/// can change it is a server upgrade, which arrives with a new connection
+/// anyway. Five minutes bounds the staleness a client can carry across a
+/// reconnect while still letting it skip re-listing within a session.
+const TOOLS_LIST_TTL_MS: u64 = 5 * 60 * 1_000;
 
 /// Convert a `file://` URI into a filesystem path.
 ///
@@ -380,6 +390,21 @@ impl HashlineServer {
         })
     }
 
+    /// The `tools/list` result, carrying the cache directives SEP-2549 makes
+    /// mandatory for protocol revision `2026-07-28`.
+    ///
+    /// `rmcp` leaves `ttlMs` and `cacheScope` unset for backward
+    /// compatibility, and a client validating the `2026-07-28` schema rejects
+    /// the whole listing when they are absent. The listing carries no
+    /// workspace path and no caller-specific state, so it is cacheable across
+    /// authorization contexts.
+    #[must_use]
+    pub fn tools_result(&self) -> ListToolsResult {
+        ListToolsResult::with_all_items(self.tools().to_vec())
+            .with_ttl_ms(TOOLS_LIST_TTL_MS)
+            .with_cache_scope(CacheScope::Public)
+    }
+
     /// Dispatch one tool call. Tool-level failures (stale snapshots, missing
     /// files, malformed arguments, confinement violations) come back as
     /// `is_error` results so the calling model can correct itself; only
@@ -468,7 +493,7 @@ impl ServerHandler for HashlineServer {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, McpError> {
-        Ok(ListToolsResult::with_all_items(self.tools().to_vec()))
+        Ok(self.tools_result())
     }
 
     async fn call_tool(
@@ -532,6 +557,16 @@ mod tests {
                 other => panic!("unexpected tool {other}"),
             }
         }
+    }
+
+    #[test]
+    fn tools_result_carries_cache_directives() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let server = server(tmp.path());
+        let wire = serde_json::to_value(server.tools_result()).unwrap();
+        assert_eq!(wire["resultType"], json!("complete"), "{wire}");
+        assert_eq!(wire["ttlMs"], json!(TOOLS_LIST_TTL_MS), "{wire}");
+        assert_eq!(wire["cacheScope"], json!("public"), "{wire}");
     }
 
     #[test]

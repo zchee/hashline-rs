@@ -276,3 +276,45 @@ async fn stdio_round_trip_covers_all_five_tools() {
         .expect("child wait");
     assert!(status.success(), "clean shutdown on closed stdin: {status}");
 }
+
+/// A client negotiating protocol revision `2026-07-28` validates `tools/list`
+/// against a schema where SEP-2549's `ttlMs` and `cacheScope` are required;
+/// omitting either one costs the session every hashline tool.
+#[tokio::test]
+async fn tools_list_carries_cache_directives_on_the_modern_revision() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let mut client = StdioClient::spawn(tmp.path()).await;
+
+    let init = client
+        .request(
+            "initialize",
+            json!({
+                "protocolVersion": "2026-07-28",
+                "capabilities": {},
+                "clientInfo": {"name": "hashline-e2e", "version": "0.0.0"}
+            }),
+        )
+        .await;
+    assert_eq!(init["protocolVersion"], json!("2026-07-28"), "{init}");
+    client
+        .send(json!({"jsonrpc": "2.0", "method": "notifications/initialized"}))
+        .await;
+
+    let listing = client.request("tools/list", json!({})).await;
+    assert_eq!(listing["resultType"], json!("complete"), "{listing}");
+    assert!(
+        listing["ttlMs"].is_u64(),
+        "ttlMs must be a number: {listing}"
+    );
+    assert!(
+        matches!(listing["cacheScope"].as_str(), Some("public" | "private")),
+        "{listing}"
+    );
+
+    drop(client.stdin);
+    let status = timeout(IO_DEADLINE, client.child.wait())
+        .await
+        .expect("child exit within deadline")
+        .expect("child wait");
+    assert!(status.success(), "clean shutdown on closed stdin: {status}");
+}
