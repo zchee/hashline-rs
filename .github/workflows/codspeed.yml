@@ -1,0 +1,40 @@
+name: CodSpeed
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # `workflow_dispatch` allows CodSpeed to trigger backtest
+  # performance analysis in order to generate initial data.
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: read
+  id-token: write # for OpenID Connect authentication with CodSpeed
+
+jobs:
+  benchmarks:
+    name: Run benchmarks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The channel is left unset on purpose: setup-rust resolves it from the
+      # pinned rust-toolchain.toml, matching the other CI jobs.
+      - name: Setup the pinned toolchain, cache and cargo-codspeed
+        uses: moonrepo/setup-rust@v1
+        with:
+          cache-target: release
+          bins: cargo-codspeed
+
+      - name: Build the benchmark target(s)
+        run: cargo codspeed build
+
+      - name: Run the benchmarks
+        uses: CodSpeedHQ/action@v5
+        with:
+          mode: simulation
+          run: cargo codspeed run

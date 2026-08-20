@@ -1,5 +1,7 @@
 # hashline-rs
 
+[![CodSpeed](https://img.shields.io/endpoint?url=https://codspeed.io/badge.json)](https://app.codspeed.io/zchee/hashline-rs?utm_source=badge)
+
 A standalone [Model Context Protocol] server providing versioned, fail-closed
 file tools, written in Rust on top of the official [rmcp] SDK. It grew out of
 the hashline anchor toolset in [xai-org/grok-build]
@@ -120,6 +122,27 @@ cargo test
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 ```
+
+### Benchmarks
+
+`benches/hashline.rs` is the criterion suite covering the hot paths (grep,
+snapshot construction, offset indexes, and the wired MCP dispatch for
+`read`/`edit`/`write`/`glob`). Run it as usual with:
+
+```console
+cargo bench
+```
+
+The same suite is measured on every pull request by [CodSpeed] under CPU
+simulation, so regressions are reported inline on the PR. To reproduce a
+CodSpeed run locally:
+
+```console
+cargo codspeed build -m simulation
+codspeed run --mode simulation -- cargo codspeed run
+```
+
+[CodSpeed]: https://app.codspeed.io/zchee/hashline-rs
 
 ## License
 

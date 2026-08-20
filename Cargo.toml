@@ -47,7 +47,13 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 libc = "0.2"
 
 [dev-dependencies]
-criterion = { version = "0.8.2", features = ["async_tokio", "html_reports"] }
+# CodSpeed's drop-in criterion replacement: it keeps the criterion API (so the
+# bench sources are unchanged) and adds the instrumentation cargo-codspeed
+# needs. Outside a CodSpeed run it behaves exactly like criterion.
+criterion = { version = "5.0.1", package = "codspeed-criterion-compat", features = [
+  "async_tokio",
+  "html_reports",
+] }
 blake3 = "1"
 libc = "0.2"
 # Independent engine for the grep differential test's per-line reference
