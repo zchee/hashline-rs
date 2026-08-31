@@ -23,23 +23,28 @@ from typing import cast
 LOGGER_NAME = "hashline.phase1"
 SCHEMA_VERSION = 1
 BASE_COMMIT = "6afe83059de218d71d4161fb36848d849c9da0a6"
-PLAN_PATH = ".omx/plans/2026-07-31-incompatible-max-performance-redesign.md"
+PLAN_PATH = "benches/evidence/v2/plans/2026-07-31-incompatible-max-performance-redesign.md"
 PLAN_SHA256 = "db00bf029f184811b79ab709df064a3fb9b23a9ab64562e28432e43ca8a41a6f"
-PHASE0_ROOT = Path(".omx/goals/performance/hashline-v2-phase0")
+PHASE0_ROOT = Path("benches/evidence/v2/goals/performance/hashline-v2-phase0")
+# Raw benchmark/profile payloads (3,418 files per platform, 65MB/605MB)
+# are too large to track in git; they remain in the local-only .omx
+# archive. Their manifest.json/SHA256SUMS.json ledgers are tracked
+# under PHASE0_ROOT at the same relative locations.
+CANONICAL_RUN_PAYLOAD_ROOT = Path(".omx/goals/performance/hashline-v2-phase0")
 RULE_IDS = tuple(f"R{number:03d}" for number in range(1, 23))
 
 IMMUTABLE_FILES = {
     PLAN_PATH: PLAN_SHA256,
-    ".omx/goals/performance/hashline-v2-phase0/evaluation.json": "21af7734da8399ec4cf8544e202b09e8e6e339aea35dc2acd179c227476ef1b4",
-    ".omx/goals/performance/hashline-v2-phase0/phase0-exit-gate-audit.json": "81e04dcc6a433070c0ecd58f4191113b00a11bcc49a220c7dc845d043d185a7f",
-    ".omx/goals/performance/hashline-v2-phase0/state.json": "c3b40749533c24c85765a8c7224c521bc18535d697ad3515124cc7716af8633a",
-    ".omx/goals/performance/hashline-v2-phase0/ledger.jsonl": "b110059d0c13930c0441171062c8cd1d07d4e1880ca5f2981b7194cd6f820107",
-    ".omx/goals/performance/hashline-v2-phase0/codex-goal-complete.json": "f1b85c24f9ead933429b6704c57b4dc1de2d025f286585aafdf25fc625873a24",
-    ".omx/goals/performance/hashline-v2-phase0/transfers/hashline-6afe83059de2.bundle": "f2e4f78776431d7722455946960121943bb7bbe19ba1e5950d6e399832e773c0",
+    "benches/evidence/v2/goals/performance/hashline-v2-phase0/evaluation.json": "21af7734da8399ec4cf8544e202b09e8e6e339aea35dc2acd179c227476ef1b4",
+    "benches/evidence/v2/goals/performance/hashline-v2-phase0/phase0-exit-gate-audit.json": "81e04dcc6a433070c0ecd58f4191113b00a11bcc49a220c7dc845d043d185a7f",
+    "benches/evidence/v2/goals/performance/hashline-v2-phase0/state.json": "c3b40749533c24c85765a8c7224c521bc18535d697ad3515124cc7716af8633a",
+    "benches/evidence/v2/goals/performance/hashline-v2-phase0/ledger.jsonl": "b110059d0c13930c0441171062c8cd1d07d4e1880ca5f2981b7194cd6f820107",
+    "benches/evidence/v2/goals/performance/hashline-v2-phase0/codex-goal-complete.json": "f1b85c24f9ead933429b6704c57b4dc1de2d025f286585aafdf25fc625873a24",
+    "benches/evidence/v2/goals/performance/hashline-v2-phase0/transfers/hashline-6afe83059de2.bundle": "f2e4f78776431d7722455946960121943bb7bbe19ba1e5950d6e399832e773c0",
 }
 CANONICAL_RUNS = {
     "macos-arm64": {
-        "path": PHASE0_ROOT
+        "path": CANONICAL_RUN_PAYLOAD_ROOT
         / "artifacts/macos-arm64/runs/20260731T124545Z-6afe83059de2",
         "manifest_sha256": "7bd988efe269cafe0db39efb141c1e5c3e32a3a930d8c2d70eb9ec7f0b8f754d",
         "checksums_sha256": "647e2109d8330fc0db858196abfdd51ad9a66a5c53f2b68333bc5af1e201dd0e",
@@ -47,7 +52,7 @@ CANONICAL_RUNS = {
         "total_bytes": 65_141_104,
     },
     "linux-amd64": {
-        "path": PHASE0_ROOT
+        "path": CANONICAL_RUN_PAYLOAD_ROOT
         / "artifacts/linux-amd64/runs/20260731T133009Z-6afe83059de2",
         "manifest_sha256": "fe47f3e57bdf367a5f97231069c65add07631a8ad2b8ccbabc3ab35e5e8de83a",
         "checksums_sha256": "d026dafa0897aff732f7c41c389281bd334f44ccd990b1f5cdc629eba2a877ba",

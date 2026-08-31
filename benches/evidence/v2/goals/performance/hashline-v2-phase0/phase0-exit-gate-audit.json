@@ -1,0 +1,4504 @@
+{
+  "audited_at": "2026-07-31T14:23:17.791950+00:00",
+  "candidate_commit": "6afe83059de218d71d4161fb36848d849c9da0a6",
+  "candidate_signature_status": "U",
+  "capture_commands": {
+    "evaluator": "python3 benches/support/phase0.py evaluate --goal-root .omx/goals/performance/hashline-v2-phase0",
+    "linux-amd64": "RUSTUP_TOOLCHAIN=nightly-2026-07-31 PYTHONDONTWRITEBYTECODE=1 python3 -B benches/support/phase0.py capture --goal-root .omx/goals/performance/hashline-v2-phase0 --external-repo /home/zchee/phase0-6afe83059de2/tokio --rounds 3 --filesystem-samples 12 --profile-seconds 8",
+    "macos-arm64": "RUSTUP_TOOLCHAIN=nightly-2026-07-31 PYTHONDONTWRITEBYTECODE=1 python3 -B benches/support/phase0.py capture --goal-root .omx/goals/performance/hashline-v2-phase0 --external-repo /Users/zchee/rust/src/github.com/tokio-rs/tokio --rounds 3 --filesystem-samples 12 --profile-seconds 8"
+  },
+  "changed_paths_from_plan_baseline": [
+    "Cargo.lock",
+    "Cargo.toml",
+    "benches/V2_BASELINE.md",
+    "benches/hashline.rs",
+    "benches/support/phase0.py",
+    "benches/support/phase0_resources.rs",
+    "benches/support/phase0_workloads.rs",
+    "benches/support/test_phase0.py",
+    "examples/golden.rs",
+    "rust-toolchain.toml",
+    "src/config.rs",
+    "src/edit/apply.rs",
+    "src/edit/mod.rs",
+    "src/edit/range_policy.rs",
+    "src/edit/types.rs",
+    "src/grep.rs",
+    "src/hash.rs",
+    "src/index.rs",
+    "src/lib.rs",
+    "src/main.rs",
+    "src/read.rs",
+    "src/render.rs",
+    "src/scheme.rs",
+    "src/server.rs",
+    "src/testutil.rs",
+    "src/util.rs"
+  ],
+  "corpus_identity_equal_across_platforms": true,
+  "evaluation": {
+    "candidate_commit": "6afe83059de218d71d4161fb36848d849c9da0a6",
+    "evaluated_at": "2026-07-31T14:16:00.807767+00:00",
+    "platforms": [
+      {
+        "candidate_commit": "6afe83059de218d71d4161fb36848d849c9da0a6",
+        "checksum_count": 3418,
+        "platform": "macos-arm64",
+        "run_root": "/Users/zchee/rust/src/github.com/zchee/hashline-rs/.omx/goals/performance/hashline-v2-phase0/artifacts/macos-arm64/runs/20260731T124545Z-6afe83059de2"
+      },
+      {
+        "candidate_commit": "6afe83059de218d71d4161fb36848d849c9da0a6",
+        "checksum_count": 3418,
+        "platform": "linux-amd64",
+        "run_root": "/Users/zchee/rust/src/github.com/zchee/hashline-rs/.omx/goals/performance/hashline-v2-phase0/artifacts/linux-amd64/runs/20260731T133009Z-6afe83059de2"
+      }
+    ],
+    "schema_version": 1,
+    "status": "pass"
+  },
+  "evaluation_sha256": "21af7734da8399ec4cf8544e202b09e8e6e339aea35dc2acd179c227476ef1b4",
+  "exit_gates": {
+    "canonical-evaluator:candidate": "pass",
+    "canonical-evaluator:pass": "pass",
+    "cross-platform:identical-corpus-identity": "pass",
+    "linux-amd64:102-global-arm-sequence": "pass",
+    "linux-amd64:17-paired-targets": "pass",
+    "linux-amd64:48-filesystem-records": "pass",
+    "linux-amd64:allocation-and-rss-values": "pass",
+    "linux-amd64:atomic_persist:100:absolute": "pass",
+    "linux-amd64:atomic_persist:100:ci": "pass",
+    "linux-amd64:atomic_persist:100:hashed": "pass",
+    "linux-amd64:atomic_persist:100:raw": "pass",
+    "linux-amd64:atomic_persist:100:raw-replay": "pass",
+    "linux-amd64:atomic_persist:101:absolute": "pass",
+    "linux-amd64:atomic_persist:101:ci": "pass",
+    "linux-amd64:atomic_persist:101:hashed": "pass",
+    "linux-amd64:atomic_persist:101:raw": "pass",
+    "linux-amd64:atomic_persist:101:raw-replay": "pass",
+    "linux-amd64:atomic_persist:102:absolute": "pass",
+    "linux-amd64:atomic_persist:102:ci": "pass",
+    "linux-amd64:atomic_persist:102:hashed": "pass",
+    "linux-amd64:atomic_persist:102:raw": "pass",
+    "linux-amd64:atomic_persist:102:raw-replay": "pass",
+    "linux-amd64:atomic_persist:97:absolute": "pass",
+    "linux-amd64:atomic_persist:97:ci": "pass",
+    "linux-amd64:atomic_persist:97:hashed": "pass",
+    "linux-amd64:atomic_persist:97:raw": "pass",
+    "linux-amd64:atomic_persist:97:raw-replay": "pass",
+    "linux-amd64:atomic_persist:98:absolute": "pass",
+    "linux-amd64:atomic_persist:98:ci": "pass",
+    "linux-amd64:atomic_persist:98:hashed": "pass",
+    "linux-amd64:atomic_persist:98:raw": "pass",
+    "linux-amd64:atomic_persist:98:raw-replay": "pass",
+    "linux-amd64:atomic_persist:99:absolute": "pass",
+    "linux-amd64:atomic_persist:99:ci": "pass",
+    "linux-amd64:atomic_persist:99:hashed": "pass",
+    "linux-amd64:atomic_persist:99:raw": "pass",
+    "linux-amd64:atomic_persist:99:raw-replay": "pass",
+    "linux-amd64:atomic_persist:arm-order": "pass",
+    "linux-amd64:atomic_persist:interleaved-order": "pass",
+    "linux-amd64:baseline-head": "pass",
+    "linux-amd64:benchmark-flags-empty": "pass",
+    "linux-amd64:blake3_version_10k:37:absolute": "pass",
+    "linux-amd64:blake3_version_10k:37:ci": "pass",
+    "linux-amd64:blake3_version_10k:37:hashed": "pass",
+    "linux-amd64:blake3_version_10k:37:raw": "pass",
+    "linux-amd64:blake3_version_10k:37:raw-replay": "pass",
+    "linux-amd64:blake3_version_10k:38:absolute": "pass",
+    "linux-amd64:blake3_version_10k:38:ci": "pass",
+    "linux-amd64:blake3_version_10k:38:hashed": "pass",
+    "linux-amd64:blake3_version_10k:38:raw": "pass",
+    "linux-amd64:blake3_version_10k:38:raw-replay": "pass",
+    "linux-amd64:blake3_version_10k:39:absolute": "pass",
+    "linux-amd64:blake3_version_10k:39:ci": "pass",
+    "linux-amd64:blake3_version_10k:39:hashed": "pass",
+    "linux-amd64:blake3_version_10k:39:raw": "pass",
+    "linux-amd64:blake3_version_10k:39:raw-replay": "pass",
+    "linux-amd64:blake3_version_10k:40:absolute": "pass",
+    "linux-amd64:blake3_version_10k:40:ci": "pass",
+    "linux-amd64:blake3_version_10k:40:hashed": "pass",
+    "linux-amd64:blake3_version_10k:40:raw": "pass",
+    "linux-amd64:blake3_version_10k:40:raw-replay": "pass",
+    "linux-amd64:blake3_version_10k:41:absolute": "pass",
+    "linux-amd64:blake3_version_10k:41:ci": "pass",
+    "linux-amd64:blake3_version_10k:41:hashed": "pass",
+    "linux-amd64:blake3_version_10k:41:raw": "pass",
+    "linux-amd64:blake3_version_10k:41:raw-replay": "pass",
+    "linux-amd64:blake3_version_10k:42:absolute": "pass",
+    "linux-amd64:blake3_version_10k:42:ci": "pass",
+    "linux-amd64:blake3_version_10k:42:hashed": "pass",
+    "linux-amd64:blake3_version_10k:42:raw": "pass",
+    "linux-amd64:blake3_version_10k:42:raw-replay": "pass",
+    "linux-amd64:blake3_version_10k:arm-order": "pass",
+    "linux-amd64:blake3_version_10k:interleaved-order": "pass",
+    "linux-amd64:blake3_version_50k:43:absolute": "pass",
+    "linux-amd64:blake3_version_50k:43:ci": "pass",
+    "linux-amd64:blake3_version_50k:43:hashed": "pass",
+    "linux-amd64:blake3_version_50k:43:raw": "pass",
+    "linux-amd64:blake3_version_50k:43:raw-replay": "pass",
+    "linux-amd64:blake3_version_50k:44:absolute": "pass",
+    "linux-amd64:blake3_version_50k:44:ci": "pass",
+    "linux-amd64:blake3_version_50k:44:hashed": "pass",
+    "linux-amd64:blake3_version_50k:44:raw": "pass",
+    "linux-amd64:blake3_version_50k:44:raw-replay": "pass",
+    "linux-amd64:blake3_version_50k:45:absolute": "pass",
+    "linux-amd64:blake3_version_50k:45:ci": "pass",
+    "linux-amd64:blake3_version_50k:45:hashed": "pass",
+    "linux-amd64:blake3_version_50k:45:raw": "pass",
+    "linux-amd64:blake3_version_50k:45:raw-replay": "pass",
+    "linux-amd64:blake3_version_50k:46:absolute": "pass",
+    "linux-amd64:blake3_version_50k:46:ci": "pass",
+    "linux-amd64:blake3_version_50k:46:hashed": "pass",
+    "linux-amd64:blake3_version_50k:46:raw": "pass",
+    "linux-amd64:blake3_version_50k:46:raw-replay": "pass",
+    "linux-amd64:blake3_version_50k:47:absolute": "pass",
+    "linux-amd64:blake3_version_50k:47:ci": "pass",
+    "linux-amd64:blake3_version_50k:47:hashed": "pass",
+    "linux-amd64:blake3_version_50k:47:raw": "pass",
+    "linux-amd64:blake3_version_50k:47:raw-replay": "pass",
+    "linux-amd64:blake3_version_50k:48:absolute": "pass",
+    "linux-amd64:blake3_version_50k:48:ci": "pass",
+    "linux-amd64:blake3_version_50k:48:hashed": "pass",
+    "linux-amd64:blake3_version_50k:48:raw": "pass",
+    "linux-amd64:blake3_version_50k:48:raw-replay": "pass",
+    "linux-amd64:blake3_version_50k:arm-order": "pass",
+    "linux-amd64:blake3_version_50k:interleaved-order": "pass",
+    "linux-amd64:candidate-head": "pass",
+    "linux-amd64:cargo-version": "pass",
+    "linux-amd64:clean-candidate": "pass",
+    "linux-amd64:cold:base:12-samples": "pass",
+    "linux-amd64:cold:base:bootstrap-ci": "pass",
+    "linux-amd64:cold:candidate:12-samples": "pass",
+    "linux-amd64:cold:candidate:bootstrap-ci": "pass",
+    "linux-amd64:cold:filesystem-order": "pass",
+    "linux-amd64:cold:positive-filesystem-samples": "pass",
+    "linux-amd64:cold:summary-variants": "pass",
+    "linux-amd64:common_grep:perf-data": "pass",
+    "linux-amd64:common_grep:perf-data-hashed": "pass",
+    "linux-amd64:common_grep:profile-hashed": "pass",
+    "linux-amd64:common_grep:symbol-replay": "pass",
+    "linux-amd64:edit:perf-data": "pass",
+    "linux-amd64:edit:perf-data-hashed": "pass",
+    "linux-amd64:edit:profile-hashed": "pass",
+    "linux-amd64:edit:symbol-replay": "pass",
+    "linux-amd64:eight-quality-commands": "pass",
+    "linux-amd64:external-corpus-commit": "pass",
+    "linux-amd64:flags-removed": "pass",
+    "linux-amd64:four-filesystem-summaries": "pass",
+    "linux-amd64:four-profiles": "pass",
+    "linux-amd64:full-criterion-hashed": "pass",
+    "linux-amd64:full-criterion-raw": "pass",
+    "linux-amd64:full_read:perf-data": "pass",
+    "linux-amd64:full_read:perf-data-hashed": "pass",
+    "linux-amd64:full_read:profile-hashed": "pass",
+    "linux-amd64:full_read:symbol-replay": "pass",
+    "linux-amd64:gxhash_version_10k:13:absolute": "pass",
+    "linux-amd64:gxhash_version_10k:13:ci": "pass",
+    "linux-amd64:gxhash_version_10k:13:hashed": "pass",
+    "linux-amd64:gxhash_version_10k:13:raw": "pass",
+    "linux-amd64:gxhash_version_10k:13:raw-replay": "pass",
+    "linux-amd64:gxhash_version_10k:14:absolute": "pass",
+    "linux-amd64:gxhash_version_10k:14:ci": "pass",
+    "linux-amd64:gxhash_version_10k:14:hashed": "pass",
+    "linux-amd64:gxhash_version_10k:14:raw": "pass",
+    "linux-amd64:gxhash_version_10k:14:raw-replay": "pass",
+    "linux-amd64:gxhash_version_10k:15:absolute": "pass",
+    "linux-amd64:gxhash_version_10k:15:ci": "pass",
+    "linux-amd64:gxhash_version_10k:15:hashed": "pass",
+    "linux-amd64:gxhash_version_10k:15:raw": "pass",
+    "linux-amd64:gxhash_version_10k:15:raw-replay": "pass",
+    "linux-amd64:gxhash_version_10k:16:absolute": "pass",
+    "linux-amd64:gxhash_version_10k:16:ci": "pass",
+    "linux-amd64:gxhash_version_10k:16:hashed": "pass",
+    "linux-amd64:gxhash_version_10k:16:raw": "pass",
+    "linux-amd64:gxhash_version_10k:16:raw-replay": "pass",
+    "linux-amd64:gxhash_version_10k:17:absolute": "pass",
+    "linux-amd64:gxhash_version_10k:17:ci": "pass",
+    "linux-amd64:gxhash_version_10k:17:hashed": "pass",
+    "linux-amd64:gxhash_version_10k:17:raw": "pass",
+    "linux-amd64:gxhash_version_10k:17:raw-replay": "pass",
+    "linux-amd64:gxhash_version_10k:18:absolute": "pass",
+    "linux-amd64:gxhash_version_10k:18:ci": "pass",
+    "linux-amd64:gxhash_version_10k:18:hashed": "pass",
+    "linux-amd64:gxhash_version_10k:18:raw": "pass",
+    "linux-amd64:gxhash_version_10k:18:raw-replay": "pass",
+    "linux-amd64:gxhash_version_10k:arm-order": "pass",
+    "linux-amd64:gxhash_version_10k:interleaved-order": "pass",
+    "linux-amd64:gxhash_version_50k:19:absolute": "pass",
+    "linux-amd64:gxhash_version_50k:19:ci": "pass",
+    "linux-amd64:gxhash_version_50k:19:hashed": "pass",
+    "linux-amd64:gxhash_version_50k:19:raw": "pass",
+    "linux-amd64:gxhash_version_50k:19:raw-replay": "pass",
+    "linux-amd64:gxhash_version_50k:20:absolute": "pass",
+    "linux-amd64:gxhash_version_50k:20:ci": "pass",
+    "linux-amd64:gxhash_version_50k:20:hashed": "pass",
+    "linux-amd64:gxhash_version_50k:20:raw": "pass",
+    "linux-amd64:gxhash_version_50k:20:raw-replay": "pass",
+    "linux-amd64:gxhash_version_50k:21:absolute": "pass",
+    "linux-amd64:gxhash_version_50k:21:ci": "pass",
+    "linux-amd64:gxhash_version_50k:21:hashed": "pass",
+    "linux-amd64:gxhash_version_50k:21:raw": "pass",
+    "linux-amd64:gxhash_version_50k:21:raw-replay": "pass",
+    "linux-amd64:gxhash_version_50k:22:absolute": "pass",
+    "linux-amd64:gxhash_version_50k:22:ci": "pass",
+    "linux-amd64:gxhash_version_50k:22:hashed": "pass",
+    "linux-amd64:gxhash_version_50k:22:raw": "pass",
+    "linux-amd64:gxhash_version_50k:22:raw-replay": "pass",
+    "linux-amd64:gxhash_version_50k:23:absolute": "pass",
+    "linux-amd64:gxhash_version_50k:23:ci": "pass",
+    "linux-amd64:gxhash_version_50k:23:hashed": "pass",
+    "linux-amd64:gxhash_version_50k:23:raw": "pass",
+    "linux-amd64:gxhash_version_50k:23:raw-replay": "pass",
+    "linux-amd64:gxhash_version_50k:24:absolute": "pass",
+    "linux-amd64:gxhash_version_50k:24:ci": "pass",
+    "linux-amd64:gxhash_version_50k:24:hashed": "pass",
+    "linux-amd64:gxhash_version_50k:24:raw": "pass",
+    "linux-amd64:gxhash_version_50k:24:raw-replay": "pass",
+    "linux-amd64:gxhash_version_50k:arm-order": "pass",
+    "linux-amd64:gxhash_version_50k:interleaved-order": "pass",
+    "linux-amd64:manifest-pass": "pass",
+    "linux-amd64:offsets_u32:55:absolute": "pass",
+    "linux-amd64:offsets_u32:55:ci": "pass",
+    "linux-amd64:offsets_u32:55:hashed": "pass",
+    "linux-amd64:offsets_u32:55:raw": "pass",
+    "linux-amd64:offsets_u32:55:raw-replay": "pass",
+    "linux-amd64:offsets_u32:56:absolute": "pass",
+    "linux-amd64:offsets_u32:56:ci": "pass",
+    "linux-amd64:offsets_u32:56:hashed": "pass",
+    "linux-amd64:offsets_u32:56:raw": "pass",
+    "linux-amd64:offsets_u32:56:raw-replay": "pass",
+    "linux-amd64:offsets_u32:57:absolute": "pass",
+    "linux-amd64:offsets_u32:57:ci": "pass",
+    "linux-amd64:offsets_u32:57:hashed": "pass",
+    "linux-amd64:offsets_u32:57:raw": "pass",
+    "linux-amd64:offsets_u32:57:raw-replay": "pass",
+    "linux-amd64:offsets_u32:58:absolute": "pass",
+    "linux-amd64:offsets_u32:58:ci": "pass",
+    "linux-amd64:offsets_u32:58:hashed": "pass",
+    "linux-amd64:offsets_u32:58:raw": "pass",
+    "linux-amd64:offsets_u32:58:raw-replay": "pass",
+    "linux-amd64:offsets_u32:59:absolute": "pass",
+    "linux-amd64:offsets_u32:59:ci": "pass",
+    "linux-amd64:offsets_u32:59:hashed": "pass",
+    "linux-amd64:offsets_u32:59:raw": "pass",
+    "linux-amd64:offsets_u32:59:raw-replay": "pass",
+    "linux-amd64:offsets_u32:60:absolute": "pass",
+    "linux-amd64:offsets_u32:60:ci": "pass",
+    "linux-amd64:offsets_u32:60:hashed": "pass",
+    "linux-amd64:offsets_u32:60:raw": "pass",
+    "linux-amd64:offsets_u32:60:raw-replay": "pass",
+    "linux-amd64:offsets_u32:arm-order": "pass",
+    "linux-amd64:offsets_u32:interleaved-order": "pass",
+    "linux-amd64:offsets_u64:61:absolute": "pass",
+    "linux-amd64:offsets_u64:61:ci": "pass",
+    "linux-amd64:offsets_u64:61:hashed": "pass",
+    "linux-amd64:offsets_u64:61:raw": "pass",
+    "linux-amd64:offsets_u64:61:raw-replay": "pass",
+    "linux-amd64:offsets_u64:62:absolute": "pass",
+    "linux-amd64:offsets_u64:62:ci": "pass",
+    "linux-amd64:offsets_u64:62:hashed": "pass",
+    "linux-amd64:offsets_u64:62:raw": "pass",
+    "linux-amd64:offsets_u64:62:raw-replay": "pass",
+    "linux-amd64:offsets_u64:63:absolute": "pass",
+    "linux-amd64:offsets_u64:63:ci": "pass",
+    "linux-amd64:offsets_u64:63:hashed": "pass",
+    "linux-amd64:offsets_u64:63:raw": "pass",
+    "linux-amd64:offsets_u64:63:raw-replay": "pass",
+    "linux-amd64:offsets_u64:64:absolute": "pass",
+    "linux-amd64:offsets_u64:64:ci": "pass",
+    "linux-amd64:offsets_u64:64:hashed": "pass",
+    "linux-amd64:offsets_u64:64:raw": "pass",
+    "linux-amd64:offsets_u64:64:raw-replay": "pass",
+    "linux-amd64:offsets_u64:65:absolute": "pass",
+    "linux-amd64:offsets_u64:65:ci": "pass",
+    "linux-amd64:offsets_u64:65:hashed": "pass",
+    "linux-amd64:offsets_u64:65:raw": "pass",
+    "linux-amd64:offsets_u64:65:raw-replay": "pass",
+    "linux-amd64:offsets_u64:66:absolute": "pass",
+    "linux-amd64:offsets_u64:66:ci": "pass",
+    "linux-amd64:offsets_u64:66:hashed": "pass",
+    "linux-amd64:offsets_u64:66:raw": "pass",
+    "linux-amd64:offsets_u64:66:raw-replay": "pass",
+    "linux-amd64:offsets_u64:arm-order": "pass",
+    "linux-amd64:offsets_u64:interleaved-order": "pass",
+    "linux-amd64:own-corpus-commit": "pass",
+    "linux-amd64:plan-hash": "pass",
+    "linux-amd64:position_render_full:67:absolute": "pass",
+    "linux-amd64:position_render_full:67:ci": "pass",
+    "linux-amd64:position_render_full:67:hashed": "pass",
+    "linux-amd64:position_render_full:67:raw": "pass",
+    "linux-amd64:position_render_full:67:raw-replay": "pass",
+    "linux-amd64:position_render_full:68:absolute": "pass",
+    "linux-amd64:position_render_full:68:ci": "pass",
+    "linux-amd64:position_render_full:68:hashed": "pass",
+    "linux-amd64:position_render_full:68:raw": "pass",
+    "linux-amd64:position_render_full:68:raw-replay": "pass",
+    "linux-amd64:position_render_full:69:absolute": "pass",
+    "linux-amd64:position_render_full:69:ci": "pass",
+    "linux-amd64:position_render_full:69:hashed": "pass",
+    "linux-amd64:position_render_full:69:raw": "pass",
+    "linux-amd64:position_render_full:69:raw-replay": "pass",
+    "linux-amd64:position_render_full:70:absolute": "pass",
+    "linux-amd64:position_render_full:70:ci": "pass",
+    "linux-amd64:position_render_full:70:hashed": "pass",
+    "linux-amd64:position_render_full:70:raw": "pass",
+    "linux-amd64:position_render_full:70:raw-replay": "pass",
+    "linux-amd64:position_render_full:71:absolute": "pass",
+    "linux-amd64:position_render_full:71:ci": "pass",
+    "linux-amd64:position_render_full:71:hashed": "pass",
+    "linux-amd64:position_render_full:71:raw": "pass",
+    "linux-amd64:position_render_full:71:raw-replay": "pass",
+    "linux-amd64:position_render_full:72:absolute": "pass",
+    "linux-amd64:position_render_full:72:ci": "pass",
+    "linux-amd64:position_render_full:72:hashed": "pass",
+    "linux-amd64:position_render_full:72:raw": "pass",
+    "linux-amd64:position_render_full:72:raw-replay": "pass",
+    "linux-amd64:position_render_full:arm-order": "pass",
+    "linux-amd64:position_render_full:interleaved-order": "pass",
+    "linux-amd64:position_render_window:73:absolute": "pass",
+    "linux-amd64:position_render_window:73:ci": "pass",
+    "linux-amd64:position_render_window:73:hashed": "pass",
+    "linux-amd64:position_render_window:73:raw": "pass",
+    "linux-amd64:position_render_window:73:raw-replay": "pass",
+    "linux-amd64:position_render_window:74:absolute": "pass",
+    "linux-amd64:position_render_window:74:ci": "pass",
+    "linux-amd64:position_render_window:74:hashed": "pass",
+    "linux-amd64:position_render_window:74:raw": "pass",
+    "linux-amd64:position_render_window:74:raw-replay": "pass",
+    "linux-amd64:position_render_window:75:absolute": "pass",
+    "linux-amd64:position_render_window:75:ci": "pass",
+    "linux-amd64:position_render_window:75:hashed": "pass",
+    "linux-amd64:position_render_window:75:raw": "pass",
+    "linux-amd64:position_render_window:75:raw-replay": "pass",
+    "linux-amd64:position_render_window:76:absolute": "pass",
+    "linux-amd64:position_render_window:76:ci": "pass",
+    "linux-amd64:position_render_window:76:hashed": "pass",
+    "linux-amd64:position_render_window:76:raw": "pass",
+    "linux-amd64:position_render_window:76:raw-replay": "pass",
+    "linux-amd64:position_render_window:77:absolute": "pass",
+    "linux-amd64:position_render_window:77:ci": "pass",
+    "linux-amd64:position_render_window:77:hashed": "pass",
+    "linux-amd64:position_render_window:77:raw": "pass",
+    "linux-amd64:position_render_window:77:raw-replay": "pass",
+    "linux-amd64:position_render_window:78:absolute": "pass",
+    "linux-amd64:position_render_window:78:ci": "pass",
+    "linux-amd64:position_render_window:78:hashed": "pass",
+    "linux-amd64:position_render_window:78:raw": "pass",
+    "linux-amd64:position_render_window:78:raw-replay": "pass",
+    "linux-amd64:position_render_window:arm-order": "pass",
+    "linux-amd64:position_render_window:interleaved-order": "pass",
+    "linux-amd64:quality-pass": "pass",
+    "linux-amd64:rare_grep:perf-data": "pass",
+    "linux-amd64:rare_grep:perf-data-hashed": "pass",
+    "linux-amd64:rare_grep:profile-hashed": "pass",
+    "linux-amd64:rare_grep:symbol-replay": "pass",
+    "linux-amd64:raw_lines_10k:1:absolute": "pass",
+    "linux-amd64:raw_lines_10k:1:ci": "pass",
+    "linux-amd64:raw_lines_10k:1:hashed": "pass",
+    "linux-amd64:raw_lines_10k:1:raw": "pass",
+    "linux-amd64:raw_lines_10k:1:raw-replay": "pass",
+    "linux-amd64:raw_lines_10k:2:absolute": "pass",
+    "linux-amd64:raw_lines_10k:2:ci": "pass",
+    "linux-amd64:raw_lines_10k:2:hashed": "pass",
+    "linux-amd64:raw_lines_10k:2:raw": "pass",
+    "linux-amd64:raw_lines_10k:2:raw-replay": "pass",
+    "linux-amd64:raw_lines_10k:3:absolute": "pass",
+    "linux-amd64:raw_lines_10k:3:ci": "pass",
+    "linux-amd64:raw_lines_10k:3:hashed": "pass",
+    "linux-amd64:raw_lines_10k:3:raw": "pass",
+    "linux-amd64:raw_lines_10k:3:raw-replay": "pass",
+    "linux-amd64:raw_lines_10k:4:absolute": "pass",
+    "linux-amd64:raw_lines_10k:4:ci": "pass",
+    "linux-amd64:raw_lines_10k:4:hashed": "pass",
+    "linux-amd64:raw_lines_10k:4:raw": "pass",
+    "linux-amd64:raw_lines_10k:4:raw-replay": "pass",
+    "linux-amd64:raw_lines_10k:5:absolute": "pass",
+    "linux-amd64:raw_lines_10k:5:ci": "pass",
+    "linux-amd64:raw_lines_10k:5:hashed": "pass",
+    "linux-amd64:raw_lines_10k:5:raw": "pass",
+    "linux-amd64:raw_lines_10k:5:raw-replay": "pass",
+    "linux-amd64:raw_lines_10k:6:absolute": "pass",
+    "linux-amd64:raw_lines_10k:6:ci": "pass",
+    "linux-amd64:raw_lines_10k:6:hashed": "pass",
+    "linux-amd64:raw_lines_10k:6:raw": "pass",
+    "linux-amd64:raw_lines_10k:6:raw-replay": "pass",
+    "linux-amd64:raw_lines_10k:arm-order": "pass",
+    "linux-amd64:raw_lines_10k:interleaved-order": "pass",
+    "linux-amd64:raw_lines_50k:10:absolute": "pass",
+    "linux-amd64:raw_lines_50k:10:ci": "pass",
+    "linux-amd64:raw_lines_50k:10:hashed": "pass",
+    "linux-amd64:raw_lines_50k:10:raw": "pass",
+    "linux-amd64:raw_lines_50k:10:raw-replay": "pass",
+    "linux-amd64:raw_lines_50k:11:absolute": "pass",
+    "linux-amd64:raw_lines_50k:11:ci": "pass",
+    "linux-amd64:raw_lines_50k:11:hashed": "pass",
+    "linux-amd64:raw_lines_50k:11:raw": "pass",
+    "linux-amd64:raw_lines_50k:11:raw-replay": "pass",
+    "linux-amd64:raw_lines_50k:12:absolute": "pass",
+    "linux-amd64:raw_lines_50k:12:ci": "pass",
+    "linux-amd64:raw_lines_50k:12:hashed": "pass",
+    "linux-amd64:raw_lines_50k:12:raw": "pass",
+    "linux-amd64:raw_lines_50k:12:raw-replay": "pass",
+    "linux-amd64:raw_lines_50k:7:absolute": "pass",
+    "linux-amd64:raw_lines_50k:7:ci": "pass",
+    "linux-amd64:raw_lines_50k:7:hashed": "pass",
+    "linux-amd64:raw_lines_50k:7:raw": "pass",
+    "linux-amd64:raw_lines_50k:7:raw-replay": "pass",
+    "linux-amd64:raw_lines_50k:8:absolute": "pass",
+    "linux-amd64:raw_lines_50k:8:ci": "pass",
+    "linux-amd64:raw_lines_50k:8:hashed": "pass",
+    "linux-amd64:raw_lines_50k:8:raw": "pass",
+    "linux-amd64:raw_lines_50k:8:raw-replay": "pass",
+    "linux-amd64:raw_lines_50k:9:absolute": "pass",
+    "linux-amd64:raw_lines_50k:9:ci": "pass",
+    "linux-amd64:raw_lines_50k:9:hashed": "pass",
+    "linux-amd64:raw_lines_50k:9:raw": "pass",
+    "linux-amd64:raw_lines_50k:9:raw-replay": "pass",
+    "linux-amd64:raw_lines_50k:arm-order": "pass",
+    "linux-amd64:raw_lines_50k:interleaved-order": "pass",
+    "linux-amd64:rustc-version": "pass",
+    "linux-amd64:seven-resource-records": "pass",
+    "linux-amd64:sparse_window:49:absolute": "pass",
+    "linux-amd64:sparse_window:49:ci": "pass",
+    "linux-amd64:sparse_window:49:hashed": "pass",
+    "linux-amd64:sparse_window:49:raw": "pass",
+    "linux-amd64:sparse_window:49:raw-replay": "pass",
+    "linux-amd64:sparse_window:50:absolute": "pass",
+    "linux-amd64:sparse_window:50:ci": "pass",
+    "linux-amd64:sparse_window:50:hashed": "pass",
+    "linux-amd64:sparse_window:50:raw": "pass",
+    "linux-amd64:sparse_window:50:raw-replay": "pass",
+    "linux-amd64:sparse_window:51:absolute": "pass",
+    "linux-amd64:sparse_window:51:ci": "pass",
+    "linux-amd64:sparse_window:51:hashed": "pass",
+    "linux-amd64:sparse_window:51:raw": "pass",
+    "linux-amd64:sparse_window:51:raw-replay": "pass",
+    "linux-amd64:sparse_window:52:absolute": "pass",
+    "linux-amd64:sparse_window:52:ci": "pass",
+    "linux-amd64:sparse_window:52:hashed": "pass",
+    "linux-amd64:sparse_window:52:raw": "pass",
+    "linux-amd64:sparse_window:52:raw-replay": "pass",
+    "linux-amd64:sparse_window:53:absolute": "pass",
+    "linux-amd64:sparse_window:53:ci": "pass",
+    "linux-amd64:sparse_window:53:hashed": "pass",
+    "linux-amd64:sparse_window:53:raw": "pass",
+    "linux-amd64:sparse_window:53:raw-replay": "pass",
+    "linux-amd64:sparse_window:54:absolute": "pass",
+    "linux-amd64:sparse_window:54:ci": "pass",
+    "linux-amd64:sparse_window:54:hashed": "pass",
+    "linux-amd64:sparse_window:54:raw": "pass",
+    "linux-amd64:sparse_window:54:raw-replay": "pass",
+    "linux-amd64:sparse_window:arm-order": "pass",
+    "linux-amd64:sparse_window:interleaved-order": "pass",
+    "linux-amd64:splice_eight:91:absolute": "pass",
+    "linux-amd64:splice_eight:91:ci": "pass",
+    "linux-amd64:splice_eight:91:hashed": "pass",
+    "linux-amd64:splice_eight:91:raw": "pass",
+    "linux-amd64:splice_eight:91:raw-replay": "pass",
+    "linux-amd64:splice_eight:92:absolute": "pass",
+    "linux-amd64:splice_eight:92:ci": "pass",
+    "linux-amd64:splice_eight:92:hashed": "pass",
+    "linux-amd64:splice_eight:92:raw": "pass",
+    "linux-amd64:splice_eight:92:raw-replay": "pass",
+    "linux-amd64:splice_eight:93:absolute": "pass",
+    "linux-amd64:splice_eight:93:ci": "pass",
+    "linux-amd64:splice_eight:93:hashed": "pass",
+    "linux-amd64:splice_eight:93:raw": "pass",
+    "linux-amd64:splice_eight:93:raw-replay": "pass",
+    "linux-amd64:splice_eight:94:absolute": "pass",
+    "linux-amd64:splice_eight:94:ci": "pass",
+    "linux-amd64:splice_eight:94:hashed": "pass",
+    "linux-amd64:splice_eight:94:raw": "pass",
+    "linux-amd64:splice_eight:94:raw-replay": "pass",
+    "linux-amd64:splice_eight:95:absolute": "pass",
+    "linux-amd64:splice_eight:95:ci": "pass",
+    "linux-amd64:splice_eight:95:hashed": "pass",
+    "linux-amd64:splice_eight:95:raw": "pass",
+    "linux-amd64:splice_eight:95:raw-replay": "pass",
+    "linux-amd64:splice_eight:96:absolute": "pass",
+    "linux-amd64:splice_eight:96:ci": "pass",
+    "linux-amd64:splice_eight:96:hashed": "pass",
+    "linux-amd64:splice_eight:96:raw": "pass",
+    "linux-amd64:splice_eight:96:raw-replay": "pass",
+    "linux-amd64:splice_eight:arm-order": "pass",
+    "linux-amd64:splice_eight:interleaved-order": "pass",
+    "linux-amd64:splice_one:85:absolute": "pass",
+    "linux-amd64:splice_one:85:ci": "pass",
+    "linux-amd64:splice_one:85:hashed": "pass",
+    "linux-amd64:splice_one:85:raw": "pass",
+    "linux-amd64:splice_one:85:raw-replay": "pass",
+    "linux-amd64:splice_one:86:absolute": "pass",
+    "linux-amd64:splice_one:86:ci": "pass",
+    "linux-amd64:splice_one:86:hashed": "pass",
+    "linux-amd64:splice_one:86:raw": "pass",
+    "linux-amd64:splice_one:86:raw-replay": "pass",
+    "linux-amd64:splice_one:87:absolute": "pass",
+    "linux-amd64:splice_one:87:ci": "pass",
+    "linux-amd64:splice_one:87:hashed": "pass",
+    "linux-amd64:splice_one:87:raw": "pass",
+    "linux-amd64:splice_one:87:raw-replay": "pass",
+    "linux-amd64:splice_one:88:absolute": "pass",
+    "linux-amd64:splice_one:88:ci": "pass",
+    "linux-amd64:splice_one:88:hashed": "pass",
+    "linux-amd64:splice_one:88:raw": "pass",
+    "linux-amd64:splice_one:88:raw-replay": "pass",
+    "linux-amd64:splice_one:89:absolute": "pass",
+    "linux-amd64:splice_one:89:ci": "pass",
+    "linux-amd64:splice_one:89:hashed": "pass",
+    "linux-amd64:splice_one:89:raw": "pass",
+    "linux-amd64:splice_one:89:raw-replay": "pass",
+    "linux-amd64:splice_one:90:absolute": "pass",
+    "linux-amd64:splice_one:90:ci": "pass",
+    "linux-amd64:splice_one:90:hashed": "pass",
+    "linux-amd64:splice_one:90:raw": "pass",
+    "linux-amd64:splice_one:90:raw-replay": "pass",
+    "linux-amd64:splice_one:arm-order": "pass",
+    "linux-amd64:splice_one:interleaved-order": "pass",
+    "linux-amd64:target-identity": "pass",
+    "linux-amd64:versioned_full_read:79:absolute": "pass",
+    "linux-amd64:versioned_full_read:79:ci": "pass",
+    "linux-amd64:versioned_full_read:79:hashed": "pass",
+    "linux-amd64:versioned_full_read:79:raw": "pass",
+    "linux-amd64:versioned_full_read:79:raw-replay": "pass",
+    "linux-amd64:versioned_full_read:80:absolute": "pass",
+    "linux-amd64:versioned_full_read:80:ci": "pass",
+    "linux-amd64:versioned_full_read:80:hashed": "pass",
+    "linux-amd64:versioned_full_read:80:raw": "pass",
+    "linux-amd64:versioned_full_read:80:raw-replay": "pass",
+    "linux-amd64:versioned_full_read:81:absolute": "pass",
+    "linux-amd64:versioned_full_read:81:ci": "pass",
+    "linux-amd64:versioned_full_read:81:hashed": "pass",
+    "linux-amd64:versioned_full_read:81:raw": "pass",
+    "linux-amd64:versioned_full_read:81:raw-replay": "pass",
+    "linux-amd64:versioned_full_read:82:absolute": "pass",
+    "linux-amd64:versioned_full_read:82:ci": "pass",
+    "linux-amd64:versioned_full_read:82:hashed": "pass",
+    "linux-amd64:versioned_full_read:82:raw": "pass",
+    "linux-amd64:versioned_full_read:82:raw-replay": "pass",
+    "linux-amd64:versioned_full_read:83:absolute": "pass",
+    "linux-amd64:versioned_full_read:83:ci": "pass",
+    "linux-amd64:versioned_full_read:83:hashed": "pass",
+    "linux-amd64:versioned_full_read:83:raw": "pass",
+    "linux-amd64:versioned_full_read:83:raw-replay": "pass",
+    "linux-amd64:versioned_full_read:84:absolute": "pass",
+    "linux-amd64:versioned_full_read:84:ci": "pass",
+    "linux-amd64:versioned_full_read:84:hashed": "pass",
+    "linux-amd64:versioned_full_read:84:raw": "pass",
+    "linux-amd64:versioned_full_read:84:raw-replay": "pass",
+    "linux-amd64:versioned_full_read:arm-order": "pass",
+    "linux-amd64:versioned_full_read:interleaved-order": "pass",
+    "linux-amd64:warm:base:12-samples": "pass",
+    "linux-amd64:warm:base:bootstrap-ci": "pass",
+    "linux-amd64:warm:candidate:12-samples": "pass",
+    "linux-amd64:warm:candidate:bootstrap-ci": "pass",
+    "linux-amd64:warm:filesystem-order": "pass",
+    "linux-amd64:warm:positive-filesystem-samples": "pass",
+    "linux-amd64:warm:summary-variants": "pass",
+    "linux-amd64:xxh3_version_10k:25:absolute": "pass",
+    "linux-amd64:xxh3_version_10k:25:ci": "pass",
+    "linux-amd64:xxh3_version_10k:25:hashed": "pass",
+    "linux-amd64:xxh3_version_10k:25:raw": "pass",
+    "linux-amd64:xxh3_version_10k:25:raw-replay": "pass",
+    "linux-amd64:xxh3_version_10k:26:absolute": "pass",
+    "linux-amd64:xxh3_version_10k:26:ci": "pass",
+    "linux-amd64:xxh3_version_10k:26:hashed": "pass",
+    "linux-amd64:xxh3_version_10k:26:raw": "pass",
+    "linux-amd64:xxh3_version_10k:26:raw-replay": "pass",
+    "linux-amd64:xxh3_version_10k:27:absolute": "pass",
+    "linux-amd64:xxh3_version_10k:27:ci": "pass",
+    "linux-amd64:xxh3_version_10k:27:hashed": "pass",
+    "linux-amd64:xxh3_version_10k:27:raw": "pass",
+    "linux-amd64:xxh3_version_10k:27:raw-replay": "pass",
+    "linux-amd64:xxh3_version_10k:28:absolute": "pass",
+    "linux-amd64:xxh3_version_10k:28:ci": "pass",
+    "linux-amd64:xxh3_version_10k:28:hashed": "pass",
+    "linux-amd64:xxh3_version_10k:28:raw": "pass",
+    "linux-amd64:xxh3_version_10k:28:raw-replay": "pass",
+    "linux-amd64:xxh3_version_10k:29:absolute": "pass",
+    "linux-amd64:xxh3_version_10k:29:ci": "pass",
+    "linux-amd64:xxh3_version_10k:29:hashed": "pass",
+    "linux-amd64:xxh3_version_10k:29:raw": "pass",
+    "linux-amd64:xxh3_version_10k:29:raw-replay": "pass",
+    "linux-amd64:xxh3_version_10k:30:absolute": "pass",
+    "linux-amd64:xxh3_version_10k:30:ci": "pass",
+    "linux-amd64:xxh3_version_10k:30:hashed": "pass",
+    "linux-amd64:xxh3_version_10k:30:raw": "pass",
+    "linux-amd64:xxh3_version_10k:30:raw-replay": "pass",
+    "linux-amd64:xxh3_version_10k:arm-order": "pass",
+    "linux-amd64:xxh3_version_10k:interleaved-order": "pass",
+    "linux-amd64:xxh3_version_50k:31:absolute": "pass",
+    "linux-amd64:xxh3_version_50k:31:ci": "pass",
+    "linux-amd64:xxh3_version_50k:31:hashed": "pass",
+    "linux-amd64:xxh3_version_50k:31:raw": "pass",
+    "linux-amd64:xxh3_version_50k:31:raw-replay": "pass",
+    "linux-amd64:xxh3_version_50k:32:absolute": "pass",
+    "linux-amd64:xxh3_version_50k:32:ci": "pass",
+    "linux-amd64:xxh3_version_50k:32:hashed": "pass",
+    "linux-amd64:xxh3_version_50k:32:raw": "pass",
+    "linux-amd64:xxh3_version_50k:32:raw-replay": "pass",
+    "linux-amd64:xxh3_version_50k:33:absolute": "pass",
+    "linux-amd64:xxh3_version_50k:33:ci": "pass",
+    "linux-amd64:xxh3_version_50k:33:hashed": "pass",
+    "linux-amd64:xxh3_version_50k:33:raw": "pass",
+    "linux-amd64:xxh3_version_50k:33:raw-replay": "pass",
+    "linux-amd64:xxh3_version_50k:34:absolute": "pass",
+    "linux-amd64:xxh3_version_50k:34:ci": "pass",
+    "linux-amd64:xxh3_version_50k:34:hashed": "pass",
+    "linux-amd64:xxh3_version_50k:34:raw": "pass",
+    "linux-amd64:xxh3_version_50k:34:raw-replay": "pass",
+    "linux-amd64:xxh3_version_50k:35:absolute": "pass",
+    "linux-amd64:xxh3_version_50k:35:ci": "pass",
+    "linux-amd64:xxh3_version_50k:35:hashed": "pass",
+    "linux-amd64:xxh3_version_50k:35:raw": "pass",
+    "linux-amd64:xxh3_version_50k:35:raw-replay": "pass",
+    "linux-amd64:xxh3_version_50k:36:absolute": "pass",
+    "linux-amd64:xxh3_version_50k:36:ci": "pass",
+    "linux-amd64:xxh3_version_50k:36:hashed": "pass",
+    "linux-amd64:xxh3_version_50k:36:raw": "pass",
+    "linux-amd64:xxh3_version_50k:36:raw-replay": "pass",
+    "linux-amd64:xxh3_version_50k:arm-order": "pass",
+    "linux-amd64:xxh3_version_50k:interleaved-order": "pass",
+    "macos-arm64:102-global-arm-sequence": "pass",
+    "macos-arm64:17-paired-targets": "pass",
+    "macos-arm64:48-filesystem-records": "pass",
+    "macos-arm64:allocation-and-rss-values": "pass",
+    "macos-arm64:atomic_persist:100:absolute": "pass",
+    "macos-arm64:atomic_persist:100:ci": "pass",
+    "macos-arm64:atomic_persist:100:hashed": "pass",
+    "macos-arm64:atomic_persist:100:raw": "pass",
+    "macos-arm64:atomic_persist:100:raw-replay": "pass",
+    "macos-arm64:atomic_persist:101:absolute": "pass",
+    "macos-arm64:atomic_persist:101:ci": "pass",
+    "macos-arm64:atomic_persist:101:hashed": "pass",
+    "macos-arm64:atomic_persist:101:raw": "pass",
+    "macos-arm64:atomic_persist:101:raw-replay": "pass",
+    "macos-arm64:atomic_persist:102:absolute": "pass",
+    "macos-arm64:atomic_persist:102:ci": "pass",
+    "macos-arm64:atomic_persist:102:hashed": "pass",
+    "macos-arm64:atomic_persist:102:raw": "pass",
+    "macos-arm64:atomic_persist:102:raw-replay": "pass",
+    "macos-arm64:atomic_persist:97:absolute": "pass",
+    "macos-arm64:atomic_persist:97:ci": "pass",
+    "macos-arm64:atomic_persist:97:hashed": "pass",
+    "macos-arm64:atomic_persist:97:raw": "pass",
+    "macos-arm64:atomic_persist:97:raw-replay": "pass",
+    "macos-arm64:atomic_persist:98:absolute": "pass",
+    "macos-arm64:atomic_persist:98:ci": "pass",
+    "macos-arm64:atomic_persist:98:hashed": "pass",
+    "macos-arm64:atomic_persist:98:raw": "pass",
+    "macos-arm64:atomic_persist:98:raw-replay": "pass",
+    "macos-arm64:atomic_persist:99:absolute": "pass",
+    "macos-arm64:atomic_persist:99:ci": "pass",
+    "macos-arm64:atomic_persist:99:hashed": "pass",
+    "macos-arm64:atomic_persist:99:raw": "pass",
+    "macos-arm64:atomic_persist:99:raw-replay": "pass",
+    "macos-arm64:atomic_persist:arm-order": "pass",
+    "macos-arm64:atomic_persist:interleaved-order": "pass",
+    "macos-arm64:baseline-head": "pass",
+    "macos-arm64:benchmark-flags-empty": "pass",
+    "macos-arm64:blake3_version_10k:37:absolute": "pass",
+    "macos-arm64:blake3_version_10k:37:ci": "pass",
+    "macos-arm64:blake3_version_10k:37:hashed": "pass",
+    "macos-arm64:blake3_version_10k:37:raw": "pass",
+    "macos-arm64:blake3_version_10k:37:raw-replay": "pass",
+    "macos-arm64:blake3_version_10k:38:absolute": "pass",
+    "macos-arm64:blake3_version_10k:38:ci": "pass",
+    "macos-arm64:blake3_version_10k:38:hashed": "pass",
+    "macos-arm64:blake3_version_10k:38:raw": "pass",
+    "macos-arm64:blake3_version_10k:38:raw-replay": "pass",
+    "macos-arm64:blake3_version_10k:39:absolute": "pass",
+    "macos-arm64:blake3_version_10k:39:ci": "pass",
+    "macos-arm64:blake3_version_10k:39:hashed": "pass",
+    "macos-arm64:blake3_version_10k:39:raw": "pass",
+    "macos-arm64:blake3_version_10k:39:raw-replay": "pass",
+    "macos-arm64:blake3_version_10k:40:absolute": "pass",
+    "macos-arm64:blake3_version_10k:40:ci": "pass",
+    "macos-arm64:blake3_version_10k:40:hashed": "pass",
+    "macos-arm64:blake3_version_10k:40:raw": "pass",
+    "macos-arm64:blake3_version_10k:40:raw-replay": "pass",
+    "macos-arm64:blake3_version_10k:41:absolute": "pass",
+    "macos-arm64:blake3_version_10k:41:ci": "pass",
+    "macos-arm64:blake3_version_10k:41:hashed": "pass",
+    "macos-arm64:blake3_version_10k:41:raw": "pass",
+    "macos-arm64:blake3_version_10k:41:raw-replay": "pass",
+    "macos-arm64:blake3_version_10k:42:absolute": "pass",
+    "macos-arm64:blake3_version_10k:42:ci": "pass",
+    "macos-arm64:blake3_version_10k:42:hashed": "pass",
+    "macos-arm64:blake3_version_10k:42:raw": "pass",
+    "macos-arm64:blake3_version_10k:42:raw-replay": "pass",
+    "macos-arm64:blake3_version_10k:arm-order": "pass",
+    "macos-arm64:blake3_version_10k:interleaved-order": "pass",
+    "macos-arm64:blake3_version_50k:43:absolute": "pass",
+    "macos-arm64:blake3_version_50k:43:ci": "pass",
+    "macos-arm64:blake3_version_50k:43:hashed": "pass",
+    "macos-arm64:blake3_version_50k:43:raw": "pass",
+    "macos-arm64:blake3_version_50k:43:raw-replay": "pass",
+    "macos-arm64:blake3_version_50k:44:absolute": "pass",
+    "macos-arm64:blake3_version_50k:44:ci": "pass",
+    "macos-arm64:blake3_version_50k:44:hashed": "pass",
+    "macos-arm64:blake3_version_50k:44:raw": "pass",
+    "macos-arm64:blake3_version_50k:44:raw-replay": "pass",
+    "macos-arm64:blake3_version_50k:45:absolute": "pass",
+    "macos-arm64:blake3_version_50k:45:ci": "pass",
+    "macos-arm64:blake3_version_50k:45:hashed": "pass",
+    "macos-arm64:blake3_version_50k:45:raw": "pass",
+    "macos-arm64:blake3_version_50k:45:raw-replay": "pass",
+    "macos-arm64:blake3_version_50k:46:absolute": "pass",
+    "macos-arm64:blake3_version_50k:46:ci": "pass",
+    "macos-arm64:blake3_version_50k:46:hashed": "pass",
+    "macos-arm64:blake3_version_50k:46:raw": "pass",
+    "macos-arm64:blake3_version_50k:46:raw-replay": "pass",
+    "macos-arm64:blake3_version_50k:47:absolute": "pass",
+    "macos-arm64:blake3_version_50k:47:ci": "pass",
+    "macos-arm64:blake3_version_50k:47:hashed": "pass",
+    "macos-arm64:blake3_version_50k:47:raw": "pass",
+    "macos-arm64:blake3_version_50k:47:raw-replay": "pass",
+    "macos-arm64:blake3_version_50k:48:absolute": "pass",
+    "macos-arm64:blake3_version_50k:48:ci": "pass",
+    "macos-arm64:blake3_version_50k:48:hashed": "pass",
+    "macos-arm64:blake3_version_50k:48:raw": "pass",
+    "macos-arm64:blake3_version_50k:48:raw-replay": "pass",
+    "macos-arm64:blake3_version_50k:arm-order": "pass",
+    "macos-arm64:blake3_version_50k:interleaved-order": "pass",
+    "macos-arm64:candidate-head": "pass",
+    "macos-arm64:cargo-version": "pass",
+    "macos-arm64:clean-candidate": "pass",
+    "macos-arm64:cold:base:12-samples": "pass",
+    "macos-arm64:cold:base:bootstrap-ci": "pass",
+    "macos-arm64:cold:candidate:12-samples": "pass",
+    "macos-arm64:cold:candidate:bootstrap-ci": "pass",
+    "macos-arm64:cold:filesystem-order": "pass",
+    "macos-arm64:cold:positive-filesystem-samples": "pass",
+    "macos-arm64:cold:summary-variants": "pass",
+    "macos-arm64:common_grep:profile-hashed": "pass",
+    "macos-arm64:common_grep:symbol-replay": "pass",
+    "macos-arm64:edit:profile-hashed": "pass",
+    "macos-arm64:edit:symbol-replay": "pass",
+    "macos-arm64:eight-quality-commands": "pass",
+    "macos-arm64:external-corpus-commit": "pass",
+    "macos-arm64:flags-removed": "pass",
+    "macos-arm64:four-filesystem-summaries": "pass",
+    "macos-arm64:four-profiles": "pass",
+    "macos-arm64:full-criterion-hashed": "pass",
+    "macos-arm64:full-criterion-raw": "pass",
+    "macos-arm64:full_read:profile-hashed": "pass",
+    "macos-arm64:full_read:symbol-replay": "pass",
+    "macos-arm64:gxhash_version_10k:13:absolute": "pass",
+    "macos-arm64:gxhash_version_10k:13:ci": "pass",
+    "macos-arm64:gxhash_version_10k:13:hashed": "pass",
+    "macos-arm64:gxhash_version_10k:13:raw": "pass",
+    "macos-arm64:gxhash_version_10k:13:raw-replay": "pass",
+    "macos-arm64:gxhash_version_10k:14:absolute": "pass",
+    "macos-arm64:gxhash_version_10k:14:ci": "pass",
+    "macos-arm64:gxhash_version_10k:14:hashed": "pass",
+    "macos-arm64:gxhash_version_10k:14:raw": "pass",
+    "macos-arm64:gxhash_version_10k:14:raw-replay": "pass",
+    "macos-arm64:gxhash_version_10k:15:absolute": "pass",
+    "macos-arm64:gxhash_version_10k:15:ci": "pass",
+    "macos-arm64:gxhash_version_10k:15:hashed": "pass",
+    "macos-arm64:gxhash_version_10k:15:raw": "pass",
+    "macos-arm64:gxhash_version_10k:15:raw-replay": "pass",
+    "macos-arm64:gxhash_version_10k:16:absolute": "pass",
+    "macos-arm64:gxhash_version_10k:16:ci": "pass",
+    "macos-arm64:gxhash_version_10k:16:hashed": "pass",
+    "macos-arm64:gxhash_version_10k:16:raw": "pass",
+    "macos-arm64:gxhash_version_10k:16:raw-replay": "pass",
+    "macos-arm64:gxhash_version_10k:17:absolute": "pass",
+    "macos-arm64:gxhash_version_10k:17:ci": "pass",
+    "macos-arm64:gxhash_version_10k:17:hashed": "pass",
+    "macos-arm64:gxhash_version_10k:17:raw": "pass",
+    "macos-arm64:gxhash_version_10k:17:raw-replay": "pass",
+    "macos-arm64:gxhash_version_10k:18:absolute": "pass",
+    "macos-arm64:gxhash_version_10k:18:ci": "pass",
+    "macos-arm64:gxhash_version_10k:18:hashed": "pass",
+    "macos-arm64:gxhash_version_10k:18:raw": "pass",
+    "macos-arm64:gxhash_version_10k:18:raw-replay": "pass",
+    "macos-arm64:gxhash_version_10k:arm-order": "pass",
+    "macos-arm64:gxhash_version_10k:interleaved-order": "pass",
+    "macos-arm64:gxhash_version_50k:19:absolute": "pass",
+    "macos-arm64:gxhash_version_50k:19:ci": "pass",
+    "macos-arm64:gxhash_version_50k:19:hashed": "pass",
+    "macos-arm64:gxhash_version_50k:19:raw": "pass",
+    "macos-arm64:gxhash_version_50k:19:raw-replay": "pass",
+    "macos-arm64:gxhash_version_50k:20:absolute": "pass",
+    "macos-arm64:gxhash_version_50k:20:ci": "pass",
+    "macos-arm64:gxhash_version_50k:20:hashed": "pass",
+    "macos-arm64:gxhash_version_50k:20:raw": "pass",
+    "macos-arm64:gxhash_version_50k:20:raw-replay": "pass",
+    "macos-arm64:gxhash_version_50k:21:absolute": "pass",
+    "macos-arm64:gxhash_version_50k:21:ci": "pass",
+    "macos-arm64:gxhash_version_50k:21:hashed": "pass",
+    "macos-arm64:gxhash_version_50k:21:raw": "pass",
+    "macos-arm64:gxhash_version_50k:21:raw-replay": "pass",
+    "macos-arm64:gxhash_version_50k:22:absolute": "pass",
+    "macos-arm64:gxhash_version_50k:22:ci": "pass",
+    "macos-arm64:gxhash_version_50k:22:hashed": "pass",
+    "macos-arm64:gxhash_version_50k:22:raw": "pass",
+    "macos-arm64:gxhash_version_50k:22:raw-replay": "pass",
+    "macos-arm64:gxhash_version_50k:23:absolute": "pass",
+    "macos-arm64:gxhash_version_50k:23:ci": "pass",
+    "macos-arm64:gxhash_version_50k:23:hashed": "pass",
+    "macos-arm64:gxhash_version_50k:23:raw": "pass",
+    "macos-arm64:gxhash_version_50k:23:raw-replay": "pass",
+    "macos-arm64:gxhash_version_50k:24:absolute": "pass",
+    "macos-arm64:gxhash_version_50k:24:ci": "pass",
+    "macos-arm64:gxhash_version_50k:24:hashed": "pass",
+    "macos-arm64:gxhash_version_50k:24:raw": "pass",
+    "macos-arm64:gxhash_version_50k:24:raw-replay": "pass",
+    "macos-arm64:gxhash_version_50k:arm-order": "pass",
+    "macos-arm64:gxhash_version_50k:interleaved-order": "pass",
+    "macos-arm64:manifest-pass": "pass",
+    "macos-arm64:offsets_u32:55:absolute": "pass",
+    "macos-arm64:offsets_u32:55:ci": "pass",
+    "macos-arm64:offsets_u32:55:hashed": "pass",
+    "macos-arm64:offsets_u32:55:raw": "pass",
+    "macos-arm64:offsets_u32:55:raw-replay": "pass",
+    "macos-arm64:offsets_u32:56:absolute": "pass",
+    "macos-arm64:offsets_u32:56:ci": "pass",
+    "macos-arm64:offsets_u32:56:hashed": "pass",
+    "macos-arm64:offsets_u32:56:raw": "pass",
+    "macos-arm64:offsets_u32:56:raw-replay": "pass",
+    "macos-arm64:offsets_u32:57:absolute": "pass",
+    "macos-arm64:offsets_u32:57:ci": "pass",
+    "macos-arm64:offsets_u32:57:hashed": "pass",
+    "macos-arm64:offsets_u32:57:raw": "pass",
+    "macos-arm64:offsets_u32:57:raw-replay": "pass",
+    "macos-arm64:offsets_u32:58:absolute": "pass",
+    "macos-arm64:offsets_u32:58:ci": "pass",
+    "macos-arm64:offsets_u32:58:hashed": "pass",
+    "macos-arm64:offsets_u32:58:raw": "pass",
+    "macos-arm64:offsets_u32:58:raw-replay": "pass",
+    "macos-arm64:offsets_u32:59:absolute": "pass",
+    "macos-arm64:offsets_u32:59:ci": "pass",
+    "macos-arm64:offsets_u32:59:hashed": "pass",
+    "macos-arm64:offsets_u32:59:raw": "pass",
+    "macos-arm64:offsets_u32:59:raw-replay": "pass",
+    "macos-arm64:offsets_u32:60:absolute": "pass",
+    "macos-arm64:offsets_u32:60:ci": "pass",
+    "macos-arm64:offsets_u32:60:hashed": "pass",
+    "macos-arm64:offsets_u32:60:raw": "pass",
+    "macos-arm64:offsets_u32:60:raw-replay": "pass",
+    "macos-arm64:offsets_u32:arm-order": "pass",
+    "macos-arm64:offsets_u32:interleaved-order": "pass",
+    "macos-arm64:offsets_u64:61:absolute": "pass",
+    "macos-arm64:offsets_u64:61:ci": "pass",
+    "macos-arm64:offsets_u64:61:hashed": "pass",
+    "macos-arm64:offsets_u64:61:raw": "pass",
+    "macos-arm64:offsets_u64:61:raw-replay": "pass",
+    "macos-arm64:offsets_u64:62:absolute": "pass",
+    "macos-arm64:offsets_u64:62:ci": "pass",
+    "macos-arm64:offsets_u64:62:hashed": "pass",
+    "macos-arm64:offsets_u64:62:raw": "pass",
+    "macos-arm64:offsets_u64:62:raw-replay": "pass",
+    "macos-arm64:offsets_u64:63:absolute": "pass",
+    "macos-arm64:offsets_u64:63:ci": "pass",
+    "macos-arm64:offsets_u64:63:hashed": "pass",
+    "macos-arm64:offsets_u64:63:raw": "pass",
+    "macos-arm64:offsets_u64:63:raw-replay": "pass",
+    "macos-arm64:offsets_u64:64:absolute": "pass",
+    "macos-arm64:offsets_u64:64:ci": "pass",
+    "macos-arm64:offsets_u64:64:hashed": "pass",
+    "macos-arm64:offsets_u64:64:raw": "pass",
+    "macos-arm64:offsets_u64:64:raw-replay": "pass",
+    "macos-arm64:offsets_u64:65:absolute": "pass",
+    "macos-arm64:offsets_u64:65:ci": "pass",
+    "macos-arm64:offsets_u64:65:hashed": "pass",
+    "macos-arm64:offsets_u64:65:raw": "pass",
+    "macos-arm64:offsets_u64:65:raw-replay": "pass",
+    "macos-arm64:offsets_u64:66:absolute": "pass",
+    "macos-arm64:offsets_u64:66:ci": "pass",
+    "macos-arm64:offsets_u64:66:hashed": "pass",
+    "macos-arm64:offsets_u64:66:raw": "pass",
+    "macos-arm64:offsets_u64:66:raw-replay": "pass",
+    "macos-arm64:offsets_u64:arm-order": "pass",
+    "macos-arm64:offsets_u64:interleaved-order": "pass",
+    "macos-arm64:own-corpus-commit": "pass",
+    "macos-arm64:plan-hash": "pass",
+    "macos-arm64:position_render_full:67:absolute": "pass",
+    "macos-arm64:position_render_full:67:ci": "pass",
+    "macos-arm64:position_render_full:67:hashed": "pass",
+    "macos-arm64:position_render_full:67:raw": "pass",
+    "macos-arm64:position_render_full:67:raw-replay": "pass",
+    "macos-arm64:position_render_full:68:absolute": "pass",
+    "macos-arm64:position_render_full:68:ci": "pass",
+    "macos-arm64:position_render_full:68:hashed": "pass",
+    "macos-arm64:position_render_full:68:raw": "pass",
+    "macos-arm64:position_render_full:68:raw-replay": "pass",
+    "macos-arm64:position_render_full:69:absolute": "pass",
+    "macos-arm64:position_render_full:69:ci": "pass",
+    "macos-arm64:position_render_full:69:hashed": "pass",
+    "macos-arm64:position_render_full:69:raw": "pass",
+    "macos-arm64:position_render_full:69:raw-replay": "pass",
+    "macos-arm64:position_render_full:70:absolute": "pass",
+    "macos-arm64:position_render_full:70:ci": "pass",
+    "macos-arm64:position_render_full:70:hashed": "pass",
+    "macos-arm64:position_render_full:70:raw": "pass",
+    "macos-arm64:position_render_full:70:raw-replay": "pass",
+    "macos-arm64:position_render_full:71:absolute": "pass",
+    "macos-arm64:position_render_full:71:ci": "pass",
+    "macos-arm64:position_render_full:71:hashed": "pass",
+    "macos-arm64:position_render_full:71:raw": "pass",
+    "macos-arm64:position_render_full:71:raw-replay": "pass",
+    "macos-arm64:position_render_full:72:absolute": "pass",
+    "macos-arm64:position_render_full:72:ci": "pass",
+    "macos-arm64:position_render_full:72:hashed": "pass",
+    "macos-arm64:position_render_full:72:raw": "pass",
+    "macos-arm64:position_render_full:72:raw-replay": "pass",
+    "macos-arm64:position_render_full:arm-order": "pass",
+    "macos-arm64:position_render_full:interleaved-order": "pass",
+    "macos-arm64:position_render_window:73:absolute": "pass",
+    "macos-arm64:position_render_window:73:ci": "pass",
+    "macos-arm64:position_render_window:73:hashed": "pass",
+    "macos-arm64:position_render_window:73:raw": "pass",
+    "macos-arm64:position_render_window:73:raw-replay": "pass",
+    "macos-arm64:position_render_window:74:absolute": "pass",
+    "macos-arm64:position_render_window:74:ci": "pass",
+    "macos-arm64:position_render_window:74:hashed": "pass",
+    "macos-arm64:position_render_window:74:raw": "pass",
+    "macos-arm64:position_render_window:74:raw-replay": "pass",
+    "macos-arm64:position_render_window:75:absolute": "pass",
+    "macos-arm64:position_render_window:75:ci": "pass",
+    "macos-arm64:position_render_window:75:hashed": "pass",
+    "macos-arm64:position_render_window:75:raw": "pass",
+    "macos-arm64:position_render_window:75:raw-replay": "pass",
+    "macos-arm64:position_render_window:76:absolute": "pass",
+    "macos-arm64:position_render_window:76:ci": "pass",
+    "macos-arm64:position_render_window:76:hashed": "pass",
+    "macos-arm64:position_render_window:76:raw": "pass",
+    "macos-arm64:position_render_window:76:raw-replay": "pass",
+    "macos-arm64:position_render_window:77:absolute": "pass",
+    "macos-arm64:position_render_window:77:ci": "pass",
+    "macos-arm64:position_render_window:77:hashed": "pass",
+    "macos-arm64:position_render_window:77:raw": "pass",
+    "macos-arm64:position_render_window:77:raw-replay": "pass",
+    "macos-arm64:position_render_window:78:absolute": "pass",
+    "macos-arm64:position_render_window:78:ci": "pass",
+    "macos-arm64:position_render_window:78:hashed": "pass",
+    "macos-arm64:position_render_window:78:raw": "pass",
+    "macos-arm64:position_render_window:78:raw-replay": "pass",
+    "macos-arm64:position_render_window:arm-order": "pass",
+    "macos-arm64:position_render_window:interleaved-order": "pass",
+    "macos-arm64:quality-pass": "pass",
+    "macos-arm64:rare_grep:profile-hashed": "pass",
+    "macos-arm64:rare_grep:symbol-replay": "pass",
+    "macos-arm64:raw_lines_10k:1:absolute": "pass",
+    "macos-arm64:raw_lines_10k:1:ci": "pass",
+    "macos-arm64:raw_lines_10k:1:hashed": "pass",
+    "macos-arm64:raw_lines_10k:1:raw": "pass",
+    "macos-arm64:raw_lines_10k:1:raw-replay": "pass",
+    "macos-arm64:raw_lines_10k:2:absolute": "pass",
+    "macos-arm64:raw_lines_10k:2:ci": "pass",
+    "macos-arm64:raw_lines_10k:2:hashed": "pass",
+    "macos-arm64:raw_lines_10k:2:raw": "pass",
+    "macos-arm64:raw_lines_10k:2:raw-replay": "pass",
+    "macos-arm64:raw_lines_10k:3:absolute": "pass",
+    "macos-arm64:raw_lines_10k:3:ci": "pass",
+    "macos-arm64:raw_lines_10k:3:hashed": "pass",
+    "macos-arm64:raw_lines_10k:3:raw": "pass",
+    "macos-arm64:raw_lines_10k:3:raw-replay": "pass",
+    "macos-arm64:raw_lines_10k:4:absolute": "pass",
+    "macos-arm64:raw_lines_10k:4:ci": "pass",
+    "macos-arm64:raw_lines_10k:4:hashed": "pass",
+    "macos-arm64:raw_lines_10k:4:raw": "pass",
+    "macos-arm64:raw_lines_10k:4:raw-replay": "pass",
+    "macos-arm64:raw_lines_10k:5:absolute": "pass",
+    "macos-arm64:raw_lines_10k:5:ci": "pass",
+    "macos-arm64:raw_lines_10k:5:hashed": "pass",
+    "macos-arm64:raw_lines_10k:5:raw": "pass",
+    "macos-arm64:raw_lines_10k:5:raw-replay": "pass",
+    "macos-arm64:raw_lines_10k:6:absolute": "pass",
+    "macos-arm64:raw_lines_10k:6:ci": "pass",
+    "macos-arm64:raw_lines_10k:6:hashed": "pass",
+    "macos-arm64:raw_lines_10k:6:raw": "pass",
+    "macos-arm64:raw_lines_10k:6:raw-replay": "pass",
+    "macos-arm64:raw_lines_10k:arm-order": "pass",
+    "macos-arm64:raw_lines_10k:interleaved-order": "pass",
+    "macos-arm64:raw_lines_50k:10:absolute": "pass",
+    "macos-arm64:raw_lines_50k:10:ci": "pass",
+    "macos-arm64:raw_lines_50k:10:hashed": "pass",
+    "macos-arm64:raw_lines_50k:10:raw": "pass",
+    "macos-arm64:raw_lines_50k:10:raw-replay": "pass",
+    "macos-arm64:raw_lines_50k:11:absolute": "pass",
+    "macos-arm64:raw_lines_50k:11:ci": "pass",
+    "macos-arm64:raw_lines_50k:11:hashed": "pass",
+    "macos-arm64:raw_lines_50k:11:raw": "pass",
+    "macos-arm64:raw_lines_50k:11:raw-replay": "pass",
+    "macos-arm64:raw_lines_50k:12:absolute": "pass",
+    "macos-arm64:raw_lines_50k:12:ci": "pass",
+    "macos-arm64:raw_lines_50k:12:hashed": "pass",
+    "macos-arm64:raw_lines_50k:12:raw": "pass",
+    "macos-arm64:raw_lines_50k:12:raw-replay": "pass",
+    "macos-arm64:raw_lines_50k:7:absolute": "pass",
+    "macos-arm64:raw_lines_50k:7:ci": "pass",
+    "macos-arm64:raw_lines_50k:7:hashed": "pass",
+    "macos-arm64:raw_lines_50k:7:raw": "pass",
+    "macos-arm64:raw_lines_50k:7:raw-replay": "pass",
+    "macos-arm64:raw_lines_50k:8:absolute": "pass",
+    "macos-arm64:raw_lines_50k:8:ci": "pass",
+    "macos-arm64:raw_lines_50k:8:hashed": "pass",
+    "macos-arm64:raw_lines_50k:8:raw": "pass",
+    "macos-arm64:raw_lines_50k:8:raw-replay": "pass",
+    "macos-arm64:raw_lines_50k:9:absolute": "pass",
+    "macos-arm64:raw_lines_50k:9:ci": "pass",
+    "macos-arm64:raw_lines_50k:9:hashed": "pass",
+    "macos-arm64:raw_lines_50k:9:raw": "pass",
+    "macos-arm64:raw_lines_50k:9:raw-replay": "pass",
+    "macos-arm64:raw_lines_50k:arm-order": "pass",
+    "macos-arm64:raw_lines_50k:interleaved-order": "pass",
+    "macos-arm64:rustc-version": "pass",
+    "macos-arm64:seven-resource-records": "pass",
+    "macos-arm64:sparse_window:49:absolute": "pass",
+    "macos-arm64:sparse_window:49:ci": "pass",
+    "macos-arm64:sparse_window:49:hashed": "pass",
+    "macos-arm64:sparse_window:49:raw": "pass",
+    "macos-arm64:sparse_window:49:raw-replay": "pass",
+    "macos-arm64:sparse_window:50:absolute": "pass",
+    "macos-arm64:sparse_window:50:ci": "pass",
+    "macos-arm64:sparse_window:50:hashed": "pass",
+    "macos-arm64:sparse_window:50:raw": "pass",
+    "macos-arm64:sparse_window:50:raw-replay": "pass",
+    "macos-arm64:sparse_window:51:absolute": "pass",
+    "macos-arm64:sparse_window:51:ci": "pass",
+    "macos-arm64:sparse_window:51:hashed": "pass",
+    "macos-arm64:sparse_window:51:raw": "pass",
+    "macos-arm64:sparse_window:51:raw-replay": "pass",
+    "macos-arm64:sparse_window:52:absolute": "pass",
+    "macos-arm64:sparse_window:52:ci": "pass",
+    "macos-arm64:sparse_window:52:hashed": "pass",
+    "macos-arm64:sparse_window:52:raw": "pass",
+    "macos-arm64:sparse_window:52:raw-replay": "pass",
+    "macos-arm64:sparse_window:53:absolute": "pass",
+    "macos-arm64:sparse_window:53:ci": "pass",
+    "macos-arm64:sparse_window:53:hashed": "pass",
+    "macos-arm64:sparse_window:53:raw": "pass",
+    "macos-arm64:sparse_window:53:raw-replay": "pass",
+    "macos-arm64:sparse_window:54:absolute": "pass",
+    "macos-arm64:sparse_window:54:ci": "pass",
+    "macos-arm64:sparse_window:54:hashed": "pass",
+    "macos-arm64:sparse_window:54:raw": "pass",
+    "macos-arm64:sparse_window:54:raw-replay": "pass",
+    "macos-arm64:sparse_window:arm-order": "pass",
+    "macos-arm64:sparse_window:interleaved-order": "pass",
+    "macos-arm64:splice_eight:91:absolute": "pass",
+    "macos-arm64:splice_eight:91:ci": "pass",
+    "macos-arm64:splice_eight:91:hashed": "pass",
+    "macos-arm64:splice_eight:91:raw": "pass",
+    "macos-arm64:splice_eight:91:raw-replay": "pass",
+    "macos-arm64:splice_eight:92:absolute": "pass",
+    "macos-arm64:splice_eight:92:ci": "pass",
+    "macos-arm64:splice_eight:92:hashed": "pass",
+    "macos-arm64:splice_eight:92:raw": "pass",
+    "macos-arm64:splice_eight:92:raw-replay": "pass",
+    "macos-arm64:splice_eight:93:absolute": "pass",
+    "macos-arm64:splice_eight:93:ci": "pass",
+    "macos-arm64:splice_eight:93:hashed": "pass",
+    "macos-arm64:splice_eight:93:raw": "pass",
+    "macos-arm64:splice_eight:93:raw-replay": "pass",
+    "macos-arm64:splice_eight:94:absolute": "pass",
+    "macos-arm64:splice_eight:94:ci": "pass",
+    "macos-arm64:splice_eight:94:hashed": "pass",
+    "macos-arm64:splice_eight:94:raw": "pass",
+    "macos-arm64:splice_eight:94:raw-replay": "pass",
+    "macos-arm64:splice_eight:95:absolute": "pass",
+    "macos-arm64:splice_eight:95:ci": "pass",
+    "macos-arm64:splice_eight:95:hashed": "pass",
+    "macos-arm64:splice_eight:95:raw": "pass",
+    "macos-arm64:splice_eight:95:raw-replay": "pass",
+    "macos-arm64:splice_eight:96:absolute": "pass",
+    "macos-arm64:splice_eight:96:ci": "pass",
+    "macos-arm64:splice_eight:96:hashed": "pass",
+    "macos-arm64:splice_eight:96:raw": "pass",
+    "macos-arm64:splice_eight:96:raw-replay": "pass",
+    "macos-arm64:splice_eight:arm-order": "pass",
+    "macos-arm64:splice_eight:interleaved-order": "pass",
+    "macos-arm64:splice_one:85:absolute": "pass",
+    "macos-arm64:splice_one:85:ci": "pass",
+    "macos-arm64:splice_one:85:hashed": "pass",
+    "macos-arm64:splice_one:85:raw": "pass",
+    "macos-arm64:splice_one:85:raw-replay": "pass",
+    "macos-arm64:splice_one:86:absolute": "pass",
+    "macos-arm64:splice_one:86:ci": "pass",
+    "macos-arm64:splice_one:86:hashed": "pass",
+    "macos-arm64:splice_one:86:raw": "pass",
+    "macos-arm64:splice_one:86:raw-replay": "pass",
+    "macos-arm64:splice_one:87:absolute": "pass",
+    "macos-arm64:splice_one:87:ci": "pass",
+    "macos-arm64:splice_one:87:hashed": "pass",
+    "macos-arm64:splice_one:87:raw": "pass",
+    "macos-arm64:splice_one:87:raw-replay": "pass",
+    "macos-arm64:splice_one:88:absolute": "pass",
+    "macos-arm64:splice_one:88:ci": "pass",
+    "macos-arm64:splice_one:88:hashed": "pass",
+    "macos-arm64:splice_one:88:raw": "pass",
+    "macos-arm64:splice_one:88:raw-replay": "pass",
+    "macos-arm64:splice_one:89:absolute": "pass",
+    "macos-arm64:splice_one:89:ci": "pass",
+    "macos-arm64:splice_one:89:hashed": "pass",
+    "macos-arm64:splice_one:89:raw": "pass",
+    "macos-arm64:splice_one:89:raw-replay": "pass",
+    "macos-arm64:splice_one:90:absolute": "pass",
+    "macos-arm64:splice_one:90:ci": "pass",
+    "macos-arm64:splice_one:90:hashed": "pass",
+    "macos-arm64:splice_one:90:raw": "pass",
+    "macos-arm64:splice_one:90:raw-replay": "pass",
+    "macos-arm64:splice_one:arm-order": "pass",
+    "macos-arm64:splice_one:interleaved-order": "pass",
+    "macos-arm64:target-identity": "pass",
+    "macos-arm64:versioned_full_read:79:absolute": "pass",
+    "macos-arm64:versioned_full_read:79:ci": "pass",
+    "macos-arm64:versioned_full_read:79:hashed": "pass",
+    "macos-arm64:versioned_full_read:79:raw": "pass",
+    "macos-arm64:versioned_full_read:79:raw-replay": "pass",
+    "macos-arm64:versioned_full_read:80:absolute": "pass",
+    "macos-arm64:versioned_full_read:80:ci": "pass",
+    "macos-arm64:versioned_full_read:80:hashed": "pass",
+    "macos-arm64:versioned_full_read:80:raw": "pass",
+    "macos-arm64:versioned_full_read:80:raw-replay": "pass",
+    "macos-arm64:versioned_full_read:81:absolute": "pass",
+    "macos-arm64:versioned_full_read:81:ci": "pass",
+    "macos-arm64:versioned_full_read:81:hashed": "pass",
+    "macos-arm64:versioned_full_read:81:raw": "pass",
+    "macos-arm64:versioned_full_read:81:raw-replay": "pass",
+    "macos-arm64:versioned_full_read:82:absolute": "pass",
+    "macos-arm64:versioned_full_read:82:ci": "pass",
+    "macos-arm64:versioned_full_read:82:hashed": "pass",
+    "macos-arm64:versioned_full_read:82:raw": "pass",
+    "macos-arm64:versioned_full_read:82:raw-replay": "pass",
+    "macos-arm64:versioned_full_read:83:absolute": "pass",
+    "macos-arm64:versioned_full_read:83:ci": "pass",
+    "macos-arm64:versioned_full_read:83:hashed": "pass",
+    "macos-arm64:versioned_full_read:83:raw": "pass",
+    "macos-arm64:versioned_full_read:83:raw-replay": "pass",
+    "macos-arm64:versioned_full_read:84:absolute": "pass",
+    "macos-arm64:versioned_full_read:84:ci": "pass",
+    "macos-arm64:versioned_full_read:84:hashed": "pass",
+    "macos-arm64:versioned_full_read:84:raw": "pass",
+    "macos-arm64:versioned_full_read:84:raw-replay": "pass",
+    "macos-arm64:versioned_full_read:arm-order": "pass",
+    "macos-arm64:versioned_full_read:interleaved-order": "pass",
+    "macos-arm64:warm:base:12-samples": "pass",
+    "macos-arm64:warm:base:bootstrap-ci": "pass",
+    "macos-arm64:warm:candidate:12-samples": "pass",
+    "macos-arm64:warm:candidate:bootstrap-ci": "pass",
+    "macos-arm64:warm:filesystem-order": "pass",
+    "macos-arm64:warm:positive-filesystem-samples": "pass",
+    "macos-arm64:warm:summary-variants": "pass",
+    "macos-arm64:xxh3_version_10k:25:absolute": "pass",
+    "macos-arm64:xxh3_version_10k:25:ci": "pass",
+    "macos-arm64:xxh3_version_10k:25:hashed": "pass",
+    "macos-arm64:xxh3_version_10k:25:raw": "pass",
+    "macos-arm64:xxh3_version_10k:25:raw-replay": "pass",
+    "macos-arm64:xxh3_version_10k:26:absolute": "pass",
+    "macos-arm64:xxh3_version_10k:26:ci": "pass",
+    "macos-arm64:xxh3_version_10k:26:hashed": "pass",
+    "macos-arm64:xxh3_version_10k:26:raw": "pass",
+    "macos-arm64:xxh3_version_10k:26:raw-replay": "pass",
+    "macos-arm64:xxh3_version_10k:27:absolute": "pass",
+    "macos-arm64:xxh3_version_10k:27:ci": "pass",
+    "macos-arm64:xxh3_version_10k:27:hashed": "pass",
+    "macos-arm64:xxh3_version_10k:27:raw": "pass",
+    "macos-arm64:xxh3_version_10k:27:raw-replay": "pass",
+    "macos-arm64:xxh3_version_10k:28:absolute": "pass",
+    "macos-arm64:xxh3_version_10k:28:ci": "pass",
+    "macos-arm64:xxh3_version_10k:28:hashed": "pass",
+    "macos-arm64:xxh3_version_10k:28:raw": "pass",
+    "macos-arm64:xxh3_version_10k:28:raw-replay": "pass",
+    "macos-arm64:xxh3_version_10k:29:absolute": "pass",
+    "macos-arm64:xxh3_version_10k:29:ci": "pass",
+    "macos-arm64:xxh3_version_10k:29:hashed": "pass",
+    "macos-arm64:xxh3_version_10k:29:raw": "pass",
+    "macos-arm64:xxh3_version_10k:29:raw-replay": "pass",
+    "macos-arm64:xxh3_version_10k:30:absolute": "pass",
+    "macos-arm64:xxh3_version_10k:30:ci": "pass",
+    "macos-arm64:xxh3_version_10k:30:hashed": "pass",
+    "macos-arm64:xxh3_version_10k:30:raw": "pass",
+    "macos-arm64:xxh3_version_10k:30:raw-replay": "pass",
+    "macos-arm64:xxh3_version_10k:arm-order": "pass",
+    "macos-arm64:xxh3_version_10k:interleaved-order": "pass",
+    "macos-arm64:xxh3_version_50k:31:absolute": "pass",
+    "macos-arm64:xxh3_version_50k:31:ci": "pass",
+    "macos-arm64:xxh3_version_50k:31:hashed": "pass",
+    "macos-arm64:xxh3_version_50k:31:raw": "pass",
+    "macos-arm64:xxh3_version_50k:31:raw-replay": "pass",
+    "macos-arm64:xxh3_version_50k:32:absolute": "pass",
+    "macos-arm64:xxh3_version_50k:32:ci": "pass",
+    "macos-arm64:xxh3_version_50k:32:hashed": "pass",
+    "macos-arm64:xxh3_version_50k:32:raw": "pass",
+    "macos-arm64:xxh3_version_50k:32:raw-replay": "pass",
+    "macos-arm64:xxh3_version_50k:33:absolute": "pass",
+    "macos-arm64:xxh3_version_50k:33:ci": "pass",
+    "macos-arm64:xxh3_version_50k:33:hashed": "pass",
+    "macos-arm64:xxh3_version_50k:33:raw": "pass",
+    "macos-arm64:xxh3_version_50k:33:raw-replay": "pass",
+    "macos-arm64:xxh3_version_50k:34:absolute": "pass",
+    "macos-arm64:xxh3_version_50k:34:ci": "pass",
+    "macos-arm64:xxh3_version_50k:34:hashed": "pass",
+    "macos-arm64:xxh3_version_50k:34:raw": "pass",
+    "macos-arm64:xxh3_version_50k:34:raw-replay": "pass",
+    "macos-arm64:xxh3_version_50k:35:absolute": "pass",
+    "macos-arm64:xxh3_version_50k:35:ci": "pass",
+    "macos-arm64:xxh3_version_50k:35:hashed": "pass",
+    "macos-arm64:xxh3_version_50k:35:raw": "pass",
+    "macos-arm64:xxh3_version_50k:35:raw-replay": "pass",
+    "macos-arm64:xxh3_version_50k:36:absolute": "pass",
+    "macos-arm64:xxh3_version_50k:36:ci": "pass",
+    "macos-arm64:xxh3_version_50k:36:hashed": "pass",
+    "macos-arm64:xxh3_version_50k:36:raw": "pass",
+    "macos-arm64:xxh3_version_50k:36:raw-replay": "pass",
+    "macos-arm64:xxh3_version_50k:arm-order": "pass",
+    "macos-arm64:xxh3_version_50k:interleaved-order": "pass",
+    "phase-boundary:harness-parent-exact": "pass",
+    "phase-boundary:no-src-changes-after-harness-parent": "pass",
+    "repository:clean-worktree": "pass"
+  },
+  "phase0_boundary": {
+    "changed_paths_after_harness_parent": [
+      "Cargo.lock",
+      "Cargo.toml",
+      "benches/V2_BASELINE.md",
+      "benches/hashline.rs",
+      "benches/support/phase0.py",
+      "benches/support/phase0_resources.rs",
+      "benches/support/phase0_workloads.rs",
+      "benches/support/test_phase0.py",
+      "rust-toolchain.toml"
+    ],
+    "harness_commit": "6ce5fb5343552d63be183e4c413ee45a628cc1ae",
+    "harness_parent": "9099e7df7a199ff803817d493ff7fd760baa00a5",
+    "note": "The plan baseline parent-to-harness-parent delta is signed commit 9099e7df and adds Apache-2.0 source headers only; it predates the Phase 0 harness.",
+    "production_src_changes_after_harness_parent": []
+  },
+  "plan": {
+    "baseline_commit": "f3a2f3f41076fc48f3aa4836eda873b21f7a6be6",
+    "path": ".omx/plans/2026-07-31-incompatible-max-performance-redesign.md",
+    "sha256": "db00bf029f184811b79ab709df064a3fb9b23a9ab64562e28432e43ca8a41a6f"
+  },
+  "platforms": {
+    "linux-amd64": {
+      "baseline_absolute_estimate_files": 55,
+      "baseline_raw_criterion": "baseline/criterion",
+      "byte_count": 605377617,
+      "candidate_absolute_estimate_files": 89,
+      "candidate_raw_criterion": "candidate/criterion",
+      "checksum_entries": 3418,
+      "corpora": {
+        "external_repository": {
+          "aggregate_sha256": "029947311a3191e5cae40961b7c768dac330f87b01de44f765831e02da39f015",
+          "commit": "adc2ae7af2caaea83985fbdfbc7884c159c486f2",
+          "label": "external-rust-repository",
+          "path": "/home/zchee/phase0-6afe83059de2/tokio",
+          "rust_bytes": 5613697,
+          "rust_file_count": 790
+        },
+        "repository": {
+          "aggregate_sha256": "73750e81f9e614f88ef9745b1d83c279fcf7fc3a0f8910215f1cc931231e0cb8",
+          "commit": "6afe83059de218d71d4161fb36848d849c9da0a6",
+          "label": "hashline-rs",
+          "path": "/home/zchee/phase0-6afe83059de2/hashline-rs",
+          "rust_bytes": 435495,
+          "rust_file_count": 20
+        },
+        "synthetic": {
+          "generator": "benches/support/phase0_workloads.rs",
+          "seeds": [
+            "0xB2000010",
+            "0xB2000050",
+            "0xB2000100",
+            "0xf1500050"
+          ]
+        }
+      },
+      "environment": {
+        "ambient_rustflags_present": false,
+        "benchmark_rustflags_present": false,
+        "cargo": "cargo 1.99.0-nightly (7c83d4cc0 2026-07-29)\n",
+        "cpu_count": 44,
+        "load_average_at_capture_start": [
+          0.03857421875,
+          0.01416015625,
+          0.0126953125
+        ],
+        "machine": "x86_64",
+        "rustc": "rustc 1.99.0-nightly (8ab9fdff5 2026-07-30)\nbinary: rustc\ncommit-hash: 8ab9fdff5a91b9f2b5ed57fb0275452d9a0d0280\ncommit-date: 2026-07-30\nhost: x86_64-unknown-linux-gnu\nrelease: 1.99.0-nightly\nLLVM version: 22.1.8\n",
+        "system": "Linux"
+      },
+      "file_count": 3419,
+      "filesystem": [
+        {
+          "base": {
+            "cache_state": "cold",
+            "estimate": {
+              "lower_bound_ns": 12680434.0,
+              "point_estimate_ns": 13236609.0,
+              "upper_bound_ns": 13535574.5
+            },
+            "sample_count": 12,
+            "samples_ns": [
+              9746719,
+              14013545,
+              13639880,
+              13253215,
+              12997052,
+              12794774,
+              13288394,
+              13431269,
+              13220003,
+              13719436,
+              12566094,
+              12379645
+            ],
+            "variant": "base"
+          },
+          "base_over_candidate_ratio": 1.4279163574662317,
+          "cache_state": "cold",
+          "candidate": {
+            "cache_state": "cold",
+            "estimate": {
+              "lower_bound_ns": 9071738.5,
+              "point_estimate_ns": 9269877.0,
+              "upper_bound_ns": 9617802.5
+            },
+            "sample_count": 12,
+            "samples_ns": [
+              18499921,
+              9083522,
+              9059955,
+              9620874,
+              9347468,
+              9614731,
+              9940629,
+              8997913,
+              9492264,
+              9192286,
+              9159635,
+              9016687
+            ],
+            "variant": "candidate"
+          }
+        },
+        {
+          "base": {
+            "cache_state": "warm",
+            "estimate": {
+              "lower_bound_ns": 8445175.0,
+              "point_estimate_ns": 8775181.5,
+              "upper_bound_ns": 8926190.0
+            },
+            "sample_count": 12,
+            "samples_ns": [
+              8889225,
+              8166846,
+              8157418,
+              8527613,
+              9195516,
+              8992467,
+              8872336,
+              8362737,
+              8963155,
+              8536602,
+              8794603,
+              8755760
+            ],
+            "variant": "base"
+          },
+          "base_over_candidate_ratio": 1.8580373433431658,
+          "cache_state": "warm",
+          "candidate": {
+            "cache_state": "warm",
+            "estimate": {
+              "lower_bound_ns": 4575846.5,
+              "point_estimate_ns": 4722823.0,
+              "upper_bound_ns": 5146660.0
+            },
+            "sample_count": 12,
+            "samples_ns": [
+              4551120,
+              4586262,
+              5206851,
+              4565431,
+              4602428,
+              4763834,
+              5405507,
+              4681812,
+              5166626,
+              5126694,
+              4528880,
+              5081917
+            ],
+            "variant": "candidate"
+          }
+        }
+      ],
+      "paired": [
+        {
+          "base_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 850919.7150297619,
+              "upper_bound_ns": 851839.4609375
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 851495.8833333333,
+              "upper_bound_ns": 851918.3454545455
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 849450.8932291667,
+              "upper_bound_ns": 849898.8607954546
+            }
+          ],
+          "base_function": "base_current_index",
+          "base_median_point_ns": 851439.6939338236,
+          "base_over_candidate_ratio": 3.2083756251420494,
+          "base_point_estimates_ns": [
+            851439.6939338236,
+            851719.1205357143,
+            849715.375
+          ],
+          "candidate_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 264678.06833333336,
+              "upper_bound_ns": 264930.85083333333
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 265564.27828571433,
+              "upper_bound_ns": 265830.66978070175
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 265180.2,
+              "upper_bound_ns": 265421.2014285714
+            }
+          ],
+          "candidate_function": "candidate_raw_line_hashes",
+          "candidate_median_point_ns": 265380.3025,
+          "candidate_point_estimates_ns": [
+            264873.70499999996,
+            265752.712,
+            265380.3025
+          ],
+          "group": "phase0_snapshot_raw/10000",
+          "name": "raw_lines_10k",
+          "order": [
+            "base",
+            "candidate",
+            "candidate",
+            "base",
+            "base",
+            "candidate"
+          ],
+          "raw_paths": [
+            "paired/raw_lines_10k/01-base",
+            "paired/raw_lines_10k/02-candidate",
+            "paired/raw_lines_10k/03-candidate",
+            "paired/raw_lines_10k/04-base",
+            "paired/raw_lines_10k/05-base",
+            "paired/raw_lines_10k/06-candidate"
+          ]
+        },
+        {
+          "base_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 4349464.707894737,
+              "upper_bound_ns": 4352357.143939394
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 4348446.511363637,
+              "upper_bound_ns": 4349943.519762846
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 4349395.376157407,
+              "upper_bound_ns": 4354336.140151516
+            }
+          ],
+          "base_function": "base_current_index",
+          "base_median_point_ns": 4350817.791666666,
+          "base_over_candidate_ratio": 2.9732921639385297,
+          "base_point_estimates_ns": [
+            4350817.791666666,
+            4349247.949999999,
+            4351695.922268908
+          ],
+          "candidate_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 1456151.765714286,
+              "upper_bound_ns": 1474553.8774509802
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 1450355.3812121213,
+              "upper_bound_ns": 1451311.326984127
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 1455222.9100000001,
+              "upper_bound_ns": 1476298.9590225564
+            }
+          ],
+          "candidate_function": "candidate_raw_line_hashes",
+          "candidate_median_point_ns": 1463299.7875,
+          "candidate_point_estimates_ns": [
+            1472738.1381818182,
+            1450937.3535714285,
+            1463299.7875
+          ],
+          "group": "phase0_snapshot_raw/50000",
+          "name": "raw_lines_50k",
+          "order": [
+            "base",
+            "candidate",
+            "candidate",
+            "base",
+            "base",
+            "candidate"
+          ],
+          "raw_paths": [
+            "paired/raw_lines_50k/07-base",
+            "paired/raw_lines_50k/08-candidate",
+            "paired/raw_lines_50k/09-candidate",
+            "paired/raw_lines_50k/10-base",
+            "paired/raw_lines_50k/11-base",
+            "paired/raw_lines_50k/12-candidate"
+          ]
+        },
+        {
+          "base_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 851074.8494642857,
+              "upper_bound_ns": 851473.4914529915
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 851976.1704545454,
+              "upper_bound_ns": 852484.4434626437
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 850949.9263649426,
+              "upper_bound_ns": 851674.625
+            }
+          ],
+          "base_function": "base_current_index",
+          "base_median_point_ns": 851319.2928921569,
+          "base_over_candidate_ratio": 39.57635880226456,
+          "base_point_estimates_ns": [
+            851224.8184808613,
+            852265.3731203007,
+            851319.2928921569
+          ],
+          "candidate_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 21501.626049783546,
+              "upper_bound_ns": 21511.358726851853
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 21511.559402777777,
+              "upper_bound_ns": 21517.4
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 21507.748259769025,
+              "upper_bound_ns": 21515.021887824896
+            }
+          ],
+          "candidate_function": "candidate_version_and_count",
+          "candidate_median_point_ns": 21510.803890413597,
+          "candidate_point_estimates_ns": [
+            21506.170866013075,
+            21514.08363095238,
+            21510.803890413597
+          ],
+          "group": "phase0_snapshot_gxhash/10000",
+          "name": "gxhash_version_10k",
+          "order": [
+            "base",
+            "candidate",
+            "candidate",
+            "base",
+            "base",
+            "candidate"
+          ],
+          "raw_paths": [
+            "paired/gxhash_version_10k/13-base",
+            "paired/gxhash_version_10k/14-candidate",
+            "paired/gxhash_version_10k/15-candidate",
+            "paired/gxhash_version_10k/16-base",
+            "paired/gxhash_version_10k/17-base",
+            "paired/gxhash_version_10k/18-candidate"
+          ]
+        },
+        {
+          "base_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 4382307.184027778,
+              "upper_bound_ns": 4385260.228846154
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 4387693.983750001,
+              "upper_bound_ns": 4391514.722222222
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 4400352.091666667,
+              "upper_bound_ns": 4406919.773148148
+            }
+          ],
+          "base_function": "base_current_index",
+          "base_median_point_ns": 4390264.337145969,
+          "base_over_candidate_ratio": 33.97226058893475,
+          "base_point_estimates_ns": [
+            4383368.445833333,
+            4390264.337145969,
+            4402672.670289855
+          ],
+          "candidate_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 127314.61693336337,
+              "upper_bound_ns": 127388.56552287581
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 129975.27915966386,
+              "upper_bound_ns": 130007.95542319749
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 128693.49803921569,
+              "upper_bound_ns": 129651.46563240682
+            }
+          ],
+          "candidate_function": "candidate_version_and_count",
+          "candidate_median_point_ns": 129230.85661764706,
+          "candidate_point_estimates_ns": [
+            127344.73144257703,
+            129986.423015873,
+            129230.85661764706
+          ],
+          "group": "phase0_snapshot_gxhash/50000",
+          "name": "gxhash_version_50k",
+          "order": [
+            "base",
+            "candidate",
+            "candidate",
+            "base",
+            "base",
+            "candidate"
+          ],
+          "raw_paths": [
+            "paired/gxhash_version_50k/19-base",
+            "paired/gxhash_version_50k/20-candidate",
+            "paired/gxhash_version_50k/21-candidate",
+            "paired/gxhash_version_50k/22-base",
+            "paired/gxhash_version_50k/23-base",
+            "paired/gxhash_version_50k/24-candidate"
+          ]
+        },
+        {
+          "base_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 856577.5026515152,
+              "upper_bound_ns": 857000.3203125
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 851307.8399305556,
+              "upper_bound_ns": 851680.8291666666
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 851088.9273809524,
+              "upper_bound_ns": 851417.0409090909
+            }
+          ],
+          "base_function": "base_current_index",
+          "base_median_point_ns": 851585.1533333333,
+          "base_over_candidate_ratio": 24.689925495726023,
+          "base_point_estimates_ns": [
+            856777.083653846,
+            851585.1533333333,
+            851243.5798611111
+          ],
+          "candidate_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 34487.16175048356,
+              "upper_bound_ns": 34492.28800975178
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 34482.44984485816,
+              "upper_bound_ns": 34487.09964405695
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 34495.269230769234,
+              "upper_bound_ns": 34502.33443861104
+            }
+          ],
+          "candidate_function": "candidate_version_and_count",
+          "candidate_median_point_ns": 34491.19980053192,
+          "candidate_point_estimates_ns": [
+            34491.19980053192,
+            34484.764849290776,
+            34498.73730920444
+          ],
+          "group": "phase0_snapshot_xxh3/10000",
+          "name": "xxh3_version_10k",
+          "order": [
+            "base",
+            "candidate",
+            "candidate",
+            "base",
+            "base",
+            "candidate"
+          ],
+          "raw_paths": [
+            "paired/xxh3_version_10k/25-base",
+            "paired/xxh3_version_10k/26-candidate",
+            "paired/xxh3_version_10k/27-candidate",
+            "paired/xxh3_version_10k/28-base",
+            "paired/xxh3_version_10k/29-base",
+            "paired/xxh3_version_10k/30-candidate"
+          ]
+        },
+        {
+          "base_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 4386722.958333334,
+              "upper_bound_ns": 4391668.916666666
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 4345200.933035715,
+              "upper_bound_ns": 4347046.743589744
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 4370803.611111111,
+              "upper_bound_ns": 4372339.117897727
+            }
+          ],
+          "base_function": "base_current_index",
+          "base_median_point_ns": 4371698.551724138,
+          "base_over_candidate_ratio": 24.181173696730497,
+          "base_point_estimates_ns": [
+            4389616.842857143,
+            4346212.368181818,
+            4371698.551724138
+          ],
+          "candidate_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 180429.64634773662,
+              "upper_bound_ns": 180454.75456924317
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 181801.9056712963,
+              "upper_bound_ns": 181859.56274703558
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 180773.70347222223,
+              "upper_bound_ns": 180816.36516203702
+            }
+          ],
+          "candidate_function": "candidate_version_and_count",
+          "candidate_median_point_ns": 180789.34490740742,
+          "candidate_point_estimates_ns": [
+            180441.49141483515,
+            181821.76587301586,
+            180789.34490740742
+          ],
+          "group": "phase0_snapshot_xxh3/50000",
+          "name": "xxh3_version_50k",
+          "order": [
+            "base",
+            "candidate",
+            "candidate",
+            "base",
+            "base",
+            "candidate"
+          ],
+          "raw_paths": [
+            "paired/xxh3_version_50k/31-base",
+            "paired/xxh3_version_50k/32-candidate",
+            "paired/xxh3_version_50k/33-candidate",
+            "paired/xxh3_version_50k/34-base",
+            "paired/xxh3_version_50k/35-base",
+            "paired/xxh3_version_50k/36-candidate"
+          ]
+        },
+        {
+          "base_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 852528.5890151515,
+              "upper_bound_ns": 853321.0340544872
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 852765.9478365384,
+              "upper_bound_ns": 853197.2828346856
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 856392.9220753205,
+              "upper_bound_ns": 856808.0847259358
+            }
+          ],
+          "base_function": "base_current_index",
+          "base_median_point_ns": 853003.6305059524,
+          "base_over_candidate_ratio": 9.493326424813544,
+          "base_point_estimates_ns": [
+            853003.6305059524,
+            852918.2395833333,
+            856587.3961352657
+          ],
+          "candidate_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 89793.58872579967,
+              "upper_bound_ns": 89873.11747685185
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 89884.430239899,
+              "upper_bound_ns": 89990.72179460866
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 89787.45370370371,
+              "upper_bound_ns": 89806.31278935185
+            }
+          ],
+          "candidate_function": "candidate_version_and_count",
+          "candidate_median_point_ns": 89852.97590488216,
+          "candidate_point_estimates_ns": [
+            89852.97590488216,
+            89919.0882936508,
+            89795.42155349794
+          ],
+          "group": "phase0_snapshot_blake3/10000",
+          "name": "blake3_version_10k",
+          "order": [
+            "base",
+            "candidate",
+            "candidate",
+            "base",
+            "base",
+            "candidate"
+          ],
+          "raw_paths": [
+            "paired/blake3_version_10k/37-base",
+            "paired/blake3_version_10k/38-candidate",
+            "paired/blake3_version_10k/39-candidate",
+            "paired/blake3_version_10k/40-base",
+            "paired/blake3_version_10k/41-base",
+            "paired/blake3_version_10k/42-candidate"
+          ]
+        },
+        {
+          "base_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 4378188.314536341,
+              "upper_bound_ns": 4383152.723505435
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 4385016.071428571,
+              "upper_bound_ns": 4387848.75
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 4406016.291666667,
+              "upper_bound_ns": 4410221.107142857
+            }
+          ],
+          "base_function": "base_current_index",
+          "base_median_point_ns": 4386850.54,
+          "base_over_candidate_ratio": 9.157946574890957,
+          "base_point_estimates_ns": [
+            4380646.519917583,
+            4386850.54,
+            4407530.8875
+          ],
+          "candidate_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 481887.6801470588,
+              "upper_bound_ns": 482110.1625
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 478969.67734213255,
+              "upper_bound_ns": 479073.1831709957
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 478316.1974206349,
+              "upper_bound_ns": 478481.0190476191
+            }
+          ],
+          "candidate_function": "candidate_version_and_count",
+          "candidate_median_point_ns": 479021.19805194804,
+          "candidate_point_estimates_ns": [
+            482017.5,
+            479021.19805194804,
+            478405.9464285714
+          ],
+          "group": "phase0_snapshot_blake3/50000",
+          "name": "blake3_version_50k",
+          "order": [
+            "base",
+            "candidate",
+            "candidate",
+            "base",
+            "base",
+            "candidate"
+          ],
+          "raw_paths": [
+            "paired/blake3_version_50k/43-base",
+            "paired/blake3_version_50k/44-candidate",
+            "paired/blake3_version_50k/45-candidate",
+            "paired/blake3_version_50k/46-base",
+            "paired/blake3_version_50k/47-base",
+            "paired/blake3_version_50k/48-candidate"
+          ]
+        },
+        {
+          "base_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 351330.4572192513,
+              "upper_bound_ns": 351444.0796992481
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 349912.3964912281,
+              "upper_bound_ns": 350179.72869674186
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 351168.9810710988,
+              "upper_bound_ns": 351383.03684210527
+            }
+          ],
+          "base_function": "base_current_partial_index",
+          "base_median_point_ns": 351291.75250626565,
+          "base_over_candidate_ratio": 0.4946657103042999,
+          "base_point_estimates_ns": [
+            351360.87005847954,
+            350008.03996101365,
+            351291.75250626565
+          ],
+          "candidate_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 709893.5551932367,
+              "upper_bound_ns": 711530.9526515151
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 710935.3066666666,
+              "upper_bound_ns": 712057.3964114833
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 709523.1043956045,
+              "upper_bound_ns": 709712.8574675324
+            }
+          ],
+          "candidate_function": "candidate_sparse_positions",
+          "candidate_median_point_ns": 710159.9023109244,
+          "candidate_point_estimates_ns": [
+            710159.9023109244,
+            711567.7166666667,
+            709653.5377289378
+          ],
+          "group": "phase0_sparse_select/window_2k_of_100k",
+          "name": "sparse_window",
+          "order": [
+            "base",
+            "candidate",
+            "candidate",
+            "base",
+            "base",
+            "candidate"
+          ],
+          "raw_paths": [
+            "paired/sparse_window/49-base",
+            "paired/sparse_window/50-candidate",
+            "paired/sparse_window/51-candidate",
+            "paired/sparse_window/52-base",
+            "paired/sparse_window/53-base",
+            "paired/sparse_window/54-candidate"
+          ]
+        },
+        {
+          "base_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 4367681.329013377,
+              "upper_bound_ns": 4370658.592763158
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 4394265.233333333,
+              "upper_bound_ns": 4397356.186813187
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 4386407.474789916,
+              "upper_bound_ns": 4389908.243589744
+            }
+          ],
+          "base_function": "base_current_index",
+          "base_median_point_ns": 4388355.708333334,
+          "base_over_candidate_ratio": 7.049518581121384,
+          "base_point_estimates_ns": [
+            4368253.746153846,
+            4396317.189285714,
+            4388355.708333334
+          ],
+          "candidate_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 621506.1017316016,
+              "upper_bound_ns": 621888.5373737374
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 622390.0427489178,
+              "upper_bound_ns": 622648.5151515151
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 622526.7384370016,
+              "upper_bound_ns": 622947.8393939394
+            }
+          ],
+          "candidate_function": "candidate_offsets",
+          "candidate_median_point_ns": 622504.3111575525,
+          "candidate_point_estimates_ns": [
+            621716.9648974214,
+            622504.3111575525,
+            622805.7613636364
+          ],
+          "group": "phase0_offsets/u32_50k",
+          "name": "offsets_u32",
+          "order": [
+            "base",
+            "candidate",
+            "candidate",
+            "base",
+            "base",
+            "candidate"
+          ],
+          "raw_paths": [
+            "paired/offsets_u32/55-base",
+            "paired/offsets_u32/56-candidate",
+            "paired/offsets_u32/57-candidate",
+            "paired/offsets_u32/58-base",
+            "paired/offsets_u32/59-base",
+            "paired/offsets_u32/60-candidate"
+          ]
+        },
+        {
+          "base_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 4377525.072222222,
+              "upper_bound_ns": 4381265.708333334
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 4376483.15,
+              "upper_bound_ns": 4383982.814613527
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 4391595.15625,
+              "upper_bound_ns": 4397322.375
+            }
+          ],
+          "base_function": "base_current_index",
+          "base_median_point_ns": 4379920.516483517,
+          "base_over_candidate_ratio": 7.181429393493557,
+          "base_point_estimates_ns": [
+            4378706.465909091,
+            4379920.516483517,
+            4394421.8
+          ],
+          "candidate_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 610664.3806818181,
+              "upper_bound_ns": 611425.4303030303
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 608765.8290909091,
+              "upper_bound_ns": 609146.3312289562
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 609756.5893939394,
+              "upper_bound_ns": 611166.3546453547
+            }
+          ],
+          "candidate_function": "candidate_offsets",
+          "candidate_median_point_ns": 609895.3671328672,
+          "candidate_point_estimates_ns": [
+            610910.7102272727,
+            608952.5234330886,
+            609895.3671328672
+          ],
+          "group": "phase0_offsets/u64_50k",
+          "name": "offsets_u64",
+          "order": [
+            "base",
+            "candidate",
+            "candidate",
+            "base",
+            "base",
+            "candidate"
+          ],
+          "raw_paths": [
+            "paired/offsets_u64/61-base",
+            "paired/offsets_u64/62-candidate",
+            "paired/offsets_u64/63-candidate",
+            "paired/offsets_u64/64-base",
+            "paired/offsets_u64/65-base",
+            "paired/offsets_u64/66-candidate"
+          ]
+        },
+        {
+          "base_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 1324649.5238095238,
+              "upper_bound_ns": 1325130.983076923
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 1319457.383045977,
+              "upper_bound_ns": 1321121.7999999998
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 1317092.2593167704,
+              "upper_bound_ns": 1317881.9585714284
+            }
+          ],
+          "base_function": "base_current_render",
+          "base_median_point_ns": 1319896.1658869395,
+          "base_over_candidate_ratio": 2.2454891224110245,
+          "base_point_estimates_ns": [
+            1324856.7787037035,
+            1319896.1658869395,
+            1317477.9638888887
+          ],
+          "candidate_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 585703.2516233766,
+              "upper_bound_ns": 586529.4249011858
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 598177.8354145854,
+              "upper_bound_ns": 600184.896969697
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 587173.0475,
+              "upper_bound_ns": 588257.5992275698
+            }
+          ],
+          "candidate_function": "candidate_position_render",
+          "candidate_median_point_ns": 587798.9577922078,
+          "candidate_point_estimates_ns": [
+            586127.7595426885,
+            599331.2281170841,
+            587798.9577922078
+          ],
+          "group": "phase0_position_render/full_10k",
+          "name": "position_render_full",
+          "order": [
+            "base",
+            "candidate",
+            "candidate",
+            "base",
+            "base",
+            "candidate"
+          ],
+          "raw_paths": [
+            "paired/position_render_full/67-base",
+            "paired/position_render_full/68-candidate",
+            "paired/position_render_full/69-candidate",
+            "paired/position_render_full/70-base",
+            "paired/position_render_full/71-base",
+            "paired/position_render_full/72-candidate"
+          ]
+        },
+        {
+          "base_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 456040.2365079365,
+              "upper_bound_ns": 456266.9845238095
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 456398.5681818182,
+              "upper_bound_ns": 458463.59936507937
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 452221.1676767677,
+              "upper_bound_ns": 453463.64323232323
+            }
+          ],
+          "base_function": "base_current_render",
+          "base_median_point_ns": 456181.9462184874,
+          "base_over_candidate_ratio": 0.4728854877710766,
+          "base_point_estimates_ns": [
+            456181.9462184874,
+            457498.18125,
+            452400.3416666667
+          ],
+          "candidate_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 958151.3058201058,
+              "upper_bound_ns": 958592.388961039
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 964143.3422459892,
+              "upper_bound_ns": 964967.0985086341
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 964526.970545977,
+              "upper_bound_ns": 965189.4308390022
+            }
+          ],
+          "candidate_function": "candidate_position_render",
+          "candidate_median_point_ns": 964677.4071428571,
+          "candidate_point_estimates_ns": [
+            958389.0892857143,
+            964677.4071428571,
+            964723.7693096378
+          ],
+          "group": "phase0_position_render/window_2k_of_100k",
+          "name": "position_render_window",
+          "order": [
+            "base",
+            "candidate",
+            "candidate",
+            "base",
+            "base",
+            "candidate"
+          ],
+          "raw_paths": [
+            "paired/position_render_window/73-base",
+            "paired/position_render_window/74-candidate",
+            "paired/position_render_window/75-candidate",
+            "paired/position_render_window/76-base",
+            "paired/position_render_window/77-base",
+            "paired/position_render_window/78-candidate"
+          ]
+        },
+        {
+          "base_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 1321387.1461538463,
+              "upper_bound_ns": 1321906.702
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 1318056.3769230768,
+              "upper_bound_ns": 1318655.1866666668
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 1326701.148148148,
+              "upper_bound_ns": 1330431.857142857
+            }
+          ],
+          "base_function": "base_current_read",
+          "base_median_point_ns": 1321559.06875,
+          "base_over_candidate_ratio": 2.125550628149968,
+          "base_point_estimates_ns": [
+            1321559.06875,
+            1318556.9500000002,
+            1329960.745833333
+          ],
+          "candidate_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 619417.8148148148,
+              "upper_bound_ns": 620358.3930512017
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 621540.5154845155,
+              "upper_bound_ns": 623059.0956112853
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 622061.9229249011,
+              "upper_bound_ns": 623026.313841331
+            }
+          ],
+          "candidate_function": "candidate_versioned_read",
+          "candidate_median_point_ns": 621749.0429292929,
+          "candidate_point_estimates_ns": [
+            619804.1353132161,
+            621749.0429292929,
+            622461.1241626794
+          ],
+          "group": "phase0_full_read/full_10k",
+          "name": "versioned_full_read",
+          "order": [
+            "base",
+            "candidate",
+            "candidate",
+            "base",
+            "base",
+            "candidate"
+          ],
+          "raw_paths": [
+            "paired/versioned_full_read/79-base",
+            "paired/versioned_full_read/80-candidate",
+            "paired/versioned_full_read/81-candidate",
+            "paired/versioned_full_read/82-base",
+            "paired/versioned_full_read/83-base",
+            "paired/versioned_full_read/84-candidate"
+          ]
+        },
+        {
+          "base_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 1015229.3597883598,
+              "upper_bound_ns": 1015835.2380952381
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 1016315.6952380952,
+              "upper_bound_ns": 1016994.3817460318
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 1015725.6914965987,
+              "upper_bound_ns": 1016425.2311688312
+            }
+          ],
+          "base_function": "base_current_apply",
+          "base_median_point_ns": 1016204.1785714286,
+          "base_over_candidate_ratio": 4.22605318738354,
+          "base_point_estimates_ns": [
+            1015499.6596849266,
+            1016633.9416208791,
+            1016204.1785714286
+          ],
+          "candidate_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 240989.48127104377,
+              "upper_bound_ns": 241025.38657407407
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 240413.64471583653,
+              "upper_bound_ns": 240479.90237166992
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 240406.7154108131,
+              "upper_bound_ns": 240457.38518518518
+            }
+          ],
+          "candidate_function": "candidate_byte_splice",
+          "candidate_median_point_ns": 240461.75793650793,
+          "candidate_point_estimates_ns": [
+            241000.2630070547,
+            240461.75793650793,
+            240418.37678062677
+          ],
+          "group": "phase0_splice/one_edit_50k",
+          "name": "splice_one",
+          "order": [
+            "base",
+            "candidate",
+            "candidate",
+            "base",
+            "base",
+            "candidate"
+          ],
+          "raw_paths": [
+            "paired/splice_one/85-base",
+            "paired/splice_one/86-candidate",
+            "paired/splice_one/87-candidate",
+            "paired/splice_one/88-base",
+            "paired/splice_one/89-base",
+            "paired/splice_one/90-candidate"
+          ]
+        },
+        {
+          "base_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 1062318.1964285714,
+              "upper_bound_ns": 1063236.1633116882
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 1062930.6114058355,
+              "upper_bound_ns": 1063307.4373015873
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 1061482.1486408329,
+              "upper_bound_ns": 1062107.3571428573
+            }
+          ],
+          "base_function": "base_current_apply",
+          "base_median_point_ns": 1062836.4897959183,
+          "base_over_candidate_ratio": 4.448740390045847,
+          "base_point_estimates_ns": [
+            1062836.4897959183,
+            1063104.4565934064,
+            1061904.5216836734
+          ],
+          "candidate_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 239062.5952729045,
+              "upper_bound_ns": 239099.9880952381
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 237441.153125,
+              "upper_bound_ns": 237506.30892857144
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 238883.79732510287,
+              "upper_bound_ns": 238932.44555201134
+            }
+          ],
+          "candidate_function": "candidate_byte_splice",
+          "candidate_median_point_ns": 238907.28534621577,
+          "candidate_point_estimates_ns": [
+            239080.05185185187,
+            237459.34881452582,
+            238907.28534621577
+          ],
+          "group": "phase0_splice/eight_edits_50k",
+          "name": "splice_eight",
+          "order": [
+            "base",
+            "candidate",
+            "candidate",
+            "base",
+            "base",
+            "candidate"
+          ],
+          "raw_paths": [
+            "paired/splice_eight/91-base",
+            "paired/splice_eight/92-candidate",
+            "paired/splice_eight/93-candidate",
+            "paired/splice_eight/94-base",
+            "paired/splice_eight/95-base",
+            "paired/splice_eight/96-candidate"
+          ]
+        },
+        {
+          "base_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 664365.9206112853,
+              "upper_bound_ns": 665330.9655172413
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 669580.6733860513,
+              "upper_bound_ns": 670109.5324543611
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 678569.5100574712,
+              "upper_bound_ns": 679414.6769776876
+            }
+          ],
+          "base_function": "base_direct_write",
+          "base_median_point_ns": 669889.9238137342,
+          "base_over_candidate_ratio": 0.9671518683673863,
+          "base_point_estimates_ns": [
+            664862.4952107279,
+            669889.9238137342,
+            679009.082183908
+          ],
+          "candidate_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 692128.2508928571,
+              "upper_bound_ns": 693106.7685439561
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 689380.4961538462,
+              "upper_bound_ns": 690412.825
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 706342.7473544974,
+              "upper_bound_ns": 708331.3490740741
+            }
+          ],
+          "candidate_function": "candidate_temp_rename",
+          "candidate_median_point_ns": 692641.9166666667,
+          "candidate_point_estimates_ns": [
+            692641.9166666667,
+            689845.7383928571,
+            707441.0302469135
+          ],
+          "group": "phase0_persist/atomic_50k",
+          "name": "atomic_persist",
+          "order": [
+            "base",
+            "candidate",
+            "candidate",
+            "base",
+            "base",
+            "candidate"
+          ],
+          "raw_paths": [
+            "paired/atomic_persist/97-base",
+            "paired/atomic_persist/98-candidate",
+            "paired/atomic_persist/99-candidate",
+            "paired/atomic_persist/100-base",
+            "paired/atomic_persist/101-base",
+            "paired/atomic_persist/102-candidate"
+          ]
+        }
+      ],
+      "primary_sha256": {
+        "SHA256SUMS.json": "d026dafa0897aff732f7c41c389281bd334f44ccd990b1f5cdc629eba2a877ba",
+        "manifest.json": "fe47f3e57bdf367a5f97231069c65add07631a8ad2b8ccbabc3ab35e5e8de83a",
+        "paired/results.json": "80e1d6c42cb14538b9609b38d5e24a681f9b389a2544a8b0c36b857ea173fb09",
+        "profiles/results.json": "71feec49960699e717e0fc5db34980636e0b3266dacdcab1007561b8e14c053a"
+      },
+      "profiles": [
+        {
+          "command_exit_code": 0,
+          "perf_data_path": "profiles/full_read/perf.data",
+          "raw_path": "profiles/full_read/perf_report.txt",
+          "scenario": "full_read",
+          "symbol_hits": [
+            "format_hashline_content",
+            "profile_full_read_once"
+          ],
+          "symbolized": true,
+          "tool": "perf"
+        },
+        {
+          "command_exit_code": 0,
+          "perf_data_path": "profiles/edit/perf.data",
+          "raw_path": "profiles/edit/perf_report.txt",
+          "scenario": "edit",
+          "symbol_hits": [
+            "apply_edits",
+            "profile_edit_once"
+          ],
+          "symbolized": true,
+          "tool": "perf"
+        },
+        {
+          "command_exit_code": 0,
+          "perf_data_path": "profiles/rare_grep/perf.data",
+          "raw_path": "profiles/rare_grep/perf_report.txt",
+          "scenario": "rare_grep",
+          "symbol_hits": [
+            "hashline4grep11search_file"
+          ],
+          "symbolized": true,
+          "tool": "perf"
+        },
+        {
+          "command_exit_code": 0,
+          "perf_data_path": "profiles/common_grep/perf.data",
+          "raw_path": "profiles/common_grep/perf_report.txt",
+          "scenario": "common_grep",
+          "symbol_hits": [
+            "hashline4grep11search_file",
+            "run_grep"
+          ],
+          "symbolized": true,
+          "tool": "perf"
+        }
+      ],
+      "quality": [
+        {
+          "command": [
+            "python3",
+            "-B",
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            "benches/support",
+            "-p",
+            "test_phase0.py"
+          ],
+          "exit_code": 0,
+          "name": "phase0_contract_tests"
+        },
+        {
+          "command": [
+            "cargo",
+            "fmt",
+            "--all",
+            "--",
+            "--check"
+          ],
+          "exit_code": 0,
+          "name": "fmt"
+        },
+        {
+          "command": [
+            "cargo",
+            "build",
+            "--all-targets"
+          ],
+          "exit_code": 0,
+          "name": "build_all"
+        },
+        {
+          "command": [
+            "cargo",
+            "build",
+            "--all-targets",
+            "--no-default-features"
+          ],
+          "exit_code": 0,
+          "name": "build_no_default"
+        },
+        {
+          "command": [
+            "cargo",
+            "clippy",
+            "--all-targets",
+            "--all-features",
+            "--",
+            "-D",
+            "warnings"
+          ],
+          "exit_code": 0,
+          "name": "clippy"
+        },
+        {
+          "command": [
+            "cargo",
+            "test",
+            "--all-targets",
+            "--all-features"
+          ],
+          "exit_code": 0,
+          "name": "test_all"
+        },
+        {
+          "command": [
+            "cargo",
+            "test",
+            "--all-targets",
+            "--no-default-features"
+          ],
+          "exit_code": 0,
+          "name": "test_no_default"
+        },
+        {
+          "command": [
+            "cargo",
+            "doc",
+            "--no-deps"
+          ],
+          "exit_code": 0,
+          "name": "doc"
+        }
+      ],
+      "resources": [
+        {
+          "allocations": {
+            "allocated_bytes": 977190,
+            "allocation_calls": 8,
+            "deallocated_bytes": 354301,
+            "deallocation_calls": 7,
+            "live_bytes": 622889,
+            "peak_live_bytes": 971501,
+            "reallocation_calls": 5
+          },
+          "label": "full_read_base",
+          "output_bytes": 611782,
+          "peak_rss_bytes": 3837952,
+          "peak_rss_source": "kibibytes converted to bytes",
+          "scenario": "full_read_base",
+          "schema_version": 1
+        },
+        {
+          "allocations": {
+            "allocated_bytes": 782968,
+            "allocation_calls": 2,
+            "deallocated_bytes": 80008,
+            "deallocation_calls": 1,
+            "live_bytes": 702960,
+            "peak_live_bytes": 782968,
+            "reallocation_calls": 0
+          },
+          "label": "full_read_candidate",
+          "output_bytes": 579459,
+          "peak_rss_bytes": 3383296,
+          "peak_rss_source": "kibibytes converted to bytes",
+          "scenario": "full_read_candidate",
+          "schema_version": 1
+        },
+        {
+          "allocations": {
+            "allocated_bytes": 5021284,
+            "allocation_calls": 23,
+            "deallocated_bytes": 2728781,
+            "deallocation_calls": 20,
+            "live_bytes": 2292503,
+            "peak_live_bytes": 5020823,
+            "reallocation_calls": 5
+          },
+          "label": "edit_50k_base",
+          "output_bytes": 2292135,
+          "peak_rss_bytes": 9076736,
+          "peak_rss_source": "kibibytes converted to bytes",
+          "scenario": "edit_50k_base",
+          "schema_version": 1
+        },
+        {
+          "allocations": {
+            "allocated_bytes": 2292139,
+            "allocation_calls": 1,
+            "deallocated_bytes": 0,
+            "deallocation_calls": 0,
+            "live_bytes": 2292139,
+            "peak_live_bytes": 2292139,
+            "reallocation_calls": 0
+          },
+          "label": "edit_50k_candidate",
+          "output_bytes": 2292139,
+          "peak_rss_bytes": 7000064,
+          "peak_rss_source": "kibibytes converted to bytes",
+          "scenario": "edit_50k_candidate",
+          "schema_version": 1
+        },
+        {
+          "allocations": {
+            "allocated_bytes": 9854637,
+            "allocation_calls": 36456,
+            "deallocated_bytes": 9784293,
+            "deallocation_calls": 36429,
+            "live_bytes": 70344,
+            "peak_live_bytes": 1984485,
+            "reallocation_calls": 11120
+          },
+          "label": "tree_grep_base",
+          "output_bytes": 13968,
+          "peak_rss_bytes": 4640768,
+          "peak_rss_source": "kibibytes converted to bytes",
+          "scenario": "tree_grep_base",
+          "schema_version": 1
+        },
+        {
+          "allocations": {
+            "allocated_bytes": 1979587,
+            "allocation_calls": 1810,
+            "deallocated_bytes": 1909171,
+            "deallocation_calls": 1783,
+            "live_bytes": 70416,
+            "peak_live_bytes": 1196418,
+            "reallocation_calls": 530
+          },
+          "label": "real_tree_grep_base_own",
+          "output_bytes": 11038,
+          "peak_rss_bytes": 4616192,
+          "peak_rss_source": "kibibytes converted to bytes",
+          "scenario": "real_tree_grep_base",
+          "schema_version": 1
+        },
+        {
+          "allocations": {
+            "allocated_bytes": 9000919,
+            "allocation_calls": 9910,
+            "deallocated_bytes": 8902599,
+            "deallocation_calls": 9878,
+            "live_bytes": 98320,
+            "peak_live_bytes": 1611464,
+            "reallocation_calls": 3710
+          },
+          "label": "real_tree_grep_base_external",
+          "output_bytes": 14585,
+          "peak_rss_bytes": 4636672,
+          "peak_rss_source": "kibibytes converted to bytes",
+          "scenario": "real_tree_grep_base",
+          "schema_version": 1
+        }
+      ],
+      "run_id": "20260731T133009Z-6afe83059de2",
+      "run_root": ".omx/goals/performance/hashline-v2-phase0/artifacts/linux-amd64/runs/20260731T133009Z-6afe83059de2",
+      "validated": {
+        "candidate_commit": "6afe83059de218d71d4161fb36848d849c9da0a6",
+        "checksum_count": 3418,
+        "platform": "linux-amd64",
+        "run_root": "/Users/zchee/rust/src/github.com/zchee/hashline-rs/.omx/goals/performance/hashline-v2-phase0/artifacts/linux-amd64/runs/20260731T133009Z-6afe83059de2"
+      }
+    },
+    "macos-arm64": {
+      "baseline_absolute_estimate_files": 55,
+      "baseline_raw_criterion": "baseline/criterion",
+      "byte_count": 65141104,
+      "candidate_absolute_estimate_files": 89,
+      "candidate_raw_criterion": "candidate/criterion",
+      "checksum_entries": 3418,
+      "corpora": {
+        "external_repository": {
+          "aggregate_sha256": "029947311a3191e5cae40961b7c768dac330f87b01de44f765831e02da39f015",
+          "commit": "adc2ae7af2caaea83985fbdfbc7884c159c486f2",
+          "label": "external-rust-repository",
+          "path": "/Users/zchee/rust/src/github.com/tokio-rs/tokio",
+          "rust_bytes": 5613697,
+          "rust_file_count": 790
+        },
+        "repository": {
+          "aggregate_sha256": "73750e81f9e614f88ef9745b1d83c279fcf7fc3a0f8910215f1cc931231e0cb8",
+          "commit": "6afe83059de218d71d4161fb36848d849c9da0a6",
+          "label": "hashline-rs",
+          "path": "/Users/zchee/rust/src/github.com/zchee/hashline-rs",
+          "rust_bytes": 435495,
+          "rust_file_count": 20
+        },
+        "synthetic": {
+          "generator": "benches/support/phase0_workloads.rs",
+          "seeds": [
+            "0xB2000010",
+            "0xB2000050",
+            "0xB2000100",
+            "0xf1500050"
+          ]
+        }
+      },
+      "environment": {
+        "ambient_rustflags_present": true,
+        "benchmark_rustflags_present": false,
+        "cargo": "cargo 1.99.0-nightly (7c83d4cc0 2026-07-29)\n",
+        "cpu_count": 16,
+        "load_average_at_capture_start": [
+          2.84326171875,
+          2.47998046875,
+          2.677734375
+        ],
+        "machine": "arm64",
+        "rustc": "rustc 1.99.0-nightly (8ab9fdff5 2026-07-30)\nbinary: rustc\ncommit-hash: 8ab9fdff5a91b9f2b5ed57fb0275452d9a0d0280\ncommit-date: 2026-07-30\nhost: aarch64-apple-darwin\nrelease: 1.99.0-nightly\nLLVM version: 22.1.8\n",
+        "system": "Darwin"
+      },
+      "file_count": 3419,
+      "filesystem": [
+        {
+          "base": {
+            "cache_state": "cold",
+            "estimate": {
+              "lower_bound_ns": 4954479.5,
+              "point_estimate_ns": 4984979.0,
+              "upper_bound_ns": 5049833.5
+            },
+            "sample_count": 12,
+            "samples_ns": [
+              5183125,
+              5067208,
+              4986000,
+              4983958,
+              5009708,
+              4958334,
+              5032459,
+              5184708,
+              4927958,
+              4920667,
+              4967542,
+              4950625
+            ],
+            "variant": "base"
+          },
+          "base_over_candidate_ratio": 1.7035016418271047,
+          "cache_state": "cold",
+          "candidate": {
+            "cache_state": "cold",
+            "estimate": {
+              "lower_bound_ns": 2907187.5,
+              "point_estimate_ns": 2926313.0,
+              "upper_bound_ns": 2959479.5
+            },
+            "sample_count": 12,
+            "samples_ns": [
+              2955709,
+              2940417,
+              2905959,
+              2894250,
+              2963250,
+              2919584,
+              3548792,
+              2933042,
+              2883250,
+              2908416,
+              2917792,
+              2970250
+            ],
+            "variant": "candidate"
+          }
+        },
+        {
+          "base": {
+            "cache_state": "warm",
+            "estimate": {
+              "lower_bound_ns": 4843500.0,
+              "point_estimate_ns": 4874146.0,
+              "upper_bound_ns": 4900271.0
+            },
+            "sample_count": 12,
+            "samples_ns": [
+              4847209,
+              4821875,
+              4891125,
+              4863792,
+              4839791,
+              4897375,
+              4856459,
+              4914875,
+              4884500,
+              4918333,
+              4903167,
+              4798792
+            ],
+            "variant": "base"
+          },
+          "base_over_candidate_ratio": 1.7413236521401134,
+          "cache_state": "warm",
+          "candidate": {
+            "cache_state": "warm",
+            "estimate": {
+              "lower_bound_ns": 2778188.0,
+              "point_estimate_ns": 2799104.0,
+              "upper_bound_ns": 2853500.0
+            },
+            "sample_count": 12,
+            "samples_ns": [
+              2802333,
+              2820833,
+              2792917,
+              2886083,
+              2767708,
+              2772834,
+              2768125,
+              2866875,
+              2840125,
+              2904917,
+              2783542,
+              2795875
+            ],
+            "variant": "candidate"
+          }
+        }
+      ],
+      "paired": [
+        {
+          "base_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 525625.7318681318,
+              "upper_bound_ns": 528822.5153846154
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 528813.4175824176,
+              "upper_bound_ns": 533596.889423077
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 526030.2766272189,
+              "upper_bound_ns": 529872.6483516484
+            }
+          ],
+          "base_function": "base_current_index",
+          "base_median_point_ns": 527821.5018853695,
+          "base_over_candidate_ratio": 4.849635225162091,
+          "base_point_estimates_ns": [
+            527565.8354700855,
+            530036.4849865048,
+            527821.5018853695
+          ],
+          "candidate_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 106389.37929101865,
+              "upper_bound_ns": 110404.41365419644
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 107094.15144418424,
+              "upper_bound_ns": 111960.39721123045
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 108491.77530864197,
+              "upper_bound_ns": 113532.61474358974
+            }
+          ],
+          "candidate_function": "candidate_raw_line_hashes",
+          "candidate_median_point_ns": 108837.36144664942,
+          "candidate_point_estimates_ns": [
+            106794.42330210772,
+            108837.36144664942,
+            112675.50863095238
+          ],
+          "group": "phase0_snapshot_raw/10000",
+          "name": "raw_lines_10k",
+          "order": [
+            "base",
+            "candidate",
+            "candidate",
+            "base",
+            "base",
+            "candidate"
+          ],
+          "raw_paths": [
+            "paired/raw_lines_10k/01-base",
+            "paired/raw_lines_10k/02-candidate",
+            "paired/raw_lines_10k/03-candidate",
+            "paired/raw_lines_10k/04-base",
+            "paired/raw_lines_10k/05-base",
+            "paired/raw_lines_10k/06-candidate"
+          ]
+        },
+        {
+          "base_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 2818232.994771242,
+              "upper_bound_ns": 2841049.6274074074
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 2806509.952614379,
+              "upper_bound_ns": 2826041.706257982
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 2798045.9814814813,
+              "upper_bound_ns": 2824438.008888889
+            }
+          ],
+          "base_function": "base_current_index",
+          "base_median_point_ns": 2817719.2460317463,
+          "base_over_candidate_ratio": 4.006765984274763,
+          "base_point_estimates_ns": [
+            2831297.4144927533,
+            2817719.2460317463,
+            2802793.1724941726
+          ],
+          "candidate_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 681039.375,
+              "upper_bound_ns": 713727.0202380952
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 678841.9118226601,
+              "upper_bound_ns": 708164.0875
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 701727.34,
+              "upper_bound_ns": 712534.4520833334
+            }
+          ],
+          "candidate_function": "candidate_raw_line_hashes",
+          "candidate_median_point_ns": 703240.2833333333,
+          "candidate_point_estimates_ns": [
+            704490.3901477833,
+            687600.424404762,
+            703240.2833333333
+          ],
+          "group": "phase0_snapshot_raw/50000",
+          "name": "raw_lines_50k",
+          "order": [
+            "base",
+            "candidate",
+            "candidate",
+            "base",
+            "base",
+            "candidate"
+          ],
+          "raw_paths": [
+            "paired/raw_lines_50k/07-base",
+            "paired/raw_lines_50k/08-candidate",
+            "paired/raw_lines_50k/09-candidate",
+            "paired/raw_lines_50k/10-base",
+            "paired/raw_lines_50k/11-base",
+            "paired/raw_lines_50k/12-candidate"
+          ]
+        },
+        {
+          "base_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 527520.1496794872,
+              "upper_bound_ns": 532581.1575091576
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 525929.9411764706,
+              "upper_bound_ns": 529755.6098901099
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 527251.1487075677,
+              "upper_bound_ns": 530311.1358618233
+            }
+          ],
+          "base_function": "base_current_index",
+          "base_median_point_ns": 528539.3722527472,
+          "base_over_candidate_ratio": 39.96466532415865,
+          "base_point_estimates_ns": [
+            528966.7475961539,
+            526846.5393860947,
+            528539.3722527472
+          ],
+          "candidate_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 13195.133096260512,
+              "upper_bound_ns": 13302.373038484151
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 13191.086640112464,
+              "upper_bound_ns": 13299.631823760432
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 13225.157076719577,
+              "upper_bound_ns": 13397.316276803118
+            }
+          ],
+          "candidate_function": "candidate_version_and_count",
+          "candidate_median_point_ns": 13225.166981024235,
+          "candidate_point_estimates_ns": [
+            13225.166981024235,
+            13217.39768041237,
+            13273.146604938273
+          ],
+          "group": "phase0_snapshot_gxhash/10000",
+          "name": "gxhash_version_10k",
+          "order": [
+            "base",
+            "candidate",
+            "candidate",
+            "base",
+            "base",
+            "candidate"
+          ],
+          "raw_paths": [
+            "paired/gxhash_version_10k/13-base",
+            "paired/gxhash_version_10k/14-candidate",
+            "paired/gxhash_version_10k/15-candidate",
+            "paired/gxhash_version_10k/16-base",
+            "paired/gxhash_version_10k/17-base",
+            "paired/gxhash_version_10k/18-candidate"
+          ]
+        },
+        {
+          "base_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 2813133.2767857146,
+              "upper_bound_ns": 2833196.1805555555
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 2805375.5597701147,
+              "upper_bound_ns": 2828717.1474358975
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 2806890.08470696,
+              "upper_bound_ns": 2831862.1654970758
+            }
+          ],
+          "base_function": "base_current_index",
+          "base_median_point_ns": 2814468.375,
+          "base_over_candidate_ratio": 41.65569491113635,
+          "base_point_estimates_ns": [
+            2817674.0263157897,
+            2813473.821666667,
+            2814468.375
+          ],
+          "candidate_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 67468.5152567654,
+              "upper_bound_ns": 67859.8242105263
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 67429.29210526316,
+              "upper_bound_ns": 67732.95964912281
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 67419.83634085214,
+              "upper_bound_ns": 67993.58637119114
+            }
+          ],
+          "candidate_function": "candidate_version_and_count",
+          "candidate_median_point_ns": 67565.03236842106,
+          "candidate_point_estimates_ns": [
+            67553.92639933166,
+            67565.03236842106,
+            67599.2242481203
+          ],
+          "group": "phase0_snapshot_gxhash/50000",
+          "name": "gxhash_version_50k",
+          "order": [
+            "base",
+            "candidate",
+            "candidate",
+            "base",
+            "base",
+            "candidate"
+          ],
+          "raw_paths": [
+            "paired/gxhash_version_50k/19-base",
+            "paired/gxhash_version_50k/20-candidate",
+            "paired/gxhash_version_50k/21-candidate",
+            "paired/gxhash_version_50k/22-base",
+            "paired/gxhash_version_50k/23-base",
+            "paired/gxhash_version_50k/24-candidate"
+          ]
+        },
+        {
+          "base_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 528128.3774725276,
+              "upper_bound_ns": 532690.7051282052
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 526653.5307692308,
+              "upper_bound_ns": 533311.2552447552
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 526662.1963562754,
+              "upper_bound_ns": 530202.1401098901
+            }
+          ],
+          "base_function": "base_current_index",
+          "base_median_point_ns": 528214.8498168498,
+          "base_over_candidate_ratio": 26.741178838020037,
+          "base_point_estimates_ns": [
+            530018.2916666667,
+            528214.8498168498,
+            527760.1397928994
+          ],
+          "candidate_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 19718.77218934911,
+              "upper_bound_ns": 19815.90576873956
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 19715.388611336035,
+              "upper_bound_ns": 19840.468934911245
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 19710.325780769228,
+              "upper_bound_ns": 19958.63805039788
+            }
+          ],
+          "candidate_function": "candidate_version_and_count",
+          "candidate_median_point_ns": 19752.86329059829,
+          "candidate_point_estimates_ns": [
+            19746.20879120879,
+            19752.86329059829,
+            19790.71538461538
+          ],
+          "group": "phase0_snapshot_xxh3/10000",
+          "name": "xxh3_version_10k",
+          "order": [
+            "base",
+            "candidate",
+            "candidate",
+            "base",
+            "base",
+            "candidate"
+          ],
+          "raw_paths": [
+            "paired/xxh3_version_10k/25-base",
+            "paired/xxh3_version_10k/26-candidate",
+            "paired/xxh3_version_10k/27-candidate",
+            "paired/xxh3_version_10k/28-base",
+            "paired/xxh3_version_10k/29-base",
+            "paired/xxh3_version_10k/30-candidate"
+          ]
+        },
+        {
+          "base_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 2805775.3266499583,
+              "upper_bound_ns": 2840024.675889328
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 2797200.072916667,
+              "upper_bound_ns": 2821327.0035353536
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 2806253.1674603177,
+              "upper_bound_ns": 2865810.485507246
+            }
+          ],
+          "base_function": "base_current_index",
+          "base_median_point_ns": 2810012.5087179486,
+          "base_over_candidate_ratio": 27.745377780752733,
+          "base_point_estimates_ns": [
+            2810012.5087179486,
+            2805478.3981481483,
+            2840844.458333333
+          ],
+          "candidate_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 101015.4953125,
+              "upper_bound_ns": 102164.38663690476
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 101015.32894345239,
+              "upper_bound_ns": 102555.81541404463
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 101091.72884114583,
+              "upper_bound_ns": 101776.81790865384
+            }
+          ],
+          "candidate_function": "candidate_version_and_count",
+          "candidate_median_point_ns": 101278.581640625,
+          "candidate_point_estimates_ns": [
+            101147.37221498843,
+            101278.581640625,
+            101381.7704067888
+          ],
+          "group": "phase0_snapshot_xxh3/50000",
+          "name": "xxh3_version_50k",
+          "order": [
+            "base",
+            "candidate",
+            "candidate",
+            "base",
+            "base",
+            "candidate"
+          ],
+          "raw_paths": [
+            "paired/xxh3_version_50k/31-base",
+            "paired/xxh3_version_50k/32-candidate",
+            "paired/xxh3_version_50k/33-candidate",
+            "paired/xxh3_version_50k/34-base",
+            "paired/xxh3_version_50k/35-base",
+            "paired/xxh3_version_50k/36-candidate"
+          ]
+        },
+        {
+          "base_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 530026.5031347963,
+              "upper_bound_ns": 532996.546875
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 525734.6343101342,
+              "upper_bound_ns": 530631.4116710875
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 526336.9423076923,
+              "upper_bound_ns": 528479.9917582418
+            }
+          ],
+          "base_function": "base_current_index",
+          "base_median_point_ns": 527578.1947731755,
+          "base_over_candidate_ratio": 2.35493897868034,
+          "base_point_estimates_ns": [
+            531470.8333333333,
+            527578.1947731755,
+            527375.8239130435
+          ],
+          "candidate_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 223761.27093596058,
+              "upper_bound_ns": 224907.4188218391
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 224146.74112068966,
+              "upper_bound_ns": 227746.53119868637
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 223544.53076923077,
+              "upper_bound_ns": 223992.77652519895
+            }
+          ],
+          "candidate_function": "candidate_version_and_count",
+          "candidate_median_point_ns": 224030.51609805177,
+          "candidate_point_estimates_ns": [
+            224030.51609805177,
+            227406.9170771757,
+            223685.25296934866
+          ],
+          "group": "phase0_snapshot_blake3/10000",
+          "name": "blake3_version_10k",
+          "order": [
+            "base",
+            "candidate",
+            "candidate",
+            "base",
+            "base",
+            "candidate"
+          ],
+          "raw_paths": [
+            "paired/blake3_version_10k/37-base",
+            "paired/blake3_version_10k/38-candidate",
+            "paired/blake3_version_10k/39-candidate",
+            "paired/blake3_version_10k/40-base",
+            "paired/blake3_version_10k/41-base",
+            "paired/blake3_version_10k/42-candidate"
+          ]
+        },
+        {
+          "base_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 2799159.0634920634,
+              "upper_bound_ns": 2804697.978448276
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 2804286.5208333335,
+              "upper_bound_ns": 2815636.278467909
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 2798213.8223615466,
+              "upper_bound_ns": 2816371.6014492754
+            }
+          ],
+          "base_function": "base_current_index",
+          "base_median_point_ns": 2806038.3112874776,
+          "base_over_candidate_ratio": 2.461184924669706,
+          "base_point_estimates_ns": [
+            2801450.833333333,
+            2811182.710727969,
+            2806038.3112874776
+          ],
+          "candidate_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 1138643.1528985507,
+              "upper_bound_ns": 1142813.6254578754
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 1139254.3581382385,
+              "upper_bound_ns": 1142777.4379960317
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 1139827.710081585,
+              "upper_bound_ns": 1146657.7368965517
+            }
+          ],
+          "candidate_function": "candidate_version_and_count",
+          "candidate_median_point_ns": 1140116.8125,
+          "candidate_point_estimates_ns": [
+            1139796.0208333335,
+            1140116.8125,
+            1142087.432900433
+          ],
+          "group": "phase0_snapshot_blake3/50000",
+          "name": "blake3_version_50k",
+          "order": [
+            "base",
+            "candidate",
+            "candidate",
+            "base",
+            "base",
+            "candidate"
+          ],
+          "raw_paths": [
+            "paired/blake3_version_50k/43-base",
+            "paired/blake3_version_50k/44-candidate",
+            "paired/blake3_version_50k/45-candidate",
+            "paired/blake3_version_50k/46-base",
+            "paired/blake3_version_50k/47-base",
+            "paired/blake3_version_50k/48-candidate"
+          ]
+        },
+        {
+          "base_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 198853.81359044995,
+              "upper_bound_ns": 199888.148989899
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 197764.00592885376,
+              "upper_bound_ns": 199076.61515151514
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 195916.6303030303,
+              "upper_bound_ns": 199634.5946969697
+            }
+          ],
+          "base_function": "base_current_partial_index",
+          "base_median_point_ns": 198256.77894327894,
+          "base_over_candidate_ratio": 0.38955030183791894,
+          "base_point_estimates_ns": [
+            199073.40101010102,
+            198256.77894327894,
+            197745.39396684233
+          ],
+          "candidate_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 498482.05631163705,
+              "upper_bound_ns": 506823.91826923075
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 496023.9391025641,
+              "upper_bound_ns": 515270.51998002
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 503211.30422362784,
+              "upper_bound_ns": 514640.54326923075
+            }
+          ],
+          "candidate_function": "candidate_sparse_positions",
+          "candidate_median_point_ns": 508937.55699300696,
+          "candidate_point_estimates_ns": [
+            505678.3666666667,
+            508937.55699300696,
+            512777.2435897436
+          ],
+          "group": "phase0_sparse_select/window_2k_of_100k",
+          "name": "sparse_window",
+          "order": [
+            "base",
+            "candidate",
+            "candidate",
+            "base",
+            "base",
+            "candidate"
+          ],
+          "raw_paths": [
+            "paired/sparse_window/49-base",
+            "paired/sparse_window/50-candidate",
+            "paired/sparse_window/51-candidate",
+            "paired/sparse_window/52-base",
+            "paired/sparse_window/53-base",
+            "paired/sparse_window/54-candidate"
+          ]
+        },
+        {
+          "base_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 2797567.075657895,
+              "upper_bound_ns": 2814829.527777778
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 2796658.3205128205,
+              "upper_bound_ns": 2818099.0117679257
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 2803847.8135964912,
+              "upper_bound_ns": 2822690.141534392
+            }
+          ],
+          "base_function": "base_current_index",
+          "base_median_point_ns": 2808649.5588235296,
+          "base_over_candidate_ratio": 6.103356759057793,
+          "base_point_estimates_ns": [
+            2802157.875,
+            2808649.5588235296,
+            2813639.9264069265
+          ],
+          "candidate_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 455399.599664751,
+              "upper_bound_ns": 468754.9390151515
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 457654.26636904763,
+              "upper_bound_ns": 463507.0153061225
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 455683.8933333333,
+              "upper_bound_ns": 465237.43569444446
+            }
+          ],
+          "candidate_function": "candidate_offsets",
+          "candidate_median_point_ns": 460181.1215861344,
+          "candidate_point_estimates_ns": [
+            458865.96507936507,
+            460181.1215861344,
+            460687.56870007265
+          ],
+          "group": "phase0_offsets/u32_50k",
+          "name": "offsets_u32",
+          "order": [
+            "base",
+            "candidate",
+            "candidate",
+            "base",
+            "base",
+            "candidate"
+          ],
+          "raw_paths": [
+            "paired/offsets_u32/55-base",
+            "paired/offsets_u32/56-candidate",
+            "paired/offsets_u32/57-candidate",
+            "paired/offsets_u32/58-base",
+            "paired/offsets_u32/59-base",
+            "paired/offsets_u32/60-candidate"
+          ]
+        },
+        {
+          "base_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 2797662.9804166667,
+              "upper_bound_ns": 2817961.8035714286
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 2804625.520833333,
+              "upper_bound_ns": 2839813.8095238097
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 2799052.378205128,
+              "upper_bound_ns": 2829115.020531401
+            }
+          ],
+          "base_function": "base_current_index",
+          "base_median_point_ns": 2807163.0903030303,
+          "base_over_candidate_ratio": 6.018183456395279,
+          "base_point_estimates_ns": [
+            2801305.5555555555,
+            2821966.402777778,
+            2807163.0903030303
+          ],
+          "candidate_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 454662.45089285716,
+              "upper_bound_ns": 465489.36081681476
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 468063.53259148484,
+              "upper_bound_ns": 471980.9470663265
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 462713.7276785714,
+              "upper_bound_ns": 472475.42045454547
+            }
+          ],
+          "candidate_function": "candidate_offsets",
+          "candidate_median_point_ns": 466446.91220238095,
+          "candidate_point_estimates_ns": [
+            457923.54910714284,
+            469389.7285348922,
+            466446.91220238095
+          ],
+          "group": "phase0_offsets/u64_50k",
+          "name": "offsets_u64",
+          "order": [
+            "base",
+            "candidate",
+            "candidate",
+            "base",
+            "base",
+            "candidate"
+          ],
+          "raw_paths": [
+            "paired/offsets_u64/61-base",
+            "paired/offsets_u64/62-candidate",
+            "paired/offsets_u64/63-candidate",
+            "paired/offsets_u64/64-base",
+            "paired/offsets_u64/65-base",
+            "paired/offsets_u64/66-candidate"
+          ]
+        },
+        {
+          "base_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 862449.1333333333,
+              "upper_bound_ns": 872492.3247679046
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 856069.3758116884,
+              "upper_bound_ns": 863199.4606481481
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 859690.1175287357,
+              "upper_bound_ns": 869354.796875
+            }
+          ],
+          "base_function": "base_current_render",
+          "base_median_point_ns": 864652.3245192308,
+          "base_over_candidate_ratio": 1.8175404748948127,
+          "base_point_estimates_ns": [
+            868846.4211956521,
+            857162.6674107143,
+            864652.3245192308
+          ],
+          "candidate_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 476745.2090957073,
+              "upper_bound_ns": 481004.06418219465
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 474413.5669152276,
+              "upper_bound_ns": 483052.5
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 469972.8867739403,
+              "upper_bound_ns": 472843.8488095238
+            }
+          ],
+          "candidate_function": "candidate_position_render",
+          "candidate_median_point_ns": 475726.5857142857,
+          "candidate_point_estimates_ns": [
+            479000.1933106576,
+            475726.5857142857,
+            471806.8945285011
+          ],
+          "group": "phase0_position_render/full_10k",
+          "name": "position_render_full",
+          "order": [
+            "base",
+            "candidate",
+            "candidate",
+            "base",
+            "base",
+            "candidate"
+          ],
+          "raw_paths": [
+            "paired/position_render_full/67-base",
+            "paired/position_render_full/68-candidate",
+            "paired/position_render_full/69-candidate",
+            "paired/position_render_full/70-base",
+            "paired/position_render_full/71-base",
+            "paired/position_render_full/72-candidate"
+          ]
+        },
+        {
+          "base_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 261561.50540229885,
+              "upper_bound_ns": 262600.52266666666
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 259330.84,
+              "upper_bound_ns": 263458.9196296296
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 261515.81466666667,
+              "upper_bound_ns": 262834.3664
+            }
+          ],
+          "base_function": "base_current_render",
+          "base_median_point_ns": 261880.5449137931,
+          "base_over_candidate_ratio": 0.39190595839988956,
+          "base_point_estimates_ns": [
+            262030.76,
+            261176.11293924466,
+            261880.5449137931
+          ],
+          "candidate_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 662178.4555555556,
+              "upper_bound_ns": 671119.4247727273
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 661052.8986666666,
+              "upper_bound_ns": 670066.5523148149
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 671974.505,
+              "upper_bound_ns": 675876.1270833333
+            }
+          ],
+          "candidate_function": "candidate_position_render",
+          "candidate_median_point_ns": 668222.9226190476,
+          "candidate_point_estimates_ns": [
+            668222.9226190476,
+            667002.9254545454,
+            673584.7166666667
+          ],
+          "group": "phase0_position_render/window_2k_of_100k",
+          "name": "position_render_window",
+          "order": [
+            "base",
+            "candidate",
+            "candidate",
+            "base",
+            "base",
+            "candidate"
+          ],
+          "raw_paths": [
+            "paired/position_render_window/73-base",
+            "paired/position_render_window/74-candidate",
+            "paired/position_render_window/75-candidate",
+            "paired/position_render_window/76-base",
+            "paired/position_render_window/77-base",
+            "paired/position_render_window/78-candidate"
+          ]
+        },
+        {
+          "base_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 855679.8416895603,
+              "upper_bound_ns": 858451.4166666667
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 855929.0512931035,
+              "upper_bound_ns": 867003.734375
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 854514.5555098684,
+              "upper_bound_ns": 863185.0094907407
+            }
+          ],
+          "base_function": "base_current_read",
+          "base_median_point_ns": 856915.1708333334,
+          "base_over_candidate_ratio": 1.7248791156161312,
+          "base_point_estimates_ns": [
+            856915.1708333334,
+            861970.3125,
+            855625.914691092
+          ],
+          "candidate_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 490933.825105042,
+              "upper_bound_ns": 496480.4583333334
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 494629.62374581944,
+              "upper_bound_ns": 500617.2096866097
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 495117.96062271064,
+              "upper_bound_ns": 499165.08974358975
+            }
+          ],
+          "candidate_function": "candidate_versioned_read",
+          "candidate_median_point_ns": 496797.2323830016,
+          "candidate_point_estimates_ns": [
+            492927.1597744361,
+            496797.2323830016,
+            496980.55413105414
+          ],
+          "group": "phase0_full_read/full_10k",
+          "name": "versioned_full_read",
+          "order": [
+            "base",
+            "candidate",
+            "candidate",
+            "base",
+            "base",
+            "candidate"
+          ],
+          "raw_paths": [
+            "paired/versioned_full_read/79-base",
+            "paired/versioned_full_read/80-candidate",
+            "paired/versioned_full_read/81-candidate",
+            "paired/versioned_full_read/82-base",
+            "paired/versioned_full_read/83-base",
+            "paired/versioned_full_read/84-candidate"
+          ]
+        },
+        {
+          "base_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 928080.1382783882,
+              "upper_bound_ns": 934741.9217687075
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 931990.8342857142,
+              "upper_bound_ns": 946889.6919642857
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 932243.0074211503,
+              "upper_bound_ns": 939852.6416925467
+            }
+          ],
+          "base_function": "base_current_apply",
+          "base_median_point_ns": 935371.3174603174,
+          "base_over_candidate_ratio": 12.696512953501996,
+          "base_point_estimates_ns": [
+            930040.8373015873,
+            936984.130952381,
+            935371.3174603174
+          ],
+          "candidate_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 73417.87140804598,
+              "upper_bound_ns": 74336.13084291188
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 73451.5311951032,
+              "upper_bound_ns": 74401.34170008913
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 73431.72633536173,
+              "upper_bound_ns": 74615.83155446086
+            }
+          ],
+          "candidate_function": "candidate_byte_splice",
+          "candidate_median_point_ns": 73671.51287017905,
+          "candidate_point_estimates_ns": [
+            73584.61388152078,
+            73671.51287017905,
+            73674.02229885057
+          ],
+          "group": "phase0_splice/one_edit_50k",
+          "name": "splice_one",
+          "order": [
+            "base",
+            "candidate",
+            "candidate",
+            "base",
+            "base",
+            "candidate"
+          ],
+          "raw_paths": [
+            "paired/splice_one/85-base",
+            "paired/splice_one/86-candidate",
+            "paired/splice_one/87-candidate",
+            "paired/splice_one/88-base",
+            "paired/splice_one/89-base",
+            "paired/splice_one/90-candidate"
+          ]
+        },
+        {
+          "base_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 946791.5,
+              "upper_bound_ns": 959040.7728249194
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 950581.076734694,
+              "upper_bound_ns": 967453.3193760263
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 951670.2003174603,
+              "upper_bound_ns": 970699.2767628791
+            }
+          ],
+          "base_function": "base_current_apply",
+          "base_median_point_ns": 956801.8223443223,
+          "base_over_candidate_ratio": 12.761788713676616,
+          "base_point_estimates_ns": [
+            955311.9461966604,
+            956801.8223443223,
+            959865.8826530613
+          ],
+          "candidate_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 74566.21088794926,
+              "upper_bound_ns": 75124.43968023255
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 74806.91999494439,
+              "upper_bound_ns": 76165.56829088225
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 74555.32021466905,
+              "upper_bound_ns": 75290.13212537157
+            }
+          ],
+          "candidate_function": "candidate_byte_splice",
+          "candidate_median_point_ns": 74973.95888704319,
+          "candidate_point_estimates_ns": [
+            74707.28687553832,
+            75647.63040355677,
+            74973.95888704319
+          ],
+          "group": "phase0_splice/eight_edits_50k",
+          "name": "splice_eight",
+          "order": [
+            "base",
+            "candidate",
+            "candidate",
+            "base",
+            "base",
+            "candidate"
+          ],
+          "raw_paths": [
+            "paired/splice_eight/91-base",
+            "paired/splice_eight/92-candidate",
+            "paired/splice_eight/93-candidate",
+            "paired/splice_eight/94-base",
+            "paired/splice_eight/95-base",
+            "paired/splice_eight/96-candidate"
+          ]
+        },
+        {
+          "base_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 423973.9756097561,
+              "upper_bound_ns": 450425.5533536585
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 424076.4683624031,
+              "upper_bound_ns": 460845.3107235142
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 420895.07551892556,
+              "upper_bound_ns": 457577.8183982684
+            }
+          ],
+          "base_function": "base_direct_write",
+          "base_median_point_ns": 442725.93418306496,
+          "base_over_candidate_ratio": 0.9768974661952825,
+          "base_point_estimates_ns": [
+            428801.92454268294,
+            442725.93418306496,
+            448143.0363756614
+          ],
+          "candidate_95pct_confidence_intervals_ns": [
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 371172.9433706816,
+              "upper_bound_ns": 473783.5510802469
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 375479.84087171056,
+              "upper_bound_ns": 482637.116276738
+            },
+            {
+              "confidence_level": 0.95,
+              "lower_bound_ns": 382950.05171278,
+              "upper_bound_ns": 504006.85049580474
+            }
+          ],
+          "candidate_function": "candidate_temp_rename",
+          "candidate_median_point_ns": 453195.907967033,
+          "candidate_point_estimates_ns": [
+            431784.2708333334,
+            453195.907967033,
+            455091.4856884058
+          ],
+          "group": "phase0_persist/atomic_50k",
+          "name": "atomic_persist",
+          "order": [
+            "base",
+            "candidate",
+            "candidate",
+            "base",
+            "base",
+            "candidate"
+          ],
+          "raw_paths": [
+            "paired/atomic_persist/97-base",
+            "paired/atomic_persist/98-candidate",
+            "paired/atomic_persist/99-candidate",
+            "paired/atomic_persist/100-base",
+            "paired/atomic_persist/101-base",
+            "paired/atomic_persist/102-candidate"
+          ]
+        }
+      ],
+      "primary_sha256": {
+        "SHA256SUMS.json": "647e2109d8330fc0db858196abfdd51ad9a66a5c53f2b68333bc5af1e201dd0e",
+        "manifest.json": "7bd988efe269cafe0db39efb141c1e5c3e32a3a930d8c2d70eb9ec7f0b8f754d",
+        "paired/results.json": "9d4804632ca9d0c7723bd4de921f72332091b6f9eae43131ac370fe3cf1536b3",
+        "profiles/results.json": "6d0a0023893a6e87c1ceea89231405c7ad0a1b4093f51fc9345404aaedc2af41"
+      },
+      "profiles": [
+        {
+          "command_exit_code": 0,
+          "raw_path": "profiles/full_read/sample.txt",
+          "scenario": "full_read",
+          "symbol_hits": [
+            "format_hashline_content",
+            "profile_full_read_once"
+          ],
+          "symbolized": true,
+          "tool": "sample"
+        },
+        {
+          "command_exit_code": 0,
+          "raw_path": "profiles/edit/sample.txt",
+          "scenario": "edit",
+          "symbol_hits": [
+            "apply_edits",
+            "profile_edit_once"
+          ],
+          "symbolized": true,
+          "tool": "sample"
+        },
+        {
+          "command_exit_code": 0,
+          "raw_path": "profiles/rare_grep/sample.txt",
+          "scenario": "rare_grep",
+          "symbol_hits": [
+            "hashline4grep11search_file",
+            "profile_grep_once",
+            "run_grep"
+          ],
+          "symbolized": true,
+          "tool": "sample"
+        },
+        {
+          "command_exit_code": 0,
+          "raw_path": "profiles/common_grep/sample.txt",
+          "scenario": "common_grep",
+          "symbol_hits": [
+            "hashline4grep11search_file",
+            "profile_grep_once",
+            "run_grep"
+          ],
+          "symbolized": true,
+          "tool": "sample"
+        }
+      ],
+      "quality": [
+        {
+          "command": [
+            "python3",
+            "-B",
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            "benches/support",
+            "-p",
+            "test_phase0.py"
+          ],
+          "exit_code": 0,
+          "name": "phase0_contract_tests"
+        },
+        {
+          "command": [
+            "cargo",
+            "fmt",
+            "--all",
+            "--",
+            "--check"
+          ],
+          "exit_code": 0,
+          "name": "fmt"
+        },
+        {
+          "command": [
+            "cargo",
+            "build",
+            "--all-targets"
+          ],
+          "exit_code": 0,
+          "name": "build_all"
+        },
+        {
+          "command": [
+            "cargo",
+            "build",
+            "--all-targets",
+            "--no-default-features"
+          ],
+          "exit_code": 0,
+          "name": "build_no_default"
+        },
+        {
+          "command": [
+            "cargo",
+            "clippy",
+            "--all-targets",
+            "--all-features",
+            "--",
+            "-D",
+            "warnings"
+          ],
+          "exit_code": 0,
+          "name": "clippy"
+        },
+        {
+          "command": [
+            "cargo",
+            "test",
+            "--all-targets",
+            "--all-features"
+          ],
+          "exit_code": 0,
+          "name": "test_all"
+        },
+        {
+          "command": [
+            "cargo",
+            "test",
+            "--all-targets",
+            "--no-default-features"
+          ],
+          "exit_code": 0,
+          "name": "test_no_default"
+        },
+        {
+          "command": [
+            "cargo",
+            "doc",
+            "--no-deps"
+          ],
+          "exit_code": 0,
+          "name": "doc"
+        }
+      ],
+      "resources": [
+        {
+          "allocations": {
+            "allocated_bytes": 977190,
+            "allocation_calls": 8,
+            "deallocated_bytes": 354301,
+            "deallocation_calls": 7,
+            "live_bytes": 622889,
+            "peak_live_bytes": 971501,
+            "reallocation_calls": 5
+          },
+          "label": "full_read_base",
+          "output_bytes": 611782,
+          "peak_rss_bytes": 3899392,
+          "peak_rss_source": "bytes",
+          "scenario": "full_read_base",
+          "schema_version": 1
+        },
+        {
+          "allocations": {
+            "allocated_bytes": 782968,
+            "allocation_calls": 2,
+            "deallocated_bytes": 80008,
+            "deallocation_calls": 1,
+            "live_bytes": 702960,
+            "peak_live_bytes": 782968,
+            "reallocation_calls": 0
+          },
+          "label": "full_read_candidate",
+          "output_bytes": 579459,
+          "peak_rss_bytes": 3670016,
+          "peak_rss_source": "bytes",
+          "scenario": "full_read_candidate",
+          "schema_version": 1
+        },
+        {
+          "allocations": {
+            "allocated_bytes": 5021284,
+            "allocation_calls": 23,
+            "deallocated_bytes": 2728781,
+            "deallocation_calls": 20,
+            "live_bytes": 2292503,
+            "peak_live_bytes": 5020823,
+            "reallocation_calls": 5
+          },
+          "label": "edit_50k_base",
+          "output_bytes": 2292135,
+          "peak_rss_bytes": 9617408,
+          "peak_rss_source": "bytes",
+          "scenario": "edit_50k_base",
+          "schema_version": 1
+        },
+        {
+          "allocations": {
+            "allocated_bytes": 2292139,
+            "allocation_calls": 1,
+            "deallocated_bytes": 0,
+            "deallocation_calls": 0,
+            "live_bytes": 2292139,
+            "peak_live_bytes": 2292139,
+            "reallocation_calls": 0
+          },
+          "label": "edit_50k_candidate",
+          "output_bytes": 2292139,
+          "peak_rss_bytes": 8421376,
+          "peak_rss_source": "bytes",
+          "scenario": "edit_50k_candidate",
+          "schema_version": 1
+        },
+        {
+          "allocations": {
+            "allocated_bytes": 19740279,
+            "allocation_calls": 50470,
+            "deallocated_bytes": 19645375,
+            "deallocation_calls": 50310,
+            "live_bytes": 94904,
+            "peak_live_bytes": 2431856,
+            "reallocation_calls": 15214
+          },
+          "label": "tree_grep_base",
+          "output_bytes": 13968,
+          "peak_rss_bytes": 7864320,
+          "peak_rss_source": "bytes",
+          "scenario": "tree_grep_base",
+          "schema_version": 1
+        },
+        {
+          "allocations": {
+            "allocated_bytes": 4845661,
+            "allocation_calls": 18522,
+            "deallocated_bytes": 4750685,
+            "deallocation_calls": 18362,
+            "live_bytes": 94976,
+            "peak_live_bytes": 1929609,
+            "reallocation_calls": 4361
+          },
+          "label": "real_tree_grep_base_own",
+          "output_bytes": 11038,
+          "peak_rss_bytes": 6881280,
+          "peak_rss_source": "bytes",
+          "scenario": "real_tree_grep_base",
+          "schema_version": 1
+        },
+        {
+          "allocations": {
+            "allocated_bytes": 14415862,
+            "allocation_calls": 25543,
+            "deallocated_bytes": 14292982,
+            "deallocation_calls": 25378,
+            "live_bytes": 122880,
+            "peak_live_bytes": 2295101,
+            "reallocation_calls": 7648
+          },
+          "label": "real_tree_grep_base_external",
+          "output_bytes": 14585,
+          "peak_rss_bytes": 8273920,
+          "peak_rss_source": "bytes",
+          "scenario": "real_tree_grep_base",
+          "schema_version": 1
+        }
+      ],
+      "run_id": "20260731T124545Z-6afe83059de2",
+      "run_root": ".omx/goals/performance/hashline-v2-phase0/artifacts/macos-arm64/runs/20260731T124545Z-6afe83059de2",
+      "validated": {
+        "candidate_commit": "6afe83059de218d71d4161fb36848d849c9da0a6",
+        "checksum_count": 3418,
+        "platform": "macos-arm64",
+        "run_root": "/Users/zchee/rust/src/github.com/zchee/hashline-rs/.omx/goals/performance/hashline-v2-phase0/artifacts/macos-arm64/runs/20260731T124545Z-6afe83059de2"
+      }
+    }
+  },
+  "schema_version": 1,
+  "scope": "Phase 0 only; Phase 1 not started",
+  "status": "pass",
+  "supporting_logs": {
+    "linux-amd64": [
+      ".omx/goals/performance/hashline-v2-phase0/artifacts/linux-amd64/capture-6afe83059de2-20260731T133009Z.log",
+      ".omx/goals/performance/hashline-v2-phase0/artifacts/linux-amd64/provisioning-6afe83059de2-20260731T132903Z.log",
+      ".omx/goals/performance/hashline-v2-phase0/artifacts/linux-amd64/provisioning-6afe83059de2-20260731T132942Z-retry.log",
+      ".omx/goals/performance/hashline-v2-phase0/artifacts/linux-amd64/transfer-20260731T133009Z-6afe83059de2-20260731T141501Z.log"
+    ],
+    "macos-arm64": [
+      ".omx/goals/performance/hashline-v2-phase0/artifacts/macos-arm64/capture-6afe83059de2-20260731T124545Z.log",
+      ".omx/goals/performance/hashline-v2-phase0/artifacts/macos-arm64/preflight-6afe83059de2-20260731T124508Z.log"
+    ]
+  },
+  "transfer_bundle": {
+    "path": ".omx/goals/performance/hashline-v2-phase0/transfers/hashline-6afe83059de2.bundle",
+    "sha256": "f2e4f78776431d7722455946960121943bb7bbe19ba1e5950d6e399832e773c0"
+  }
+}

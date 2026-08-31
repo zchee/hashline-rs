@@ -1,0 +1,315 @@
+{
+  "artifact_root": ".omx/goals/performance/hashline-v2-phase1/evaluations/20260731T155151Z-690fb307d460",
+  "cli_contract": {
+    "forbidden_tokens": [
+      "--scheme",
+      "--hash-len",
+      "--chunk-size",
+      "--checkpoint-interval",
+      "HASHLINE_SCHEME",
+      "HASHLINE_HASH_LEN",
+      "HASHLINE_CHUNK_SIZE",
+      "HASHLINE_CHECKPOINT_INTERVAL"
+    ],
+    "present": []
+  },
+  "commands": [
+    {
+      "command": [
+        "python3",
+        "-B",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "benches/support",
+        "-p",
+        "test_phase1.py"
+      ],
+      "elapsed_seconds": 0.0764293750107754,
+      "exit_code": 0,
+      "name": "phase1_contract_tests",
+      "stderr_path": ".omx/goals/performance/hashline-v2-phase1/evaluations/20260731T155151Z-690fb307d460/commands/phase1_contract_tests.stderr.log",
+      "stderr_sha256": "1e43b905e11ca028139fe5078016515111aaf7cebf8d6a3e224b7d03b9cb6ac9",
+      "stdout_path": ".omx/goals/performance/hashline-v2-phase1/evaluations/20260731T155151Z-690fb307d460/commands/phase1_contract_tests.stdout.log",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "elapsed_seconds": 0.12374716700287536,
+      "exit_code": 0,
+      "name": "fmt",
+      "stderr_path": ".omx/goals/performance/hashline-v2-phase1/evaluations/20260731T155151Z-690fb307d460/commands/fmt.stderr.log",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_path": ".omx/goals/performance/hashline-v2-phase1/evaluations/20260731T155151Z-690fb307d460/commands/fmt.stdout.log",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "command": [
+        "cargo",
+        "build",
+        "--all-targets",
+        "--all-features"
+      ],
+      "elapsed_seconds": 2.428146625010413,
+      "exit_code": 0,
+      "name": "build_all",
+      "stderr_path": ".omx/goals/performance/hashline-v2-phase1/evaluations/20260731T155151Z-690fb307d460/commands/build_all.stderr.log",
+      "stderr_sha256": "c3fa49e0bbda55907914f416f0142685284d9a0adcf89d2335e0ec828bd2e108",
+      "stdout_path": ".omx/goals/performance/hashline-v2-phase1/evaluations/20260731T155151Z-690fb307d460/commands/build_all.stdout.log",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "command": [
+        "cargo",
+        "build",
+        "--all-targets",
+        "--no-default-features"
+      ],
+      "elapsed_seconds": 2.3893447919981554,
+      "exit_code": 0,
+      "name": "build_no_default",
+      "stderr_path": ".omx/goals/performance/hashline-v2-phase1/evaluations/20260731T155151Z-690fb307d460/commands/build_no_default.stderr.log",
+      "stderr_sha256": "e0a00972fcecdb900778701133c37e8e140659490b71065ced013e7bd7e83613",
+      "stdout_path": ".omx/goals/performance/hashline-v2-phase1/evaluations/20260731T155151Z-690fb307d460/commands/build_no_default.stdout.log",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "command": [
+        "cargo",
+        "clippy",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "elapsed_seconds": 1.1071678750013234,
+      "exit_code": 0,
+      "name": "clippy_all",
+      "stderr_path": ".omx/goals/performance/hashline-v2-phase1/evaluations/20260731T155151Z-690fb307d460/commands/clippy_all.stderr.log",
+      "stderr_sha256": "42f39c243f40ac191893dd592ff4a71c8cbfbea9d98fc2bfd9376e91f690e08b",
+      "stdout_path": ".omx/goals/performance/hashline-v2-phase1/evaluations/20260731T155151Z-690fb307d460/commands/clippy_all.stdout.log",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "command": [
+        "cargo",
+        "clippy",
+        "--all-targets",
+        "--no-default-features",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "elapsed_seconds": 1.003297624993138,
+      "exit_code": 0,
+      "name": "clippy_no_default",
+      "stderr_path": ".omx/goals/performance/hashline-v2-phase1/evaluations/20260731T155151Z-690fb307d460/commands/clippy_no_default.stderr.log",
+      "stderr_sha256": "adc006a9bd33aa28add39907d32f3886b31d4f1c1e3c141bd997391e6b208637",
+      "stdout_path": ".omx/goals/performance/hashline-v2-phase1/evaluations/20260731T155151Z-690fb307d460/commands/clippy_no_default.stdout.log",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--all-targets",
+        "--all-features"
+      ],
+      "elapsed_seconds": 4.566254791992833,
+      "exit_code": 0,
+      "name": "test_all",
+      "stderr_path": ".omx/goals/performance/hashline-v2-phase1/evaluations/20260731T155151Z-690fb307d460/commands/test_all.stderr.log",
+      "stderr_sha256": "a826b7b737d2469889d2190977608b05b87dbfa1069bfcd580ee94f388dcfae7",
+      "stdout_path": ".omx/goals/performance/hashline-v2-phase1/evaluations/20260731T155151Z-690fb307d460/commands/test_all.stdout.log",
+      "stdout_sha256": "bb960f4c8789ecd6d8f76518e8b9dfc61277f4c14398199bf62ef71e9991aa78"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--all-targets",
+        "--no-default-features"
+      ],
+      "elapsed_seconds": 3.2608937920012977,
+      "exit_code": 0,
+      "name": "test_no_default",
+      "stderr_path": ".omx/goals/performance/hashline-v2-phase1/evaluations/20260731T155151Z-690fb307d460/commands/test_no_default.stderr.log",
+      "stderr_sha256": "e04c5fbae182921e33b393c74b296c30b018a26cbd9576010e516ddc16e3439e",
+      "stdout_path": ".omx/goals/performance/hashline-v2-phase1/evaluations/20260731T155151Z-690fb307d460/commands/test_no_default.stdout.log",
+      "stdout_sha256": "8fb80161e2affdfcaa426d21278f7035281541ea3a62df52a0aa237b419970bb"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--doc",
+        "--all-features"
+      ],
+      "elapsed_seconds": 0.5792030839947984,
+      "exit_code": 0,
+      "name": "doc_test",
+      "stderr_path": ".omx/goals/performance/hashline-v2-phase1/evaluations/20260731T155151Z-690fb307d460/commands/doc_test.stderr.log",
+      "stderr_sha256": "9debe0df45e619101c95fe734a8efc282e8aba731d0a57f34b0ee9298fe5eaa6",
+      "stdout_path": ".omx/goals/performance/hashline-v2-phase1/evaluations/20260731T155151Z-690fb307d460/commands/doc_test.stdout.log",
+      "stdout_sha256": "8b02aeb5487590cbd073b87dec681bc22e9de22388ab85fe7a6c7d82f40b640e"
+    },
+    {
+      "command": [
+        "cargo",
+        "doc",
+        "--no-deps",
+        "--all-features"
+      ],
+      "elapsed_seconds": 0.8890738330082968,
+      "exit_code": 0,
+      "name": "doc",
+      "stderr_path": ".omx/goals/performance/hashline-v2-phase1/evaluations/20260731T155151Z-690fb307d460/commands/doc.stderr.log",
+      "stderr_sha256": "d0feded7c8be79ccee926c2adf8e911819a7eca65fc8c01756850645e8248f82",
+      "stdout_path": ".omx/goals/performance/hashline-v2-phase1/evaluations/20260731T155151Z-690fb307d460/commands/doc.stdout.log",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "command": [
+        "cargo",
+        "run",
+        "--quiet",
+        "--bin",
+        "hashline-mcp",
+        "--",
+        "--help"
+      ],
+      "elapsed_seconds": 2.2466470829967875,
+      "exit_code": 0,
+      "name": "cli_help",
+      "stderr_path": ".omx/goals/performance/hashline-v2-phase1/evaluations/20260731T155151Z-690fb307d460/commands/cli_help.stderr.log",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_path": ".omx/goals/performance/hashline-v2-phase1/evaluations/20260731T155151Z-690fb307d460/commands/cli_help.stdout.log",
+      "stdout_sha256": "8053574d5fa9245064e02a04547d375f043ca26424bc629120aa486bb9937c5c"
+    }
+  ],
+  "completed_at": "2026-07-31T15:52:11.594545+00:00",
+  "environment": {
+    "cargo": "cargo 1.99.0-nightly (7c83d4cc0 2026-07-29)\nrelease: 1.99.0-nightly\ncommit-hash: 7c83d4cc0953b81d823e47d640c64da9b8bd4fac\ncommit-date: 2026-07-29\nhost: aarch64-apple-darwin\nlibgit2: 1.9.6 (sys:0.21.0 vendored)\nlibcurl: 8.7.1 (sys:0.4.90+curl-8.21.0 system ssl:(SecureTransport) LibreSSL/3.3.6)\nssl: OpenSSL 3.6.3 9 Jun 2026\nos: Mac OS 27.0.0 [64-bit]",
+    "machine": "arm64",
+    "platform": "macOS-27.0-arm64-arm-64bit-Mach-O",
+    "python": "3.14.6 (main, Jun 10 2026, 10:03:53) [Clang 21.0.0 (clang-2100.0.123.102)]",
+    "removed_ambient_flags": [
+      "RUSTFLAGS"
+    ],
+    "rustc": "rustc 1.99.0-nightly (8ab9fdff5 2026-07-30)\nbinary: rustc\ncommit-hash: 8ab9fdff5a91b9f2b5ed57fb0275452d9a0d0280\ncommit-date: 2026-07-30\nhost: aarch64-apple-darwin\nrelease: 1.99.0-nightly\nLLVM version: 22.1.8"
+  },
+  "evaluator_command": "benches/support/phase1.py evaluate --goal-root .omx/goals/performance/hashline-v2-phase1",
+  "phase0_evidence": {
+    "canonical_runs": {
+      "linux-amd64": {
+        "checksums_sha256": "d026dafa0897aff732f7c41c389281bd334f44ccd990b1f5cdc629eba2a877ba",
+        "entry_count": 3418,
+        "file_count": 3419,
+        "path": ".omx/goals/performance/hashline-v2-phase0/artifacts/linux-amd64/runs/20260731T133009Z-6afe83059de2",
+        "total_bytes": 605377617
+      },
+      "macos-arm64": {
+        "checksums_sha256": "647e2109d8330fc0db858196abfdd51ad9a66a5c53f2b68333bc5af1e201dd0e",
+        "entry_count": 3418,
+        "file_count": 3419,
+        "path": ".omx/goals/performance/hashline-v2-phase0/artifacts/macos-arm64/runs/20260731T124545Z-6afe83059de2",
+        "total_bytes": 65141104
+      }
+    },
+    "immutable_files": [
+      {
+        "bytes": 47086,
+        "path": ".omx/plans/2026-07-31-incompatible-max-performance-redesign.md",
+        "sha256": "db00bf029f184811b79ab709df064a3fb9b23a9ab64562e28432e43ca8a41a6f"
+      },
+      {
+        "bytes": 819,
+        "path": ".omx/goals/performance/hashline-v2-phase0/evaluation.json",
+        "sha256": "21af7734da8399ec4cf8544e202b09e8e6e339aea35dc2acd179c227476ef1b4"
+      },
+      {
+        "bytes": 172712,
+        "path": ".omx/goals/performance/hashline-v2-phase0/phase0-exit-gate-audit.json",
+        "sha256": "81e04dcc6a433070c0ecd58f4191113b00a11bcc49a220c7dc845d043d185a7f"
+      },
+      {
+        "bytes": 2365,
+        "path": ".omx/goals/performance/hashline-v2-phase0/state.json",
+        "sha256": "c3b40749533c24c85765a8c7224c521bc18535d697ad3515124cc7716af8633a"
+      },
+      {
+        "bytes": 4688,
+        "path": ".omx/goals/performance/hashline-v2-phase0/ledger.jsonl",
+        "sha256": "b110059d0c13930c0441171062c8cd1d07d4e1880ca5f2981b7194cd6f820107"
+      },
+      {
+        "bytes": 480,
+        "path": ".omx/goals/performance/hashline-v2-phase0/codex-goal-complete.json",
+        "sha256": "f1b85c24f9ead933429b6704c57b4dc1de2d025f286585aafdf25fc625873a24"
+      },
+      {
+        "bytes": 219292,
+        "path": ".omx/goals/performance/hashline-v2-phase0/transfers/hashline-6afe83059de2.bundle",
+        "sha256": "f2e4f78776431d7722455946960121943bb7bbe19ba1e5950d6e399832e773c0"
+      }
+    ]
+  },
+  "repository": {
+    "base_commit": "6afe83059de218d71d4161fb36848d849c9da0a6",
+    "candidate_commit": "690fb307d460fb95bc3b6c62884359e7d262932a",
+    "changed_paths": [
+      "benches/support/phase1.py",
+      "benches/support/test_phase1.py",
+      "docs/protocol-v2.md",
+      "src/edit/types.rs",
+      "src/grep.rs",
+      "src/lib.rs",
+      "src/main.rs",
+      "src/protocol.rs",
+      "src/read.rs",
+      "src/server.rs"
+    ],
+    "dirty": false,
+    "signature_status": "U"
+  },
+  "schema_version": 1,
+  "semantic_coverage": {
+    "executable_rust_examples": 22,
+    "rule_count": 22,
+    "rule_ids": [
+      "V2-R001",
+      "V2-R002",
+      "V2-R003",
+      "V2-R004",
+      "V2-R005",
+      "V2-R006",
+      "V2-R007",
+      "V2-R008",
+      "V2-R009",
+      "V2-R010",
+      "V2-R011",
+      "V2-R012",
+      "V2-R013",
+      "V2-R014",
+      "V2-R015",
+      "V2-R016",
+      "V2-R017",
+      "V2-R018",
+      "V2-R019",
+      "V2-R020",
+      "V2-R021",
+      "V2-R022"
+    ],
+    "rules_with_executable_examples": 22
+  },
+  "started_at": "2026-07-31T15:51:51.903529+00:00",
+  "status": "pass"
+}

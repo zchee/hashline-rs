@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "workflow": "performance-goal",
+  "slug": "hashline-v2-phase1",
+  "objective": "Freeze and fully verify the hashline v2 protocol and reference model defined by Phase 1 of .omx/plans/2026-07-31-incompatible-max-performance-redesign.md, without starting Phase 2 or modifying Phase 0 evidence",
+  "status": "complete",
+  "createdAt": "2026-07-31T14:53:56.466Z",
+  "updatedAt": "2026-07-31T16:03:33.611Z",
+  "evaluator": {
+    "command": "RUSTUP_TOOLCHAIN=nightly-2026-07-31 PYTHONDONTWRITEBYTECODE=1 python3 -B benches/support/phase1.py evaluate --goal-root .omx/goals/performance/hashline-v2-phase1",
+    "contract": "PASS only when the authoritative plan and Phase 0 evidence hashes are unchanged; v2 SnapshotId, position/range, UTF-8, conflict, pagination, restart, size, line-ending, empty-file, schema, CLI, error-taxonomy, and reference-apply semantics are frozen with executable examples and at least one realistic test per rule; all Phase 1-owned unit, property/differential, schema, CLI, fmt, build, clippy -D warnings, test, and doc gates pass; no unresolved semantic choice or Phase 2 implementation is present; and an exact commit/command/artifact audit is complete"
+  },
+  "artifactPaths": {
+    "state": ".omx/goals/performance/hashline-v2-phase1/state.json",
+    "ledger": ".omx/goals/performance/hashline-v2-phase1/ledger.jsonl",
+    "evaluator": ".omx/goals/performance/hashline-v2-phase1/evaluator.md"
+  },
+  "startedAt": "2026-07-31T14:53:56.691Z",
+  "lastValidation": {
+    "status": "pass",
+    "evidence": "candidate=690fb307d460fb95bc3b6c62884359e7d262932a; base=6afe83059de218d71d4161fb36848d849c9da0a6; evaluator=.omx/goals/performance/hashline-v2-phase1/evaluations/20260731T155151Z-690fb307d460/evaluation.json sha256=09781dfc625e1a89d3a12552a8540728bf6bd72664e7b71b640ac0d1309a9434 status=pass; independent_audit=.omx/goals/performance/hashline-v2-phase1/phase1-exit-gate-audit.json sha256=d1c272e5ace351a4be7d9e9921fe7dea595f63afd663348ba6c28ecd405e6610 status=pass; raw_advisor=.omx/artifacts/claude-act-as-an-independent-read-only-phase-1-exit-gate-auditor-fo-2026-07-31T16-01-34-938Z.md sha256=24c5a9a900c47d84a8509afea9be7751609c4e32a4ad588e4dc009fcd5643182; phase0_replay=6836_entries status=pass; unresolved_decisions=0; phase2_started=false",
+    "recordedAt": "2026-07-31T16:03:01.234Z"
+  },
+  "completedAt": "2026-07-31T16:03:33.611Z"
+}

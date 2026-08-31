@@ -1,0 +1,20 @@
+{
+  "candidate_commit": "6afe83059de218d71d4161fb36848d849c9da0a6",
+  "evaluated_at": "2026-07-31T14:16:00.807767+00:00",
+  "platforms": [
+    {
+      "candidate_commit": "6afe83059de218d71d4161fb36848d849c9da0a6",
+      "checksum_count": 3418,
+      "platform": "macos-arm64",
+      "run_root": "/Users/zchee/rust/src/github.com/zchee/hashline-rs/.omx/goals/performance/hashline-v2-phase0/artifacts/macos-arm64/runs/20260731T124545Z-6afe83059de2"
+    },
+    {
+      "candidate_commit": "6afe83059de218d71d4161fb36848d849c9da0a6",
+      "checksum_count": 3418,
+      "platform": "linux-amd64",
+      "run_root": "/Users/zchee/rust/src/github.com/zchee/hashline-rs/.omx/goals/performance/hashline-v2-phase0/artifacts/linux-amd64/runs/20260731T133009Z-6afe83059de2"
+    }
+  ],
+  "schema_version": 1,
+  "status": "pass"
+}

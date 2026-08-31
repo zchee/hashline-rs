@@ -28,7 +28,7 @@ from typing import TypeAlias, cast
 LOGGER = logging.getLogger("hashline.phase0")
 
 PLAN_BASELINE = "f3a2f3f41076fc48f3aa4836eda873b21f7a6be6"
-PLAN_PATH = ".omx/plans/2026-07-31-incompatible-max-performance-redesign.md"
+PLAN_PATH = "benches/evidence/v2/plans/2026-07-31-incompatible-max-performance-redesign.md"
 SCHEMA_VERSION = 1
 REQUIRED_PLATFORMS = ("macos-arm64", "linux-amd64")
 PROFILE_SCENARIOS = ("full_read", "edit", "rare_grep", "common_grep")

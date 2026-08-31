@@ -28,9 +28,9 @@ import benches.support.phase1 as phase1_evaluator
 SCHEMA_VERSION = 1
 PHASE0_COMMIT = "6afe83059de218d71d4161fb36848d849c9da0a6"
 BASE_COMMIT = "690fb307d460fb95bc3b6c62884359e7d262932a"
-PLAN_PATH = ".omx/plans/2026-07-31-incompatible-max-performance-redesign.md"
+PLAN_PATH = "benches/evidence/v2/plans/2026-07-31-incompatible-max-performance-redesign.md"
 PLAN_SHA256 = "db00bf029f184811b79ab709df064a3fb9b23a9ab64562e28432e43ca8a41a6f"
-PHASE1_ROOT = Path(".omx/goals/performance/hashline-v2-phase1")
+PHASE1_ROOT = Path("benches/evidence/v2/goals/performance/hashline-v2-phase1")
 PHASE2_AUDIT = "phase2-exit-gate-audit.json"
 PHASE2_DECISIONS = "phase2-decisions.json"
 REQUIRED_PLATFORMS = ("macos-arm64", "linux-amd64")
@@ -40,14 +40,14 @@ MAXIMUM_U32_METADATA_BYTES_PER_LINE = 4.0
 MINIMUM_UNSAFE_SPEEDUP = 1.05
 
 IMMUTABLE_PHASE1_FILES = {
-    ".omx/goals/performance/hashline-v2-phase1/evaluation.json": "09781dfc625e1a89d3a12552a8540728bf6bd72664e7b71b640ac0d1309a9434",
-    ".omx/goals/performance/hashline-v2-phase1/evaluator.md": "7262a3750d7d9f7c8efc9844edb03d3ddbb222efbf2a5d98389a62e116227d23",
-    ".omx/goals/performance/hashline-v2-phase1/ledger.jsonl": "93d370b6f5e4d0bd2c62eab2187a91c41a6c656b1f1672801618c2cc5fd427bf",
-    ".omx/goals/performance/hashline-v2-phase1/phase1-exit-gate-audit.json": "d1c272e5ace351a4be7d9e9921fe7dea595f63afd663348ba6c28ecd405e6610",
-    ".omx/goals/performance/hashline-v2-phase1/state.json": "63287aaf40b0e4b1e8d28451b6c47f97a2a1eec8faefafaa5e2793ad53299c34",
-    ".omx/goals/performance/hashline-v2-phase1/evaluations/"
+    "benches/evidence/v2/goals/performance/hashline-v2-phase1/evaluation.json": "09781dfc625e1a89d3a12552a8540728bf6bd72664e7b71b640ac0d1309a9434",
+    "benches/evidence/v2/goals/performance/hashline-v2-phase1/evaluator.md": "7262a3750d7d9f7c8efc9844edb03d3ddbb222efbf2a5d98389a62e116227d23",
+    "benches/evidence/v2/goals/performance/hashline-v2-phase1/ledger.jsonl": "93d370b6f5e4d0bd2c62eab2187a91c41a6c656b1f1672801618c2cc5fd427bf",
+    "benches/evidence/v2/goals/performance/hashline-v2-phase1/phase1-exit-gate-audit.json": "d1c272e5ace351a4be7d9e9921fe7dea595f63afd663348ba6c28ecd405e6610",
+    "benches/evidence/v2/goals/performance/hashline-v2-phase1/state.json": "63287aaf40b0e4b1e8d28451b6c47f97a2a1eec8faefafaa5e2793ad53299c34",
+    "benches/evidence/v2/goals/performance/hashline-v2-phase1/evaluations/"
     "20260731T155151Z-690fb307d460/evaluation.json": "09781dfc625e1a89d3a12552a8540728bf6bd72664e7b71b640ac0d1309a9434",
-    ".omx/artifacts/"
+    "benches/evidence/v2/artifacts/"
     "claude-act-as-an-independent-read-only-phase-1-exit-gate-auditor-fo-"
     "2026-07-31T16-01-34-938Z.md": "24c5a9a900c47d84a8509afea9be7751609c4e32a4ad588e4dc009fcd5643182",
 }

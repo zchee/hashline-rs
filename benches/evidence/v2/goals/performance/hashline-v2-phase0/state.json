@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "workflow": "performance-goal",
+  "slug": "hashline-v2-phase0",
+  "objective": "Complete only Phase 0 of the incompatible hashline-rs v2 performance plan with reproducible paired lower-bound benchmarks, symbolized profiles, allocation/RSS evidence, and separate macOS arm64 and Linux amd64 artifacts; do not begin Phase 1",
+  "status": "complete",
+  "createdAt": "2026-07-30T20:04:20.171Z",
+  "updatedAt": "2026-07-31T14:24:19.654Z",
+  "evaluator": {
+    "command": "python3 benches/support/phase0.py evaluate --goal-root .omx/goals/performance/hashline-v2-phase0",
+    "contract": "PASS only when the evaluator exits 0 and verifies: clean exact baseline commit; separate macOS arm64 and Linux amd64 environment and corpus manifests; interleaved paired current/prototype measurements with point estimates and confidence intervals for every Phase 0 target; explicit cold/warm page-cache state; allocation counts and peak RSS for full read, 50k-line edit, and tree grep; symbolized profiles for full read, edit, rare grep, and common grep; hashed raw Criterion locations; fmt, all/no-default builds and tests, clippy -D warnings, and docs pass; no Phase 1 production architecture changes"
+  },
+  "artifactPaths": {
+    "state": ".omx/goals/performance/hashline-v2-phase0/state.json",
+    "ledger": ".omx/goals/performance/hashline-v2-phase0/ledger.jsonl",
+    "evaluator": ".omx/goals/performance/hashline-v2-phase0/evaluator.md"
+  },
+  "startedAt": "2026-07-30T20:04:20.426Z",
+  "lastValidation": {
+    "status": "pass",
+    "evidence": "Phase 0 only PASS at signed candidate 6afe83059de218d71d4161fb36848d849c9da0a6. Canonical evaluator exited 0; evaluation.json SHA-256 21af7734da8399ec4cf8544e202b09e8e6e339aea35dc2acd179c227476ef1b4. Independent 1,192-check exit-gate audit PASS; phase0-exit-gate-audit.json SHA-256 81e04dcc6a433070c0ecd58f4191113b00a11bcc49a220c7dc845d043d185a7f. Each platform preserves 3,419 raw files and 3,418 exact checksums, 17 targets x 6 interleaved arms, 48 cold/warm records, 7 allocation/RSS records, 4 symbolized profiles, and 8 passing quality commands. macOS run 20260731T124545Z-6afe83059de2; Linux run 20260731T133009Z-6afe83059de2. No src changes after the Phase 0 harness parent and Phase 1 was not started.",
+    "recordedAt": "2026-07-31T14:23:52.590Z"
+  },
+  "completedAt": "2026-07-31T14:24:19.654Z"
+}

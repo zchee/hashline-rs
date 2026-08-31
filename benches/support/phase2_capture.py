@@ -30,7 +30,7 @@ import benches.support.phase1 as phase1  # noqa: PLR0402
 
 SCHEMA_VERSION = 1
 BASE_COMMIT = "690fb307d460fb95bc3b6c62884359e7d262932a"
-PLAN_PATH = ".omx/plans/2026-07-31-incompatible-max-performance-redesign.md"
+PLAN_PATH = "benches/evidence/v2/plans/2026-07-31-incompatible-max-performance-redesign.md"
 PLAN_SHA256 = "db00bf029f184811b79ab709df064a3fb9b23a9ab64562e28432e43ca8a41a6f"
 PHASE2_GOAL = ".omx/goals/performance/hashline-v2-phase2"
 SNAPSHOT_SIZES = (10_000, 50_000)
