@@ -67,10 +67,14 @@ be recorded as a timing.
 
 ## Reading the historical baselines
 
-`BASELINE.md`, `V2_BASELINE.md`, `V2_BASELINE_AT_HEAD.md`, `V2_RESULTS.md`,
-`OPT_RESULTS.md`, and `OPT_ATTRIBUTION.md` were captured with Criterion and
-name benchmarks in Criterion's `group/bench` form. The measurements stand; only
-the names moved:
+The v2 redesign archive — `V2_BASELINE.md`, `V2_RESULTS.md`,
+and the hash-pinned evidence set `benches/evidence/v2/` (self-verifying
+via `sha256sum -c SHA256SUMS`) — lives in git history only; the last
+tree containing it is commit fdfff03.
+
+`BASELINE.md`, `V2_BASELINE_AT_HEAD.md`, `OPT_RESULTS.md`, and
+`OPT_ATTRIBUTION.md` were captured with Criterion and name benchmarks in
+Criterion's `group/bench` form. The measurements stand; only the names moved:
 
 | Criterion name | Divan path |
 |---|---|
