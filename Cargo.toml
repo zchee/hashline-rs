@@ -69,3 +69,12 @@ harness = false
 lto = "fat"
 codegen-units = 1
 strip = "symbols"
+
+# criterion-parity fork of the CodSpeed divan compat layer: warmup passes,
+# per-pass input generation, and bench_group/threads/counter attrs under
+# instrumentation. Same 5.0.1 versions, so `[patch]` swaps it in everywhere.
+# Fork plan: codspeed-rust/.omc/plans/2026-08-30-divan-compat-criterion-parity.md
+[patch.crates-io]
+codspeed-divan-compat = { git = "https://github.com/zchee/codspeed-rust.git", branch = "criterion-parity" }
+codspeed-divan-compat-macros = { git = "https://github.com/zchee/codspeed-rust.git", branch = "criterion-parity" }
+codspeed-divan-compat-walltime = { git = "https://github.com/zchee/codspeed-rust.git", branch = "criterion-parity" }
