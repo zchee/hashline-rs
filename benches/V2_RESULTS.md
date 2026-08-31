@@ -3,7 +3,9 @@
 Status: **implementation of Phases 3–6 production paths complete on this host**.  
 Plan: `.omx/plans/2026-07-31-incompatible-max-performance-redesign.md`  
 Base HEAD before work: `0b66d10`  
-Phases 0–2: immutable PASS (see `.omx/goals/performance/hashline-v2-phase*`).
+Phases 0–2: immutable PASS — pinned evidence tracked in `benches/evidence/v2/`
+(`sha256sum -c SHA256SUMS`); raw run payloads remain in the local
+`.omx/goals/performance/hashline-v2-phase*` archive.
 
 ## Accepted
 

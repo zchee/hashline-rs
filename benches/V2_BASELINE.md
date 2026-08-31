@@ -1,5 +1,11 @@
 # Incompatible v2 Phase 0 Baseline
 
+> **Archival note (2026-09-01):** the `benches/support/` harness quoted
+> below was removed from the working tree after Phase 8 deleted the
+> bench targets it drove; it is preserved in git history (last tree:
+> 2f3d612). The pinned evidence and its verification ledger now live in
+> `benches/evidence/v2/` (`sha256sum -c SHA256SUMS`).
+
 This file records the reproducibility contract for Phase 0 of
 `.omx/plans/2026-07-31-incompatible-max-performance-redesign.md`. That plan is
 the sole source of truth. This document must not be used to authorize Phase 1.
