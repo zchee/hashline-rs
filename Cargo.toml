@@ -47,7 +47,10 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 libc = "0.2"
 
 [dev-dependencies]
-criterion = { version = "0.8.2", features = ["async_tokio", "html_reports"] }
+# CodSpeed's drop-in Divan replacement: `cargo bench` runs the stock Divan
+# walltime harness, `cargo codspeed run` measures the same bodies under
+# CodSpeed instrumentation. Renamed so the benches import plain `divan`.
+divan = { package = "codspeed-divan-compat", version = "5" }
 blake3 = "1"
 libc = "0.2"
 # Independent engine for the grep differential test's per-line reference

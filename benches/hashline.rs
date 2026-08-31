@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-//! Criterion benchmarks for hashline's hot paths.
+//! Divan benchmarks for hashline's hot paths.
 //!
 //! These are the Phase 0 baselines for the max-performance optimization plan
 //! (`.omc/plans/2026-07-30-max-performance-optimization.md`): every later
@@ -20,29 +20,81 @@
 //! `benches/BASELINE.md`. Corpus generation is fully deterministic (a small
 //! inline xorshift32 PRNG, no `rand` and no system time) so results are
 //! reproducible across runs and machines.
+//!
+//! The `divan` dependency is [`codspeed-divan-compat`], a drop-in replacement
+//! that keeps `cargo bench` on the stock Divan walltime harness while letting
+//! `cargo codspeed run` measure the same benchmark bodies under CodSpeed's
+//! instrumentation. The compat layer discards `sample_count` / `sample_size`
+//! (it executes each body exactly once) but accepts them, so the two harnesses
+//! share one source of truth.
+//!
+//! Every benchmark whose body mutates shared state — a file the next iteration
+//! would observe as already edited, a snapshot cache entry that must be cold —
+//! pins `sample_size = 1`. Divan generates a whole sample's inputs *before*
+//! timing that sample, so any larger sample size would run every reset up
+//! front and silently measure the conflict path instead.
 
 use std::{
     hint::black_box,
     path::{Path, PathBuf},
-    sync::OnceLock,
-    time::Duration,
+    sync::{LazyLock, Mutex, OnceLock},
 };
 
-use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
+use divan::Bencher;
 use hashline::{
     HashlineServer, cache,
     grep::run_grep,
+    persist::Durability,
     protocol::{EditRequest, GrepOutputMode, GrepRequest},
     snapshot::Snapshot,
     util::Workspace,
 };
 use memchr::memchr_iter;
 use rmcp::model::{CallToolResult, ContentBlock};
+use tempfile::TempDir;
+use tokio::runtime::Runtime;
 
 #[path = "support/phase0_workloads.rs"]
 mod phase0_workloads;
 
 use phase0_workloads::generate_corpus;
+
+fn main() {
+    divan::main();
+    remove_fixture_trees();
+}
+
+/// Roots of every fixture tree created during this run.
+///
+/// Fixtures hang off `LazyLock`/`OnceLock` statics so a tree is built once no
+/// matter how many benchmarks share it, and statics are never dropped — so
+/// `TempDir`'s own cleanup never runs. `main` removes them explicitly instead.
+static FIXTURE_TREES: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+
+/// Create a fixture tempdir and register its root for end-of-run cleanup.
+fn fixture_dir() -> TempDir {
+    let dir = TempDir::new().expect("bench fixture tempdir");
+    FIXTURE_TREES
+        .lock()
+        .expect("fixture registry")
+        .push(dir.path().to_path_buf());
+    dir
+}
+
+/// Remove every registered fixture tree.
+fn remove_fixture_trees() {
+    for root in FIXTURE_TREES.lock().expect("fixture registry").drain(..) {
+        let _ = std::fs::remove_dir_all(root);
+    }
+}
+
+/// Shared runtime for the wired benches.
+///
+/// Divan has no async harness, so every wired body blocks on its future here.
+/// `Runtime::block_on` costs the same constant in every variant and is orders
+/// of magnitude below the dispatch work being measured.
+static RUNTIME: LazyLock<Runtime> =
+    LazyLock::new(|| Runtime::new().expect("tokio runtime for wired benches"));
 
 /// Number of files in the synthetic grep fixture tree.
 const GREP_FILE_COUNT: usize = 2_000;
@@ -53,16 +105,21 @@ const GREP_RARE_TOKEN: &str = "zqxj7_rare_marker_unique";
 /// Literal that occurs naturally across most files via the identifier pool,
 /// for the common-literal grep benchmark.
 const GREP_COMMON_TOKEN: &str = "value";
+/// `^`-anchored regex exercising the non-literal matching path.
+const GREP_ANCHORED_REGEX: &str = "^fn ";
+
+/// Rendering modes every grep benchmark is run under.
+const GREP_MODES: [&str; 2] = ["content", "files"];
 
 /// Lazily-built synthetic fixture tree for grep benchmarks: ~2,000 small
 /// code-like files across nested directories. Built once (via `OnceLock`)
 /// regardless of how many benchmark iterations run against it.
-static GREP_FIXTURE: OnceLock<(tempfile::TempDir, PathBuf)> = OnceLock::new();
+static GREP_FIXTURE: OnceLock<(TempDir, Workspace)> = OnceLock::new();
 
-/// Root path of the (lazily-built) grep fixture tree.
-fn grep_fixture_root() -> &'static Path {
-    let (_tmp, root) = GREP_FIXTURE.get_or_init(|| {
-        let tmp = tempfile::TempDir::new().expect("tempdir for grep fixture");
+/// Workspace over the (lazily-built) grep fixture tree.
+fn grep_workspace() -> &'static Workspace {
+    let (_tmp, workspace) = GREP_FIXTURE.get_or_init(|| {
+        let tmp = fixture_dir();
         let root = tmp.path().to_path_buf();
         for i in 0..GREP_FILE_COUNT {
             let dir = root
@@ -78,13 +135,19 @@ fn grep_fixture_root() -> &'static Path {
             std::fs::write(dir.join(format!("file_{}.rs", i % 10)), &content)
                 .expect("write grep fixture file");
         }
-        (tmp, root)
+        let workspace = Workspace::new(root, false);
+        (tmp, workspace)
     });
-    root.as_path()
+    workspace
 }
 
-/// Build a `GrepRequest` searching for `pattern` with default options.
-fn grep_input(pattern: &str) -> GrepRequest {
+/// Root path of the grep fixture tree, for the glob bench that shares it.
+fn grep_fixture_root() -> &'static Path {
+    grep_workspace().root.as_path()
+}
+
+/// Build a `GrepRequest` for `pattern` rendered under `mode`.
+fn grep_request(pattern: &str, mode: &str) -> GrepRequest {
     GrepRequest {
         pattern: pattern.to_owned(),
         path: None,
@@ -94,54 +157,66 @@ fn grep_input(pattern: &str) -> GrepRequest {
         before_context: None,
         context: None,
         max_matches: 200,
-        output_mode: GrepOutputMode::Content,
+        output_mode: match mode {
+            "content" => GrepOutputMode::Content,
+            "files" => GrepOutputMode::FilesWithMatches,
+            other => panic!("unknown grep rendering mode: {other}"),
+        },
     }
 }
 
-/// `run_grep` over the ~2,000-file fixture: a rare literal, a common
-/// literal, and a `^`-anchored regex.
-fn bench_grep(c: &mut Criterion) {
-    let root = grep_fixture_root();
-    let ws = Workspace::new(root.to_path_buf(), false);
-    let mut group = c.benchmark_group("grep");
-    group.sample_size(20);
-    group.measurement_time(Duration::from_secs(6));
-
-    for (label, pattern) in [
-        ("rare_literal", GREP_RARE_TOKEN),
-        ("common_literal", GREP_COMMON_TOKEN),
-        ("anchored_regex", "^fn "),
-    ] {
-        let probe = run_grep(&ws, &grep_input(pattern));
-        assert!(
-            !probe.is_error,
-            "wired tree grep must succeed: {}",
-            probe.text
-        );
+/// Assert the wired grep contract once, before any timing.
+///
+/// A silent rejection must never masquerade as a timing (plan Wave 0, AC26),
+/// so the probe fails closed on an error outcome and, in content mode, on a
+/// missing match summary.
+fn probe_grep(workspace: &Workspace, request: &GrepRequest, mode: &str) {
+    let probe = run_grep(workspace, request);
+    assert!(!probe.is_error, "wired grep must succeed: {}", probe.text);
+    if mode == "content" {
         assert!(
             probe.text.contains("matches="),
             "wired summary missing: {}",
             probe.text
         );
-        group.bench_function(label, |b| {
-            b.iter(|| {
-                let outcome = run_grep(&ws, &grep_input(pattern));
-                assert!(!outcome.is_error, "wired tree grep must succeed");
-                black_box(outcome.text.len())
-            });
-        });
-
-        let mut files_input = grep_input(pattern);
-        files_input.output_mode = GrepOutputMode::FilesWithMatches;
-        group.bench_function(format!("{label}_files"), |b| {
-            b.iter(|| {
-                let outcome = run_grep(&ws, &files_input);
-                assert!(!outcome.is_error, "wired tree files-mode grep must succeed");
-                black_box(outcome.text.len())
-            });
-        });
     }
-    group.finish();
+}
+
+/// Time `run_grep` over `request`, re-asserting success every iteration.
+fn bench_grep(bencher: Bencher, workspace: &'static Workspace, request: GrepRequest) {
+    bencher.bench_local(move || {
+        let outcome = run_grep(workspace, &request);
+        assert!(!outcome.is_error, "wired grep must succeed");
+        black_box(outcome.text.len())
+    });
+}
+
+/// `run_grep` over the ~2,000-file fixture: a rare literal, a common literal,
+/// and a `^`-anchored regex, each in content and files-with-matches modes.
+mod grep {
+    use super::*;
+
+    fn run(bencher: Bencher, pattern: &str, mode: &str) {
+        let workspace = grep_workspace();
+        let request = grep_request(pattern, mode);
+        probe_grep(workspace, &request, mode);
+        bench_grep(bencher, workspace, request);
+    }
+
+    #[divan::bench(args = GREP_MODES, sample_count = 20)]
+    fn rare_literal(bencher: Bencher, mode: &str) {
+        run(bencher, GREP_RARE_TOKEN, mode);
+    }
+
+    #[divan::bench(args = GREP_MODES, sample_count = 20)]
+    fn common_literal(bencher: Bencher, mode: &str) {
+        run(bencher, GREP_COMMON_TOKEN, mode);
+    }
+
+    #[divan::bench(args = GREP_MODES, sample_count = 20)]
+    fn anchored_regex(bencher: Bencher, mode: &str) {
+        run(bencher, GREP_ANCHORED_REGEX, mode);
+    }
 }
 
 /// Lines in the single-file grep fixture (~1.6 MB of code-like text).
@@ -156,20 +231,21 @@ const GREP_LARGE_FILE: &str = "large.rs";
 /// opens dominate its wall time), so it cannot show a matching-engine or
 /// anchoring win. This one file isolates exactly that: read once, search once,
 /// anchor only what is rendered.
-static GREP_LARGE_FIXTURE: OnceLock<(tempfile::TempDir, PathBuf)> = OnceLock::new();
+static GREP_LARGE_FIXTURE: OnceLock<(TempDir, Workspace)> = OnceLock::new();
 
-/// Root path of the (lazily-built) single-file grep fixture.
-fn grep_large_fixture_root() -> &'static Path {
-    let (_tmp, root) = GREP_LARGE_FIXTURE.get_or_init(|| {
-        let tmp = tempfile::TempDir::new().expect("tempdir for large grep fixture");
+/// Workspace over the (lazily-built) single-file grep fixture.
+fn grep_large_workspace() -> &'static Workspace {
+    let (_tmp, workspace) = GREP_LARGE_FIXTURE.get_or_init(|| {
+        let tmp = fixture_dir();
         let root = tmp.path().to_path_buf();
         let mut content = generate_corpus(GREP_LARGE_LINES, 0x1A26_F11E);
         content.push_str(GREP_RARE_TOKEN);
         content.push('\n');
         std::fs::write(root.join(GREP_LARGE_FILE), &content).expect("write large grep fixture");
-        (tmp, root)
+        let workspace = Workspace::new(root, false);
+        (tmp, workspace)
     });
-    root.as_path()
+    workspace
 }
 
 /// `run_grep` over the single 50,000-line file: a rare literal, a common
@@ -179,53 +255,31 @@ fn grep_large_fixture_root() -> &'static Path {
 /// the file itself, which takes `run_grep`'s single-file short circuit — the
 /// directory walker's thread-pool startup is several milliseconds and would
 /// bury exactly the read/search/anchor work this bench exists to measure.
-fn bench_grep_large_file(c: &mut Criterion) {
-    let root = grep_large_fixture_root();
-    let ws = Workspace::new(root.to_path_buf(), false);
-    let mut group = c.benchmark_group("grep_large_file");
-    group.sample_size(30);
-    group.measurement_time(Duration::from_secs(6));
+mod grep_large_file {
+    use super::*;
 
-    for (label, pattern) in [
-        ("rare_literal", GREP_RARE_TOKEN),
-        ("common_literal", GREP_COMMON_TOKEN),
-        ("anchored_regex", "^fn "),
-    ] {
-        let mut input = grep_input(pattern);
-        input.path = Some(GREP_LARGE_FILE.to_owned());
-        let probe = run_grep(&ws, &input);
-        assert!(
-            !probe.is_error,
-            "wired large-file grep must succeed: {}",
-            probe.text
-        );
-        assert!(
-            probe.text.contains("matches="),
-            "wired summary missing: {}",
-            probe.text
-        );
-        group.bench_function(label, |b| {
-            b.iter(|| {
-                let outcome = run_grep(&ws, &input);
-                assert!(!outcome.is_error, "wired large-file grep must succeed");
-                black_box(outcome.text.len())
-            });
-        });
-
-        let mut files_input = input.clone();
-        files_input.output_mode = GrepOutputMode::FilesWithMatches;
-        group.bench_function(format!("{label}_files"), |b| {
-            b.iter(|| {
-                let outcome = run_grep(&ws, &files_input);
-                assert!(
-                    !outcome.is_error,
-                    "wired large-file files-mode grep must succeed"
-                );
-                black_box(outcome.text.len())
-            });
-        });
+    fn run(bencher: Bencher, pattern: &str, mode: &str) {
+        let workspace = grep_large_workspace();
+        let mut request = grep_request(pattern, mode);
+        request.path = Some(GREP_LARGE_FILE.to_owned());
+        probe_grep(workspace, &request, mode);
+        bench_grep(bencher, workspace, request);
     }
-    group.finish();
+
+    #[divan::bench(args = GREP_MODES, sample_count = 30)]
+    fn rare_literal(bencher: Bencher, mode: &str) {
+        run(bencher, GREP_RARE_TOKEN, mode);
+    }
+
+    #[divan::bench(args = GREP_MODES, sample_count = 30)]
+    fn common_literal(bencher: Bencher, mode: &str) {
+        run(bencher, GREP_COMMON_TOKEN, mode);
+    }
+
+    #[divan::bench(args = GREP_MODES, sample_count = 30)]
+    fn anchored_regex(bencher: Bencher, mode: &str) {
+        run(bencher, GREP_ANCHORED_REGEX, mode);
+    }
 }
 
 /// Byte offset of the 1-based logical `line` start within `content`.
@@ -296,6 +350,18 @@ fn assert_dispatch_success(result: &CallToolResult) -> &str {
     tool_text(result)
 }
 
+/// Dispatch one tool call on the shared runtime and return its rendered text
+/// length, asserting success.
+fn dispatch_len(server: &HashlineServer, tool: &str, args: serde_json::Value) -> usize {
+    RUNTIME.block_on(async {
+        let result = server
+            .dispatch(tool, args)
+            .await
+            .unwrap_or_else(|error| panic!("{tool} dispatch: {error:?}"));
+        assert_dispatch_success(&result).len()
+    })
+}
+
 /// Parse a non-terminal read page footer into (snapshot, position) tokens.
 fn parse_cursor_footer(text: &str) -> Option<(String, String)> {
     let tail = &text[text.rfind('\n').map_or(0, |index| index + 1)..];
@@ -323,100 +389,144 @@ fn count_grep_match_lines(text: &str) -> usize {
         .count()
 }
 
-/// End-to-end `HashlineServer::dispatch` bench on a realistic 300-line file:
-/// the read path split into cold (snapshot-cache miss per iteration) and warm
-/// (resident snapshot) states, plus a valid single-op edit. Every body
-/// asserts tool success. Reset-dependent benches use
-/// `BatchSize::PerIteration` because batched setup runs all resets before the
-/// first timed call, which would let later iterations observe the previous
-/// edit and silently measure the conflict path instead.
-fn bench_dispatch(c: &mut Criterion) {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime for dispatch bench");
+/// End-to-end `HashlineServer::dispatch` fixture on realistic 300-line files.
+///
+/// Read and edit get their own files so the benchmarks stay independent of the
+/// order Divan happens to register them in.
+struct DispatchFixture {
+    _tmp: TempDir,
+    server: HashlineServer,
+    barrier_server: HashlineServer,
+    read_path: PathBuf,
+    read_args: serde_json::Value,
+    content: String,
+    edit_path: PathBuf,
+    edit_args: serde_json::Value,
+    barrier_path: PathBuf,
+    barrier_args: serde_json::Value,
+}
 
-    let tmp = tempfile::TempDir::new().expect("tempdir for dispatch bench");
+static DISPATCH_FIXTURE: LazyLock<DispatchFixture> = LazyLock::new(|| {
+    let tmp = fixture_dir();
     let content = generate_corpus(300, 0xD159_A7C0);
-    let file_path = tmp.path().join("sample.rs");
-    std::fs::write(&file_path, &content).expect("write dispatch fixture");
+
     // The server canonicalizes its root, so cache keys are canonical paths;
     // invalidation through the raw tempdir path (/var vs /private/var on
     // macOS) would silently no-op and time a warm read as "cold".
-    let file_path = file_path
-        .canonicalize()
-        .expect("canonicalize dispatch fixture");
+    let write_fixture = |name: &str| {
+        let path = tmp.path().join(name);
+        std::fs::write(&path, &content).expect("write dispatch fixture");
+        path.canonicalize().expect("canonicalize dispatch fixture")
+    };
 
-    let server = HashlineServer::new(tmp.path().to_path_buf());
-    let barrier_server = HashlineServer::new(tmp.path().to_path_buf())
-        .with_durability(hashline::persist::Durability::Barrier);
+    let read_path = write_fixture("read.rs");
+    let edit_path = write_fixture("edit.rs");
+    let barrier_path = write_fixture("edit_barrier.rs");
 
-    let mut group = c.benchmark_group("dispatch");
-    group.sample_size(30);
-    group.measurement_time(Duration::from_secs(5));
+    DispatchFixture {
+        server: HashlineServer::new(tmp.path().to_path_buf()),
+        barrier_server: HashlineServer::new(tmp.path().to_path_buf())
+            .with_durability(Durability::Barrier),
+        read_path,
+        read_args: serde_json::json!({"path": "read.rs"}),
+        edit_args: replace_args(&content, "edit.rs", &[150]),
+        barrier_args: replace_args(&content, "edit_barrier.rs", &[150]),
+        edit_path,
+        barrier_path,
+        content,
+        _tmp: tmp,
+    }
+});
 
-    let read_args = serde_json::json!({"path": "sample.rs"});
-    group.bench_function("read_300_lines", |b| {
-        b.to_async(&rt).iter(|| {
-            let args = read_args.clone();
-            let server = &server;
-            async move {
-                let result = server.dispatch("read", args).await.expect("read dispatch");
-                black_box(assert_dispatch_success(&result).len())
-            }
+/// Wired `dispatch` benches on a 300-line file: the read path split into cold
+/// (snapshot-cache miss per iteration) and warm (resident snapshot) states,
+/// plus a valid single-op edit under both durability policies.
+mod dispatch {
+    use super::*;
+
+    #[divan::bench(sample_count = 30)]
+    fn read_300_lines(bencher: Bencher) {
+        let fixture = &*DISPATCH_FIXTURE;
+        bencher.bench_local(|| {
+            black_box(dispatch_len(
+                &fixture.server,
+                "read",
+                fixture.read_args.clone(),
+            ))
         });
-    });
+    }
 
-    group.bench_function("read_300_lines_cold", |b| {
-        b.to_async(&rt).iter_batched(
-            || cache::process_cache().invalidate(&file_path),
-            |()| {
-                let args = read_args.clone();
-                let server = &server;
-                async move {
-                    let result = server.dispatch("read", args).await.expect("read dispatch");
-                    black_box(assert_dispatch_success(&result).len())
-                }
-            },
-            BatchSize::PerIteration,
-        );
-    });
+    #[divan::bench(sample_size = 1, sample_count = 30)]
+    fn read_300_lines_cold(bencher: Bencher) {
+        let fixture = &*DISPATCH_FIXTURE;
+        bencher
+            .with_inputs(|| cache::process_cache().invalidate(&fixture.read_path))
+            .bench_local_values(|()| {
+                black_box(dispatch_len(
+                    &fixture.server,
+                    "read",
+                    fixture.read_args.clone(),
+                ))
+            });
+    }
 
-    let edit_args = replace_args(&content, "sample.rs", &[150]);
-    group.bench_function("edit_single_op_300_lines", |b| {
-        b.to_async(&rt).iter_batched(
-            || std::fs::write(&file_path, &content).expect("reset dispatch fixture"),
-            |()| {
-                let args = edit_args.clone();
-                let server = &server;
-                async move {
-                    let result = server.dispatch("edit", args).await.expect("edit dispatch");
-                    black_box(assert_dispatch_success(&result).len())
-                }
-            },
-            BatchSize::PerIteration,
-        );
-    });
+    #[divan::bench(sample_size = 1, sample_count = 30)]
+    fn edit_single_op_300_lines(bencher: Bencher) {
+        let fixture = &*DISPATCH_FIXTURE;
+        bencher
+            .with_inputs(|| {
+                std::fs::write(&fixture.edit_path, &fixture.content)
+                    .expect("reset dispatch fixture");
+            })
+            .bench_local_values(|()| {
+                black_box(dispatch_len(
+                    &fixture.server,
+                    "edit",
+                    fixture.edit_args.clone(),
+                ))
+            });
+    }
 
-    // Same edit under the barrier durability policy (R019 table): identical
-    // ordering guarantees, no full fsync of temp file and parent directory.
-    group.bench_function("edit_single_op_300_lines_barrier", |b| {
-        b.to_async(&rt).iter_batched(
-            || std::fs::write(&file_path, &content).expect("reset dispatch fixture"),
-            |()| {
-                let args = edit_args.clone();
-                let server = &barrier_server;
-                async move {
-                    let result = server.dispatch("edit", args).await.expect("edit dispatch");
-                    black_box(assert_dispatch_success(&result).len())
-                }
-            },
-            BatchSize::PerIteration,
-        );
-    });
-
-    group.finish();
+    /// The same edit under the barrier durability policy (R019 table):
+    /// identical ordering guarantees, no full fsync of temp file and parent
+    /// directory.
+    #[divan::bench(sample_size = 1, sample_count = 30)]
+    fn edit_single_op_300_lines_barrier(bencher: Bencher) {
+        let fixture = &*DISPATCH_FIXTURE;
+        bencher
+            .with_inputs(|| {
+                std::fs::write(&fixture.barrier_path, &fixture.content)
+                    .expect("reset dispatch fixture");
+            })
+            .bench_local_values(|()| {
+                black_box(dispatch_len(
+                    &fixture.barrier_server,
+                    "edit",
+                    fixture.barrier_args.clone(),
+                ))
+            });
+    }
 }
 
 /// Benchmark seed used only to compare raw version functions under identical input.
 const PHASE2_VERSION_BENCH_SEED: u64 = 0x8ca7_4f91_2d63_b5e0;
+
+/// Corpus sizes the Phase 2 snapshot and validation benches sweep.
+const PHASE2_SIZES: [usize; 2] = [10_000, 50_000];
+
+static CORPUS_10K: LazyLock<String> = LazyLock::new(|| generate_corpus(10_000, 0xB200_0010));
+static CORPUS_50K: LazyLock<String> = LazyLock::new(|| generate_corpus(50_000, 0xB200_0050));
+static CORPUS_100K: LazyLock<String> = LazyLock::new(|| generate_corpus(100_000, 0xB200_0100));
+
+/// Deterministic Phase 2 corpus of `lines` logical lines.
+fn phase2_corpus(lines: usize) -> &'static str {
+    match lines {
+        10_000 => &CORPUS_10K,
+        50_000 => &CORPUS_50K,
+        100_000 => &CORPUS_100K,
+        other => panic!("no Phase 2 corpus registered for {other} lines"),
+    }
+}
 
 #[derive(Debug)]
 struct SnapshotValidationProbe {
@@ -611,183 +721,218 @@ fn full_u64_window(content: &str, start_line: usize, count: usize) -> Vec<u64> {
     offsets[start_line..start_line + count].to_vec()
 }
 
-fn bench_phase2_snapshot(c: &mut Criterion) {
-    let content_10k = generate_corpus(10_000, 0xB200_0010);
-    let content_50k = generate_corpus(50_000, 0xB200_0050);
+/// The production `Snapshot` constructor over an owned buffer.
+mod phase2_snapshot {
+    use super::*;
 
-    for (size, content) in [(10_000usize, &content_10k), (50_000, &content_50k)] {
-        let mut group = c.benchmark_group(format!("phase2_snapshot/{size}"));
-        group.sample_size(30);
-        group.measurement_time(Duration::from_secs(3));
-        group.bench_function("candidate_snapshot", |b| {
-            b.iter_batched(
-                || content.as_bytes().to_vec(),
-                |bytes| {
-                    let snapshot =
-                        Snapshot::from_bytes(black_box(bytes)).expect("valid benchmark snapshot");
-                    black_box((snapshot.id(), snapshot.line_count(), snapshot.byte_len()))
-                },
-                BatchSize::LargeInput,
-            );
-        });
-        group.finish();
-
-        let mut validation = c.benchmark_group(format!("phase2_validation/{size}"));
-        validation.sample_size(30);
-        validation.measurement_time(Duration::from_secs(3));
-        validation.bench_function("safe_snapshot", |b| {
-            b.iter_batched(
-                || content.as_bytes().to_vec(),
-                |bytes| {
-                    let probe = safe_snapshot_probe(black_box(bytes));
-                    black_box((probe.text, probe.version, probe.line_count, probe.byte_len))
-                },
-                BatchSize::LargeInput,
-            );
-        });
-        validation.bench_function("simd_validated_unchecked_snapshot", |b| {
-            b.iter_batched(
-                || content.as_bytes().to_vec(),
-                |bytes| {
-                    let probe = unsafe_snapshot_probe(black_box(bytes));
-                    black_box((probe.text, probe.version, probe.line_count, probe.byte_len))
-                },
-                BatchSize::LargeInput,
-            );
-        });
-        validation.finish();
+    #[divan::bench(args = PHASE2_SIZES, sample_size = 1, sample_count = 30)]
+    fn candidate_snapshot(bencher: Bencher, lines: usize) {
+        let content = phase2_corpus(lines);
+        bencher
+            .with_inputs(|| content.as_bytes().to_vec())
+            .bench_local_values(|bytes| {
+                let snapshot = Snapshot::from_bytes(black_box(bytes)).expect("valid snapshot");
+                black_box((snapshot.id(), snapshot.line_count(), snapshot.byte_len()))
+            });
     }
 }
 
-fn bench_phase2_version_matrix(c: &mut Criterion) {
-    let short = "    let value_42 = compute(123, next_state);\n";
-    let multimegabyte = generate_corpus(50_000, 0xB200_0050);
+/// Safe versus SIMD-validated UTF-8 acceptance for the same owned buffer.
+mod phase2_validation {
+    use super::*;
 
-    for (label, content) in [("short", short), ("multimegabyte", multimegabyte.as_str())] {
-        let mut group = c.benchmark_group(format!("phase2_version/{label}"));
-        group.sample_size(30);
-        group.measurement_time(Duration::from_secs(3));
+    #[divan::bench(args = PHASE2_SIZES, sample_size = 1, sample_count = 30)]
+    fn safe_snapshot(bencher: Bencher, lines: usize) {
+        let content = phase2_corpus(lines);
+        bencher
+            .with_inputs(|| content.as_bytes().to_vec())
+            .bench_local_values(|bytes| {
+                let probe = safe_snapshot_probe(black_box(bytes));
+                black_box((probe.text, probe.version, probe.line_count, probe.byte_len))
+            });
+    }
 
-        group.bench_function("xxh3_128_with_seed", |b| {
-            b.iter(|| {
-                black_box(xxhash_rust::xxh3::xxh3_128_with_seed(
-                    black_box(content.as_bytes()),
-                    PHASE2_VERSION_BENCH_SEED,
-                ))
+    #[divan::bench(args = PHASE2_SIZES, sample_size = 1, sample_count = 30)]
+    fn simd_validated_unchecked_snapshot(bencher: Bencher, lines: usize) {
+        let content = phase2_corpus(lines);
+        bencher
+            .with_inputs(|| content.as_bytes().to_vec())
+            .bench_local_values(|bytes| {
+                let probe = unsafe_snapshot_probe(black_box(bytes));
+                black_box((probe.text, probe.version, probe.line_count, probe.byte_len))
             });
-        });
-        group.bench_function("blake3_128", |b| {
-            b.iter(|| {
-                let digest = blake3::hash(black_box(content.as_bytes()));
-                let prefix: [u8; 16] = digest.as_bytes()[..16]
-                    .try_into()
-                    .expect("BLAKE3 digest prefix is exactly 16 bytes");
-                black_box(prefix)
-            });
-        });
-        group.finish();
     }
 }
 
-fn bench_phase2_offsets(c: &mut Criterion) {
-    let content_50k = generate_corpus(50_000, 0xB200_0050);
-    let content_100k = generate_corpus(100_000, 0xB200_0100);
+/// Version-function matrix over a one-line and a multi-megabyte input.
+mod phase2_version {
+    use super::*;
 
-    let mut construction = c.benchmark_group("phase2_offsets/construction_50k");
-    construction.sample_size(30);
-    construction.measurement_time(Duration::from_secs(3));
-    construction.bench_function("full_u32", |b| {
-        b.iter(|| black_box(phase0_workloads::offsets_u32(black_box(&content_50k))));
-    });
-    construction.bench_function("full_u64", |b| {
-        b.iter(|| black_box(phase0_workloads::offsets_u64(black_box(&content_50k))));
-    });
-    for interval in [128usize, 256, 512] {
-        construction.bench_function(format!("sparse_{interval}"), |b| {
-            b.iter(|| {
-                let checkpoints = SparseCheckpoints::new(black_box(&content_50k), interval);
+    /// Input labels the version matrix sweeps.
+    const INPUTS: [&str; 2] = ["short", "multimegabyte"];
+
+    /// One representative line, the shortest input a version function sees.
+    const SHORT: &str = "    let value_42 = compute(123, next_state);\n";
+
+    fn input(label: &str) -> &'static str {
+        match label {
+            "short" => SHORT,
+            "multimegabyte" => phase2_corpus(50_000),
+            other => panic!("unknown version-matrix input: {other}"),
+        }
+    }
+
+    #[divan::bench(args = INPUTS, sample_count = 30)]
+    fn xxh3_128_with_seed(bencher: Bencher, label: &str) {
+        let content = input(label);
+        bencher.bench_local(|| {
+            black_box(xxhash_rust::xxh3::xxh3_128_with_seed(
+                black_box(content.as_bytes()),
+                PHASE2_VERSION_BENCH_SEED,
+            ))
+        });
+    }
+
+    #[divan::bench(args = INPUTS, sample_count = 30)]
+    fn blake3_128(bencher: Bencher, label: &str) {
+        let content = input(label);
+        bencher.bench_local(|| {
+            let digest = blake3::hash(black_box(content.as_bytes()));
+            let prefix: [u8; 16] = digest.as_bytes()[..16]
+                .try_into()
+                .expect("BLAKE3 digest prefix is exactly 16 bytes");
+            black_box(prefix)
+        });
+    }
+}
+
+/// Line-position index shapes: full materialization versus sparse checkpoints
+/// versus a rank/select bitmap.
+mod phase2_offsets {
+    use super::*;
+
+    /// Sparse-checkpoint intervals the sweep covers.
+    const INTERVALS: [usize; 3] = [128, 256, 512];
+
+    /// Build the whole index for a 50,000-line corpus.
+    mod construction_50k {
+        use super::*;
+
+        #[divan::bench(sample_count = 30)]
+        fn full_u32(bencher: Bencher) {
+            let content = phase2_corpus(50_000);
+            bencher.bench_local(|| black_box(phase0_workloads::offsets_u32(black_box(content))));
+        }
+
+        #[divan::bench(sample_count = 30)]
+        fn full_u64(bencher: Bencher) {
+            let content = phase2_corpus(50_000);
+            bencher.bench_local(|| black_box(phase0_workloads::offsets_u64(black_box(content))));
+        }
+
+        #[divan::bench(args = INTERVALS, sample_count = 30)]
+        fn sparse(bencher: Bencher, interval: usize) {
+            let content = phase2_corpus(50_000);
+            bencher.bench_local(|| {
+                let checkpoints = SparseCheckpoints::new(black_box(content), interval);
                 black_box((checkpoints.resident_bytes(), checkpoints))
             });
-        });
-    }
-    construction.bench_function("rank_select_bitmap", |b| {
-        b.iter(|| {
-            let bitmap = RankSelectBitmap::new(black_box(&content_50k));
-            black_box((bitmap.resident_bytes(), bitmap))
-        });
-    });
-    construction.finish();
+        }
 
-    const START_LINE: usize = 50_000;
-    const WINDOW_LINES: usize = 2_000;
-    let mut cold = c.benchmark_group("phase2_offsets/cold_window_2k_of_100k");
-    cold.sample_size(30);
-    cold.measurement_time(Duration::from_secs(3));
-    cold.bench_function("full_u32", |b| {
-        b.iter(|| {
-            black_box(full_u32_window(
-                black_box(&content_100k),
-                START_LINE,
-                WINDOW_LINES,
-            ))
-        });
-    });
-    cold.bench_function("full_u64", |b| {
-        b.iter(|| {
-            black_box(full_u64_window(
-                black_box(&content_100k),
-                START_LINE,
-                WINDOW_LINES,
-            ))
-        });
-    });
-    for interval in [128usize, 256, 512] {
-        cold.bench_function(format!("sparse_{interval}"), |b| {
-            b.iter(|| {
-                let checkpoints = SparseCheckpoints::new(black_box(&content_100k), interval);
-                black_box(checkpoints.select_window(&content_100k, START_LINE, WINDOW_LINES))
+        #[divan::bench(sample_count = 30)]
+        fn rank_select_bitmap(bencher: Bencher) {
+            let content = phase2_corpus(50_000);
+            bencher.bench_local(|| {
+                let bitmap = RankSelectBitmap::new(black_box(content));
+                black_box((bitmap.resident_bytes(), bitmap))
             });
-        });
+        }
     }
-    cold.bench_function("rank_select_bitmap", |b| {
-        b.iter(|| {
-            let bitmap = RankSelectBitmap::new(black_box(&content_100k));
-            black_box(bitmap.select_window(START_LINE, WINDOW_LINES))
-        });
-    });
-    cold.finish();
+
+    /// Materialize a 2,000-line window at line 50,000 of a 100,000-line corpus
+    /// with no index resident, which is what a first read of a large file
+    /// actually pays.
+    mod cold_window_2k_of_100k {
+        use super::*;
+
+        const START_LINE: usize = 50_000;
+        const WINDOW_LINES: usize = 2_000;
+
+        #[divan::bench(sample_count = 30)]
+        fn full_u32(bencher: Bencher) {
+            let content = phase2_corpus(100_000);
+            bencher.bench_local(|| {
+                black_box(full_u32_window(
+                    black_box(content),
+                    START_LINE,
+                    WINDOW_LINES,
+                ))
+            });
+        }
+
+        #[divan::bench(sample_count = 30)]
+        fn full_u64(bencher: Bencher) {
+            let content = phase2_corpus(100_000);
+            bencher.bench_local(|| {
+                black_box(full_u64_window(
+                    black_box(content),
+                    START_LINE,
+                    WINDOW_LINES,
+                ))
+            });
+        }
+
+        #[divan::bench(args = INTERVALS, sample_count = 30)]
+        fn sparse(bencher: Bencher, interval: usize) {
+            let content = phase2_corpus(100_000);
+            bencher.bench_local(|| {
+                let checkpoints = SparseCheckpoints::new(black_box(content), interval);
+                black_box(checkpoints.select_window(content, START_LINE, WINDOW_LINES))
+            });
+        }
+
+        #[divan::bench(sample_count = 30)]
+        fn rank_select_bitmap(bencher: Bencher) {
+            let content = phase2_corpus(100_000);
+            bencher.bench_local(|| {
+                let bitmap = RankSelectBitmap::new(black_box(content));
+                black_box(bitmap.select_window(START_LINE, WINDOW_LINES))
+            });
+        }
+    }
 }
 
-/// Wave 0 wired-path read benches through `HashlineServer::dispatch`: full
-/// pagination of a 10k-line file (warm), the 2k window of a 100k-line file in
-/// explicit cold and warm snapshot-cache states, and page 2 of a 50k-line
-/// file via the cursor returned by page 1 — the pagination-cost bench the
-/// tree previously lacked. Cold state is forced by evicting the fixture from
-/// the process snapshot cache before every timed iteration.
-fn bench_wired_read(c: &mut Criterion) {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime for wired read bench");
+/// Wired-path read fixture: a 10k-line file paginated end to end, a 100k-line
+/// file windowed cold and warm, and a 50k-line file resumed from a cursor.
+struct WiredReadFixture {
+    _tmp: TempDir,
+    server: HashlineServer,
+    hundred_k_path: PathBuf,
+    full_10k_pages: Vec<serde_json::Value>,
+    window_args: serde_json::Value,
+    cursor_args: serde_json::Value,
+}
 
-    let tmp = tempfile::TempDir::new().expect("tempdir for wired read bench");
+static WIRED_READ_FIXTURE: LazyLock<WiredReadFixture> = LazyLock::new(|| {
+    let tmp = fixture_dir();
     let server = HashlineServer::new(tmp.path().to_path_buf());
 
     let content_10k = generate_corpus(10_000, 0x0A11_C0DE);
     std::fs::write(tmp.path().join("ten_k.rs"), &content_10k).expect("write 10k fixture");
     let content_100k = generate_corpus(100_000, 0xC0FF_EE00);
-    let path_100k = tmp.path().join("hundred_k.rs");
-    std::fs::write(&path_100k, &content_100k).expect("write 100k fixture");
+    let hundred_k_path = tmp.path().join("hundred_k.rs");
+    std::fs::write(&hundred_k_path, &content_100k).expect("write 100k fixture");
     // Canonicalize so per-iteration invalidation hits the same key the
     // canonicalized workspace root produces (cache keys are canonical paths).
-    let path_100k = path_100k.canonicalize().expect("canonicalize 100k fixture");
+    let hundred_k_path = hundred_k_path
+        .canonicalize()
+        .expect("canonicalize 100k fixture");
     let content_50k = generate_corpus(50_000, 0x50C0_5001);
     std::fs::write(tmp.path().join("fifty_k.rs"), &content_50k).expect("write 50k fixture");
 
-    let mut group = c.benchmark_group("wired_read");
-    group.sample_size(20);
-    group.measurement_time(Duration::from_secs(5));
-
-    // Walk the pagination chain once so the timed loop replays five
-    // precomputed requests against a warm snapshot cache.
-    let full_10k_pages = rt.block_on(async {
+    // Walk the pagination chain once so the timed loop replays precomputed
+    // requests against a warm snapshot cache.
+    let full_10k_pages = RUNTIME.block_on(async {
         let mut pages = Vec::new();
         let mut args = serde_json::json!({"path": "ten_k.rs"});
         loop {
@@ -815,23 +960,8 @@ fn bench_wired_read(c: &mut Criterion) {
         "pagination covers every logical line exactly once"
     );
 
-    group.bench_function("full_10k", |b| {
-        b.to_async(&rt).iter(|| {
-            let pages = full_10k_pages.clone();
-            let server = &server;
-            async move {
-                let mut total = 0usize;
-                for args in pages {
-                    let result = server.dispatch("read", args).await.expect("read dispatch");
-                    total += assert_dispatch_success(&result).len();
-                }
-                black_box(total)
-            }
-        });
-    });
-
     let window_args = serde_json::json!({"path": "hundred_k.rs", "limit": 2_000});
-    rt.block_on(async {
+    RUNTIME.block_on(async {
         let result = server
             .dispatch("read", window_args.clone())
             .await
@@ -840,33 +970,7 @@ fn bench_wired_read(c: &mut Criterion) {
         assert!(text.starts_with("[hashline snapshot="), "{text}");
     });
 
-    group.bench_function("window_2k_of_100k_warm", |b| {
-        b.to_async(&rt).iter(|| {
-            let args = window_args.clone();
-            let server = &server;
-            async move {
-                let result = server.dispatch("read", args).await.expect("read dispatch");
-                black_box(assert_dispatch_success(&result).len())
-            }
-        });
-    });
-
-    group.bench_function("window_2k_of_100k_cold", |b| {
-        b.to_async(&rt).iter_batched(
-            || cache::process_cache().invalidate(&path_100k),
-            |()| {
-                let args = window_args.clone();
-                let server = &server;
-                async move {
-                    let result = server.dispatch("read", args).await.expect("read dispatch");
-                    black_box(assert_dispatch_success(&result).len())
-                }
-            },
-            BatchSize::PerIteration,
-        );
-    });
-
-    let cursor_args = rt.block_on(async {
+    let cursor_args = RUNTIME.block_on(async {
         let result = server
             .dispatch(
                 "read",
@@ -883,125 +987,220 @@ fn bench_wired_read(c: &mut Criterion) {
         })
     });
 
-    group.bench_function("cursor_page_50k", |b| {
-        b.to_async(&rt).iter(|| {
-            let args = cursor_args.clone();
-            let server = &server;
-            async move {
-                let result = server.dispatch("read", args).await.expect("read dispatch");
-                black_box(assert_dispatch_success(&result).len())
-            }
-        });
-    });
+    WiredReadFixture {
+        server,
+        hundred_k_path,
+        full_10k_pages,
+        window_args,
+        cursor_args,
+        _tmp: tmp,
+    }
+});
 
-    group.finish();
+/// Wave 0 wired-path read benches through `HashlineServer::dispatch`: full
+/// pagination of a 10k-line file (warm), the 2k window of a 100k-line file in
+/// explicit cold and warm snapshot-cache states, and page 2 of a 50k-line file
+/// via the cursor returned by page 1 — the pagination-cost bench the tree
+/// previously lacked. Cold state is forced by evicting the fixture from the
+/// process snapshot cache before every timed iteration.
+mod wired_read {
+    use super::*;
+
+    #[divan::bench(sample_count = 20)]
+    fn full_10k(bencher: Bencher) {
+        let fixture = &*WIRED_READ_FIXTURE;
+        bencher.bench_local(|| {
+            let mut total = 0usize;
+            for args in &fixture.full_10k_pages {
+                total += dispatch_len(&fixture.server, "read", args.clone());
+            }
+            black_box(total)
+        });
+    }
+
+    #[divan::bench(sample_count = 20)]
+    fn window_2k_of_100k_warm(bencher: Bencher) {
+        let fixture = &*WIRED_READ_FIXTURE;
+        bencher.bench_local(|| {
+            black_box(dispatch_len(
+                &fixture.server,
+                "read",
+                fixture.window_args.clone(),
+            ))
+        });
+    }
+
+    #[divan::bench(sample_size = 1, sample_count = 20)]
+    fn window_2k_of_100k_cold(bencher: Bencher) {
+        let fixture = &*WIRED_READ_FIXTURE;
+        bencher
+            .with_inputs(|| cache::process_cache().invalidate(&fixture.hundred_k_path))
+            .bench_local_values(|()| {
+                black_box(dispatch_len(
+                    &fixture.server,
+                    "read",
+                    fixture.window_args.clone(),
+                ))
+            });
+    }
+
+    #[divan::bench(sample_count = 20)]
+    fn cursor_page_50k(bencher: Bencher) {
+        let fixture = &*WIRED_READ_FIXTURE;
+        bencher.bench_local(|| {
+            black_box(dispatch_len(
+                &fixture.server,
+                "read",
+                fixture.cursor_args.clone(),
+            ))
+        });
+    }
 }
 
-/// Wired-path edit benches on a 50k-line file. CPU-apply variants call
-/// `edit::apply_edits_fast` over a per-iteration snapshot — the production
-/// engine `edit::run` dispatches to — and the e2e variants dispatch real
-/// edits with a per-iteration file reset. The `_full` suffix records that
-/// the default durability policy fsyncs temp file and parent directory.
-fn bench_wired_edit(c: &mut Criterion) {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime for wired edit bench");
+/// Wired-path edit fixture on 50k-line files. Each mutating bench owns its own
+/// file so the benches stay independent of registration order.
+struct WiredEditFixture {
+    _tmp: TempDir,
+    server: HashlineServer,
+    content: String,
+    single_path: PathBuf,
+    single_args: serde_json::Value,
+    single_request: EditRequest,
+    batch_path: PathBuf,
+    batch_args: serde_json::Value,
+    batch_request: EditRequest,
+    stale_args: serde_json::Value,
+}
 
-    let tmp = tempfile::TempDir::new().expect("tempdir for wired edit bench");
+static WIRED_EDIT_FIXTURE: LazyLock<WiredEditFixture> = LazyLock::new(|| {
+    let tmp = fixture_dir();
     let server = HashlineServer::new(tmp.path().to_path_buf());
 
     let content = generate_corpus(50_000, 0xED17_0002);
-    let file_path = tmp.path().join("editable.rs");
-    std::fs::write(&file_path, &content).expect("write editable fixture");
+    let write_fixture = |name: &str| {
+        let path = tmp.path().join(name);
+        std::fs::write(&path, &content).expect("write editable fixture");
+        path
+    };
+    let single_path = write_fixture("single_op.rs");
+    let batch_path = write_fixture("batch_ops.rs");
+    // The conflict bench never mutates its target, so it needs no reset — but
+    // it does need the file to exist with the fixture bytes.
+    write_fixture("conflict.rs");
 
-    let single_args = replace_args(&content, "editable.rs", &[25_000]);
+    let single_args = replace_args(&content, "single_op.rs", &[25_000]);
     let batch_lines: Vec<u64> = (1..=8).map(|op| op * 6_000).collect();
-    let batch_args = replace_args(&content, "editable.rs", &batch_lines);
+    let batch_args = replace_args(&content, "batch_ops.rs", &batch_lines);
 
-    let single_request: EditRequest =
-        serde_json::from_value(single_args.clone()).expect("single edit request deserializes");
-    let batch_request: EditRequest =
-        serde_json::from_value(batch_args.clone()).expect("batch edit request deserializes");
-
-    let mut group = c.benchmark_group("wired_edit");
-    group.sample_size(20);
-    group.measurement_time(Duration::from_secs(5));
-
-    // Production apply path (engine over snapshot offsets). A fresh Snapshot
-    // per iteration mirrors the wired shape: every edit call loads its own
-    // snapshot, so first-touch offset materialization is part of apply cost.
-    group.bench_function("single_op_50k_apply", |b| {
-        b.iter_batched(
-            || Snapshot::from_bytes(content.clone().into_bytes()).expect("apply fixture snapshot"),
-            |snapshot| {
-                let applied = hashline::edit::apply_edits_fast(&snapshot, &single_request)
-                    .expect("wired single-op apply succeeds");
-                black_box(applied.len())
-            },
-            BatchSize::PerIteration,
-        );
-    });
-
-    group.bench_function("batch_8ops_50k_apply", |b| {
-        b.iter_batched(
-            || Snapshot::from_bytes(content.clone().into_bytes()).expect("apply fixture snapshot"),
-            |snapshot| {
-                let applied = hashline::edit::apply_edits_fast(&snapshot, &batch_request)
-                    .expect("wired batch apply succeeds");
-                black_box(applied.len())
-            },
-            BatchSize::PerIteration,
-        );
-    });
-
-    group.sample_size(10);
-    group.warm_up_time(Duration::from_secs(1));
-    group.measurement_time(Duration::from_secs(6));
-
-    group.bench_function("single_op_50k_e2e_full", |b| {
-        b.to_async(&rt).iter_batched(
-            || std::fs::write(&file_path, &content).expect("reset editable fixture"),
-            |()| {
-                let args = single_args.clone();
-                let server = &server;
-                async move {
-                    let result = server.dispatch("edit", args).await.expect("edit dispatch");
-                    black_box(assert_dispatch_success(&result).len())
-                }
-            },
-            BatchSize::PerIteration,
-        );
-    });
-
-    group.bench_function("batch_8ops_50k_e2e_full", |b| {
-        b.to_async(&rt).iter_batched(
-            || std::fs::write(&file_path, &content).expect("reset editable fixture"),
-            |()| {
-                let args = batch_args.clone();
-                let server = &server;
-                async move {
-                    let result = server.dispatch("edit", args).await.expect("edit dispatch");
-                    black_box(assert_dispatch_success(&result).len())
-                }
-            },
-            BatchSize::PerIteration,
-        );
-    });
-
-    group.sample_size(20);
-    group.warm_up_time(Duration::from_secs(2));
-    group.measurement_time(Duration::from_secs(5));
-
-    // Version-conflict path: a stale snapshot id must produce the structured
-    // conflict and leave the file untouched, so no per-iteration reset.
-    std::fs::write(&file_path, &content).expect("reset editable fixture");
+    // A stale snapshot id must produce the structured conflict and leave the
+    // file untouched.
     let mut stale_source = content.clone();
     stale_source.push_str("stale marker\n");
-    let stale_args = replace_args(&stale_source, "editable.rs", &[25_000]);
-    group.bench_function("conflict_50k", |b| {
-        b.to_async(&rt).iter(|| {
-            let args = stale_args.clone();
-            let server = &server;
-            async move {
-                let result = server.dispatch("edit", args).await.expect("edit dispatch");
+    let stale_args = replace_args(&stale_source, "conflict.rs", &[25_000]);
+
+    WiredEditFixture {
+        single_request: serde_json::from_value(single_args.clone())
+            .expect("single edit request deserializes"),
+        batch_request: serde_json::from_value(batch_args.clone())
+            .expect("batch edit request deserializes"),
+        server,
+        content,
+        single_path,
+        single_args,
+        batch_path,
+        batch_args,
+        stale_args,
+        _tmp: tmp,
+    }
+});
+
+/// Wired-path edit benches on a 50k-line file. CPU-apply variants call
+/// `edit::apply_edits_fast` over a per-iteration snapshot — the production
+/// engine `edit::run` dispatches to — and the e2e variants dispatch real edits
+/// with a per-iteration file reset. The `_full` suffix records that the default
+/// durability policy fsyncs temp file and parent directory.
+mod wired_edit {
+    use super::*;
+
+    /// Production apply path (engine over snapshot offsets). A fresh Snapshot
+    /// per iteration mirrors the wired shape: every edit call loads its own
+    /// snapshot, so first-touch offset materialization is part of apply cost.
+    #[divan::bench(sample_size = 1, sample_count = 20)]
+    fn single_op_50k_apply(bencher: Bencher) {
+        let fixture = &*WIRED_EDIT_FIXTURE;
+        bencher
+            .with_inputs(|| {
+                Snapshot::from_bytes(fixture.content.clone().into_bytes())
+                    .expect("apply fixture snapshot")
+            })
+            .bench_local_values(|snapshot| {
+                let applied = hashline::edit::apply_edits_fast(&snapshot, &fixture.single_request)
+                    .expect("wired single-op apply succeeds");
+                black_box(applied.len())
+            });
+    }
+
+    #[divan::bench(sample_size = 1, sample_count = 20)]
+    fn batch_8ops_50k_apply(bencher: Bencher) {
+        let fixture = &*WIRED_EDIT_FIXTURE;
+        bencher
+            .with_inputs(|| {
+                Snapshot::from_bytes(fixture.content.clone().into_bytes())
+                    .expect("apply fixture snapshot")
+            })
+            .bench_local_values(|snapshot| {
+                let applied = hashline::edit::apply_edits_fast(&snapshot, &fixture.batch_request)
+                    .expect("wired batch apply succeeds");
+                black_box(applied.len())
+            });
+    }
+
+    #[divan::bench(sample_size = 1, sample_count = 10)]
+    fn single_op_50k_e2e_full(bencher: Bencher) {
+        let fixture = &*WIRED_EDIT_FIXTURE;
+        bencher
+            .with_inputs(|| {
+                std::fs::write(&fixture.single_path, &fixture.content)
+                    .expect("reset editable fixture");
+            })
+            .bench_local_values(|()| {
+                black_box(dispatch_len(
+                    &fixture.server,
+                    "edit",
+                    fixture.single_args.clone(),
+                ))
+            });
+    }
+
+    #[divan::bench(sample_size = 1, sample_count = 10)]
+    fn batch_8ops_50k_e2e_full(bencher: Bencher) {
+        let fixture = &*WIRED_EDIT_FIXTURE;
+        bencher
+            .with_inputs(|| {
+                std::fs::write(&fixture.batch_path, &fixture.content)
+                    .expect("reset editable fixture");
+            })
+            .bench_local_values(|()| {
+                black_box(dispatch_len(
+                    &fixture.server,
+                    "edit",
+                    fixture.batch_args.clone(),
+                ))
+            });
+    }
+
+    /// Version-conflict path: a stale snapshot id must produce the structured
+    /// conflict and leave the file untouched, so no per-iteration reset.
+    #[divan::bench(sample_count = 20)]
+    fn conflict_50k(bencher: Bencher) {
+        let fixture = &*WIRED_EDIT_FIXTURE;
+        bencher.bench_local(|| {
+            RUNTIME.block_on(async {
+                let result = fixture
+                    .server
+                    .dispatch("edit", fixture.stale_args.clone())
+                    .await
+                    .expect("edit dispatch");
                 assert_eq!(result.is_error, Some(true), "stale snapshot must conflict");
                 let text = tool_text(&result);
                 assert!(
@@ -1009,21 +1208,21 @@ fn bench_wired_edit(c: &mut Criterion) {
                     "structured conflict expected: {text}"
                 );
                 black_box(text.len())
-            }
+            })
         });
-    });
-
-    group.finish();
+    }
 }
 
-/// Wave 0 wired-path grep bench: a dense single file where every line
-/// matches, capped at the protocol maximum. Setup asserts the AC8/AC24
-/// contract once (exactly `max_matches` rendered match lines plus the
-/// truncated summary); every timed iteration re-asserts the summary suffix.
-fn bench_wired_grep(c: &mut Criterion) {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime for wired grep bench");
+/// Wired-path grep fixture: a dense single file where every line matches.
+struct WiredGrepFixture {
+    _tmp: TempDir,
+    server: HashlineServer,
+    args: serde_json::Value,
+    expected_summary: String,
+}
 
-    let tmp = tempfile::TempDir::new().expect("tempdir for wired grep bench");
+static WIRED_GREP_FIXTURE: LazyLock<WiredGrepFixture> = LazyLock::new(|| {
+    let tmp = fixture_dir();
     let server = HashlineServer::new(tmp.path().to_path_buf());
 
     let dense: String = (0..10_000)
@@ -1035,7 +1234,7 @@ fn bench_wired_grep(c: &mut Criterion) {
     // R015: the match budget is checked between files, so a single dense file
     // renders every match and reports matches=10000 truncated=false. Setup
     // pins the wired response to itself so any drift fails closed.
-    let expected_summary = rt.block_on(async {
+    let expected_summary = RUNTIME.block_on(async {
         let result = server
             .dispatch("grep", args.clone())
             .await
@@ -1050,34 +1249,57 @@ fn bench_wired_grep(c: &mut Criterion) {
         summary.to_owned()
     });
 
-    let mut group = c.benchmark_group("wired_grep");
-    group.sample_size(20);
-    group.measurement_time(Duration::from_secs(5));
+    WiredGrepFixture {
+        server,
+        args,
+        expected_summary,
+        _tmp: tmp,
+    }
+});
 
-    group.bench_function("dense_file_capped", |b| {
-        b.to_async(&rt).iter(|| {
-            let args = args.clone();
-            let server = &server;
-            let expected = &expected_summary;
-            async move {
-                let result = server.dispatch("grep", args).await.expect("grep dispatch");
+/// Wave 0 wired-path grep bench: a dense single file where every line matches,
+/// capped at the protocol maximum. The fixture asserts the AC8/AC24 contract
+/// once (exactly the rendered match lines plus the summary); every timed
+/// iteration re-asserts the summary suffix.
+mod wired_grep {
+    use super::*;
+
+    #[divan::bench(sample_count = 20)]
+    fn dense_file_capped(bencher: Bencher) {
+        let fixture = &*WIRED_GREP_FIXTURE;
+        bencher.bench_local(|| {
+            RUNTIME.block_on(async {
+                let result = fixture
+                    .server
+                    .dispatch("grep", fixture.args.clone())
+                    .await
+                    .expect("grep dispatch");
                 let text = assert_dispatch_success(&result);
-                assert!(text.ends_with(expected.as_str()), "summary mismatch");
+                assert!(
+                    text.ends_with(fixture.expected_summary.as_str()),
+                    "summary mismatch"
+                );
                 black_box(text.len())
-            }
+            })
         });
-    });
-
-    group.finish();
+    }
 }
 
-/// Wired-path write benches: exclusive create with a per-iteration unlink,
-/// versioned replace with a per-iteration reset, and the already_exists
-/// fail-closed path, which needs no reset because the loser never mutates.
-fn bench_wired_write(c: &mut Criterion) {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime for wired write bench");
+/// Wired-path write fixture: exclusive create, versioned replace, and the
+/// already_exists fail-closed path, each against its own destination.
+struct WiredWriteFixture {
+    _tmp: TempDir,
+    server: HashlineServer,
+    content: String,
+    create_path: PathBuf,
+    create_args: serde_json::Value,
+    replace_path: PathBuf,
+    replace_args: serde_json::Value,
+    conflict_args: serde_json::Value,
+}
 
-    let tmp = tempfile::TempDir::new().expect("tempdir for wired write bench");
+static WIRED_WRITE_FIXTURE: LazyLock<WiredWriteFixture> = LazyLock::new(|| {
+    let tmp = fixture_dir();
     let server = HashlineServer::new(tmp.path().to_path_buf());
 
     let content = generate_corpus(10_000, 0x0B1E_55ED);
@@ -1090,7 +1312,7 @@ fn bench_wired_write(c: &mut Criterion) {
 
     // Fail-closed contract once in setup: the create succeeds, a repeat
     // reports already_exists, and the destination keeps the winner's bytes.
-    rt.block_on(async {
+    RUNTIME.block_on(async {
         let result = server
             .dispatch("write", create_args.clone())
             .await
@@ -1113,32 +1335,6 @@ fn bench_wired_write(c: &mut Criterion) {
         );
     });
 
-    let mut group = c.benchmark_group("wired_write");
-    group.sample_size(10);
-    group.warm_up_time(Duration::from_secs(1));
-    group.measurement_time(Duration::from_secs(6));
-
-    group.bench_function("create_10k_e2e_full", |b| {
-        b.to_async(&rt).iter_batched(
-            || {
-                std::fs::remove_file(&create_path).expect("unlink created fixture");
-                cache::process_cache().invalidate(&create_path);
-            },
-            |()| {
-                let args = create_args.clone();
-                let server = &server;
-                async move {
-                    let result = server
-                        .dispatch("write", args)
-                        .await
-                        .expect("write dispatch");
-                    black_box(assert_dispatch_success(&result).len())
-                }
-            },
-            BatchSize::PerIteration,
-        );
-    });
-
     let replace_path = tmp.path().join("replaced.rs");
     std::fs::write(&replace_path, &content).expect("write replace fixture");
     let fixture_id = Snapshot::from_bytes(content.as_bytes().to_vec())
@@ -1152,38 +1348,76 @@ fn bench_wired_write(c: &mut Criterion) {
         "expect": fixture_id.to_string(),
     });
 
-    group.bench_function("replace_10k_e2e_full", |b| {
-        b.to_async(&rt).iter_batched(
-            || std::fs::write(&replace_path, &content).expect("reset replace fixture"),
-            |()| {
-                let args = replace_args.clone();
-                let server = &server;
-                async move {
-                    let result = server
-                        .dispatch("write", args)
-                        .await
-                        .expect("write dispatch");
-                    black_box(assert_dispatch_success(&result).len())
-                }
-            },
-            BatchSize::PerIteration,
-        );
+    // Exclusive-create conflict target: it exists, so every iteration fails
+    // closed without touching it — no reset required, and no interference with
+    // the create bench's own destination.
+    std::fs::write(tmp.path().join("occupied.rs"), "occupant\n").expect("write conflict fixture");
+    let conflict_args = serde_json::json!({
+        "file_path": "occupied.rs",
+        "content": content,
+        "expect": "absent",
     });
 
-    group.sample_size(20);
-    group.warm_up_time(Duration::from_secs(2));
-    group.measurement_time(Duration::from_secs(5));
+    WiredWriteFixture {
+        server,
+        content,
+        create_path,
+        create_args,
+        replace_path,
+        replace_args,
+        conflict_args,
+        _tmp: tmp,
+    }
+});
 
-    // Exclusive-create conflict path: the destination exists, so every
-    // iteration fails closed without touching it — no reset required.
-    std::fs::write(&create_path, "occupant\n").expect("reset conflict fixture");
-    group.bench_function("create_conflict", |b| {
-        b.to_async(&rt).iter(|| {
-            let args = create_args.clone();
-            let server = &server;
-            async move {
-                let result = server
-                    .dispatch("write", args)
+/// Wired-path write benches: exclusive create with a per-iteration unlink,
+/// versioned replace with a per-iteration reset, and the already_exists
+/// fail-closed path, which needs no reset because the loser never mutates.
+mod wired_write {
+    use super::*;
+
+    #[divan::bench(sample_size = 1, sample_count = 10)]
+    fn create_10k_e2e_full(bencher: Bencher) {
+        let fixture = &*WIRED_WRITE_FIXTURE;
+        bencher
+            .with_inputs(|| {
+                std::fs::remove_file(&fixture.create_path).expect("unlink created fixture");
+                cache::process_cache().invalidate(&fixture.create_path);
+            })
+            .bench_local_values(|()| {
+                black_box(dispatch_len(
+                    &fixture.server,
+                    "write",
+                    fixture.create_args.clone(),
+                ))
+            });
+    }
+
+    #[divan::bench(sample_size = 1, sample_count = 10)]
+    fn replace_10k_e2e_full(bencher: Bencher) {
+        let fixture = &*WIRED_WRITE_FIXTURE;
+        bencher
+            .with_inputs(|| {
+                std::fs::write(&fixture.replace_path, &fixture.content)
+                    .expect("reset replace fixture");
+            })
+            .bench_local_values(|()| {
+                black_box(dispatch_len(
+                    &fixture.server,
+                    "write",
+                    fixture.replace_args.clone(),
+                ))
+            });
+    }
+
+    #[divan::bench(sample_count = 20)]
+    fn create_conflict(bencher: Bencher) {
+        let fixture = &*WIRED_WRITE_FIXTURE;
+        bencher.bench_local(|| {
+            RUNTIME.block_on(async {
+                let result = fixture
+                    .server
+                    .dispatch("write", fixture.conflict_args.clone())
                     .await
                     .expect("write dispatch");
                 assert_eq!(
@@ -1197,25 +1431,22 @@ fn bench_wired_write(c: &mut Criterion) {
                     "structured already_exists expected: {text}"
                 );
                 black_box(text.len())
-            }
+            })
         });
-    });
-
-    group.finish();
+    }
 }
 
-/// Wired-path glob bench over the shared ~2,000-file grep fixture tree:
-/// recursive discovery with deterministic newest-first ordering. Setup pins
-/// the summary once and every timed iteration re-asserts it so silent
-/// truncation or ordering drift fails closed.
-fn bench_wired_glob(c: &mut Criterion) {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime for wired glob bench");
+/// Wired-path glob fixture over the shared ~2,000-file grep fixture tree.
+struct WiredGlobFixture {
+    server: HashlineServer,
+    args: serde_json::Value,
+    expected_summary: String,
+}
 
-    let root = grep_fixture_root();
-    let server = HashlineServer::new(root.to_path_buf());
-
+static WIRED_GLOB_FIXTURE: LazyLock<WiredGlobFixture> = LazyLock::new(|| {
+    let server = HashlineServer::new(grep_fixture_root().to_path_buf());
     let args = serde_json::json!({"pattern": "**/*.rs", "max_results": 1000});
-    let expected_summary = rt.block_on(async {
+    let expected_summary = RUNTIME.block_on(async {
         let result = server
             .dispatch("glob", args.clone())
             .await
@@ -1229,39 +1460,37 @@ fn bench_wired_glob(c: &mut Criterion) {
         summary.to_owned()
     });
 
-    let mut group = c.benchmark_group("wired_glob");
-    group.sample_size(20);
-    group.measurement_time(Duration::from_secs(5));
+    WiredGlobFixture {
+        server,
+        args,
+        expected_summary,
+    }
+});
 
-    group.bench_function("tree_recursive_rs", |b| {
-        b.to_async(&rt).iter(|| {
-            let args = args.clone();
-            let server = &server;
-            let expected = &expected_summary;
-            async move {
-                let result = server.dispatch("glob", args).await.expect("glob dispatch");
+/// Wired-path glob bench over the shared ~2,000-file grep fixture tree:
+/// recursive discovery with deterministic newest-first ordering. The fixture
+/// pins the summary once and every timed iteration re-asserts it so silent
+/// truncation or ordering drift fails closed.
+mod wired_glob {
+    use super::*;
+
+    #[divan::bench(sample_count = 20)]
+    fn tree_recursive_rs(bencher: Bencher) {
+        let fixture = &*WIRED_GLOB_FIXTURE;
+        bencher.bench_local(|| {
+            RUNTIME.block_on(async {
+                let result = fixture
+                    .server
+                    .dispatch("glob", fixture.args.clone())
+                    .await
+                    .expect("glob dispatch");
                 let text = assert_dispatch_success(&result);
-                assert!(text.ends_with(expected.as_str()), "summary mismatch");
+                assert!(
+                    text.ends_with(fixture.expected_summary.as_str()),
+                    "summary mismatch"
+                );
                 black_box(text.len())
-            }
+            })
         });
-    });
-
-    group.finish();
+    }
 }
-
-criterion_group!(
-    benches,
-    bench_grep,
-    bench_grep_large_file,
-    bench_phase2_snapshot,
-    bench_phase2_version_matrix,
-    bench_phase2_offsets,
-    bench_dispatch,
-    bench_wired_read,
-    bench_wired_edit,
-    bench_wired_grep,
-    bench_wired_write,
-    bench_wired_glob,
-);
-criterion_main!(benches);
