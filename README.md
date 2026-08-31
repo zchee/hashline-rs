@@ -1,5 +1,8 @@
 # hashline-rs
 
+[![CI](https://github.com/zchee/hashline-rs/actions/workflows/ci.yaml/badge.svg?branch=main)](https://github.com/zchee/hashline-rs/actions/workflows/ci.yaml)
+[![codecov](https://codecov.io/gh/zchee/hashline-rs/graph/badge.svg)](https://codecov.io/gh/zchee/hashline-rs)
+
 A standalone [Model Context Protocol] server providing versioned, fail-closed
 file tools, written in Rust on top of the official [rmcp] SDK. It grew out of
 the hashline anchor toolset in [xai-org/grok-build]
