@@ -26,7 +26,11 @@ concurrency:
 jobs:
   benchmarks:
     name: benchmarks
-    runs-on: ubuntu-26.04
+    # Not ubuntu-26.04 like ci.yaml: simulation mode installs a valgrind build
+    # that the CodSpeed runner pins per distro release, and the pins stop at
+    # Ubuntu 24.04 (runner src/executor/valgrind/setup.rs). Anything newer
+    # fails at startup with "Unsupported system".
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
 
