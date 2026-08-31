@@ -1,0 +1,62 @@
+name: Codecov
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: read
+  id-token: write # OpenID Connect authentication with Codecov
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  coverage:
+    name: coverage/${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-26.04
+            flag: linux
+          - os: macos-26
+            flag: macos
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install the pinned toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+
+      # The profiler runtime that `-C instrument-coverage` links against, and
+      # the llvm-profdata/llvm-cov binaries that read what it writes.
+      - name: Install llvm-tools
+        run: rustup component add llvm-tools-preview
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Builds into target/llvm-cov-target, so the instrumented artifacts never
+      # collide with the plain test build that ci.yaml caches.
+      - name: Test with coverage
+        run: cargo llvm-cov --locked --workspace --lcov --output-path lcov.info
+
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@v7
+        with:
+          use_oidc: true
+          files: lcov.info
+          disable_search: true
+          flags: ${{ matrix.flag }}
+          name: ${{ matrix.os }}
+          fail_ci_if_error: true

@@ -1,0 +1,69 @@
+# https://docs.codecov.com/docs/codecovyml-reference
+codecov:
+  # Coverage is reported by its own workflow; a red CI run still deserves a
+  # coverage comment so the two signals can be read independently.
+  require_ci_to_pass: false
+  # https://docs.codecov.com/docs/comparing-commits#pseudo-comparison
+  allow_coverage_offsets: true
+
+# Reports come from `cargo llvm-cov --lcov`. Codecov has no Rust-specific
+# parser; the lcov parser is the one that sees these files. LLVM's region
+# counters mark a line with several regions as partial when only some of them
+# ran (a match arm, the short-circuited half of `&&`), and this counts such a
+# line as hit, which is what the line-level number should mean.
+# https://docs.codecov.com/docs/codecovyml-reference#parserslcov
+parsers:
+  lcov:
+    partials_as_hits: true
+
+# https://docs.codecov.com/docs/codecovyml-reference#coverage
+coverage:
+  precision: 1
+  # Starts at 60 per https://testing.googleblog.com/2020/08/code-coverage-best-practices.html
+  range: "60...90"
+  round: down
+
+  status:
+    default_rules:
+      # https://docs.codecov.com/docs/commit-status#flag_coverage_not_uploaded_behavior
+      flag_coverage_not_uploaded_behavior: include
+
+    project:
+      default:
+        target: auto
+        threshold: 1.0
+        if_not_found: success
+    patch:
+      default:
+        target: 50%
+        only_pulls: true
+        if_not_found: failure
+    changes: false
+
+# One upload per OS. The persistence layer has a macOS-only F_BARRIERFSYNC
+# path, so neither leg alone covers the crate; carryforward keeps the other
+# leg's numbers when a run only produces one of them.
+# https://docs.codecov.com/docs/flags
+flag_management:
+  default_rules:
+    carryforward: true
+
+# https://docs.codecov.com/docs/ignoring-paths
+ignore:
+  - "benches/**"
+  - "examples/**"
+  - "tests/**"
+  - "src/testutil.rs"
+
+# https://docs.codecov.com/docs/codecovyml-reference#comment
+comment:
+  layout: "header, diff, flags, files"
+  behavior: default
+  require_changes: false
+  show_carryforward_flags: true
+  hide_comment_details: false
+  show_critical_paths: true
+
+# https://docs.codecov.com/docs/codecovyml-reference#github_checks-github-users-only
+github_checks:
+  annotations: true
