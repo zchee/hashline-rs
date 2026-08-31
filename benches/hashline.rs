@@ -52,7 +52,7 @@ use hashline::{
 use memchr::memchr_iter;
 use rmcp::model::{CallToolResult, ContentBlock};
 use tempfile::TempDir;
-use tokio::runtime::Runtime;
+use tokio::runtime::{Builder, Runtime};
 
 #[path = "support/phase0_workloads.rs"]
 mod phase0_workloads;
@@ -91,10 +91,19 @@ fn remove_fixture_trees() {
 /// Shared runtime for the wired benches.
 ///
 /// Divan has no async harness, so every wired body blocks on its future here.
+/// A current-thread runtime with a single blocking thread keeps scheduling
+/// deterministic run-to-run: the multi-threaded worker pool made
+/// `spawn_blocking` hops (tokio::fs metadata probes, >256KiB reads) land on
+/// varying threads, which CodSpeed's instruction counting is sensitive to.
 /// `Runtime::block_on` costs the same constant in every variant and is orders
 /// of magnitude below the dispatch work being measured.
-static RUNTIME: LazyLock<Runtime> =
-    LazyLock::new(|| Runtime::new().expect("tokio runtime for wired benches"));
+static RUNTIME: LazyLock<Runtime> = LazyLock::new(|| {
+    Builder::new_current_thread()
+        .enable_all()
+        .max_blocking_threads(1)
+        .build()
+        .expect("tokio runtime for wired benches")
+});
 
 /// Number of files in the synthetic grep fixture tree.
 const GREP_FILE_COUNT: usize = 2_000;
