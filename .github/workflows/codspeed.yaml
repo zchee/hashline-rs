@@ -1,0 +1,61 @@
+name: CodSpeed
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  # CodSpeed triggers this to backfill performance history for the project.
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  # Must share a major with the `codspeed-divan-compat` dev-dependency: the
+  # runner and the compat crate are released together.
+  CARGO_CODSPEED_VERSION: v5.0.1
+  CARGO_CODSPEED_SHA256: df4b2618fda2aa19f8b92e8d745548a49d9ce20785472eeb584fdc2c99624395
+
+permissions:
+  contents: read
+  id-token: write # OpenID Connect authentication with CodSpeed
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  benchmarks:
+    name: benchmarks
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install the pinned toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Prebuilt binary rather than `cargo install`: the runner is a tool, not
+      # a dependency, and building it would dominate the job.
+      - name: Install cargo-codspeed
+        run: |
+          set -euo pipefail
+          url="https://github.com/CodSpeedHQ/codspeed-rust/releases/download/${CARGO_CODSPEED_VERSION}/cargo-codspeed-x86_64-unknown-linux-musl"
+          curl -fsSL -o "${HOME}/.cargo/bin/cargo-codspeed" "${url}"
+          echo "${CARGO_CODSPEED_SHA256}  ${HOME}/.cargo/bin/cargo-codspeed" | sha256sum --check
+          chmod +x "${HOME}/.cargo/bin/cargo-codspeed"
+
+      # Rebuilds the bench target with `--cfg codspeed`, which swaps the Divan
+      # walltime harness for the instrumented one.
+      - name: Build the benchmark target
+        run: cargo codspeed build
+
+      # Simulation counts simulated CPU work, so the fsync-bound and
+      # tree-walk-bound benches report their compute cost rather than their
+      # wall-clock latency. That is the stable signal on a shared runner;
+      # latency comparisons stay a local `cargo bench` job.
+      - name: Run the benchmarks
+        uses: CodSpeedHQ/action@v5
+        with:
+          mode: simulation
+          run: cargo codspeed run
